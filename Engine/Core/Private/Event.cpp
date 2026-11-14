@@ -52,6 +52,42 @@ int WindowResizeEvent::GetCategoryFlags() const {
     return EventCategoryApplication;
 }
 
+WindowFocusEvent::WindowFocusEvent() = default;
+
+EventType WindowFocusEvent::GetStaticType() {
+    return EventType::WindowFocus;
+}
+
+EventType WindowFocusEvent::GetEventType() const {
+    return GetStaticType();
+}
+
+const char* WindowFocusEvent::GetName() const {
+    return "WindowFocus";
+}
+
+int WindowFocusEvent::GetCategoryFlags() const {
+    return EventCategoryApplication;
+}
+
+WindowLostFocusEvent::WindowLostFocusEvent() = default;
+
+EventType WindowLostFocusEvent::GetStaticType() {
+    return EventType::WindowLostFocus;
+}
+
+EventType WindowLostFocusEvent::GetEventType() const {
+    return GetStaticType();
+}
+
+const char* WindowLostFocusEvent::GetName() const {
+    return "WindowLostFocus";
+}
+
+int WindowLostFocusEvent::GetCategoryFlags() const {
+    return EventCategoryApplication;
+}
+
 KeyPressedEvent::KeyPressedEvent(int32 keycode, bool isRepeat)
     : keycode_(keycode), isRepeat_(isRepeat) {}
 

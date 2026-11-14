@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <numbers>
 #include <unordered_map>
@@ -1306,7 +1307,7 @@ void EditorWindow::StartPreview() {
         if (playAssemblyProject_ == projectFile)
             config.assemblyPath = playAssembly_;
         if (config.assemblyPath.empty() && project_)
-            config.assemblyPath = project_->GetFile().parent_path() / "Scripts/GameScripts.dll";
+            config.assemblyPath = project_->GetFile().parent_path() / ".lux/managed/GameScripts.dll";
         if (!previewScripts_.Initialize(*runtime, config)) {
             const auto error = previewScripts_.GetLastError();
             previewScripts_.Shutdown();
@@ -1316,6 +1317,8 @@ void EditorWindow::StartPreview() {
     }
     runtimeScene_ = std::move(runtime);
     previewFrame_ = 0;
+    previewTimer_.setInterval(
+        std::max(1, static_cast<int>(std::lround(runtimeScene_->GetSettings().fixedStep * 1000))));
     lastUpdateMs_ = 0;
     previewActive_ = true;
     previewPaused_ = false;
@@ -1379,9 +1382,10 @@ void EditorWindow::TickPreview() {
     auto& scene = *runtimeScene_;
     const auto start = std::chrono::steady_clock::now();
     try {
-        if (previewScripts_.IsRunning() && !previewScripts_.Update(1.0 / 60.0))
+        const double step = scene.GetSettings().fixedStep;
+        if (previewScripts_.IsRunning() && !previewScripts_.Update(step))
             throw std::runtime_error(previewScripts_.GetLastError());
-        scene.OnUpdate(1.0 / 60.0);
+        scene.OnUpdate(step);
         LuxEngine::Input::AdvanceFrame();
     } catch (const std::exception& error) {
         previewPaused_ = true;

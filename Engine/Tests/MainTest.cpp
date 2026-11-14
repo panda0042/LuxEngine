@@ -14,6 +14,8 @@
 #include <iostream>
 #include <limits>
 #include <numeric>
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 #include <stdexcept>
 #include <string_view>
@@ -1450,20 +1452,82 @@ void WindowEvents() {
               "escape belongs to action instead of closing the window");
         Input::ClearAction("Menu");
         Check(Input::BindAction("Focus", LuxKey::A), "focus action bound");
+        Check(Input::BindAction("FocusDrag", LuxMouseButton::Left), "focus mouse action bound");
+        SDL_FlushEvents(SDL_EVENT_WINDOW_FIRST, SDL_EVENT_WINDOW_LAST);
+        int focusGained = 0, focusLost = 0;
+        bool releasedBeforeFocusCallback = false;
+        window.SetEventCallback([&](Event& e) {
+            EventDispatcher dispatcher(e);
+            dispatcher.Dispatch<WindowFocusEvent>([&](WindowFocusEvent& focus) {
+                ++focusGained;
+                Check(std::string_view(focus.GetName()) == "WindowFocus" &&
+                          focus.IsInCategory(EventCategoryApplication) &&
+                          !focus.IsInCategory(EventCategoryInput),
+                      "focus gain exposes the application event contract");
+                return false;
+            });
+            dispatcher.Dispatch<WindowLostFocusEvent>([&](WindowLostFocusEvent& focus) {
+                ++focusLost;
+                Check(std::string_view(focus.GetName()) == "WindowLostFocus" &&
+                          focus.IsInCategory(EventCategoryApplication) &&
+                          !focus.IsInCategory(EventCategoryInput),
+                      "focus loss exposes the application event contract");
+                Check(!Input::IsActionDown("Focus") && !Input::IsActionDown("FocusDrag"),
+                      "focus loss clears held input before the application callback");
+                if (focusLost == 1)
+                    releasedBeforeFocusCallback =
+                        Input::WasActionReleased("Focus") && Input::WasActionReleased("FocusDrag");
+                return false;
+            });
+        });
         event = {};
         event.type = SDL_EVENT_KEY_DOWN;
         event.key.windowID = SDL_GetWindowID(handle);
         event.key.key = SDLK_A;
         Check(SDL_PushEvent(&event), "held key queued");
+        event = {};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.windowID = SDL_GetWindowID(handle);
+        event.button.button = SDL_BUTTON_LEFT;
+        Check(SDL_PushEvent(&event), "held mouse button queued");
         window.PollEvents();
+        Check(Input::IsActionDown("Focus") && Input::IsActionDown("FocusDrag"),
+              "keyboard and mouse actions are held before focus changes");
+        Input::AdvanceFrame();
+        event = {};
+        event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+        event.window.windowID = SDL_GetWindowID(handle) + 1;
+        Check(SDL_PushEvent(&event), "foreign focus loss queued");
+        event.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+        Check(SDL_PushEvent(&event), "foreign focus gain queued");
+        window.PollEvents();
+        Check(focusGained == 0 && focusLost == 0 && Input::IsActionDown("Focus") &&
+                  Input::IsActionDown("FocusDrag") && !Input::WasActionReleased("Focus") &&
+                  !Input::WasActionReleased("FocusDrag"),
+              "foreign focus events neither reach callbacks nor release this window's input");
+        event = {};
+        event.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+        event.window.windowID = SDL_GetWindowID(handle);
+        Check(SDL_PushEvent(&event), "focus gain queued");
+        window.PollEvents();
+        Check(focusGained == 1 && focusLost == 0 && Input::IsActionDown("Focus") &&
+                  Input::IsActionDown("FocusDrag"),
+              "focus gain reaches its typed callback without clearing held input");
         event = {};
         event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
         event.window.windowID = SDL_GetWindowID(handle);
         Check(SDL_PushEvent(&event), "focus loss queued");
         window.PollEvents();
-        Check(!Input::IsActionDown("Focus") && Input::WasActionReleased("Focus"),
-              "focus loss releases held keyboard action");
+        Check(focusLost == 1 && releasedBeforeFocusCallback,
+              "focus loss publishes keyboard and mouse release edges before its callback");
+        Input::AdvanceFrame();
+        Check(SDL_PushEvent(&event), "repeated focus loss queued");
+        window.PollEvents();
+        Check(focusLost == 2 && !Input::WasActionReleased("Focus") &&
+                  !Input::WasActionReleased("FocusDrag"),
+              "repeated focus loss does not synthesize duplicate input releases");
         Input::ClearAction("Focus");
+        Input::ClearAction("FocusDrag");
 
         int moves = 0;
         window.SetEventCallback([&](Event& e) {

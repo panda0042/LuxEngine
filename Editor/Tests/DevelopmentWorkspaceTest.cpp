@@ -8,6 +8,7 @@
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxUI/Widgets.hpp>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 
 namespace {
@@ -23,7 +24,7 @@ void Write(const std::filesystem::path& path, const char* text) {
 }
 } // namespace
 
-int main(int argc, char** argv) {
+int RunChecks(int argc, char** argv) {
     LuxUI::Application app(argc, argv);
     LuxUI::CoreApplication::setOrganizationName(LUX_UI_TEXT("LuxEditorDevelopmentTests"));
     LuxUI::CoreApplication::setApplicationName(LUX_UI_TEXT("DevelopmentWorkspace"));
@@ -279,4 +280,13 @@ int main(int argc, char** argv) {
     window.GetDocument().SetDirty(false);
     window.close();
     return 0;
+}
+
+int main(int argc, char** argv) {
+    try {
+        return RunChecks(argc, argv);
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

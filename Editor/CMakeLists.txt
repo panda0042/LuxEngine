@@ -404,6 +404,18 @@ if(LUX_BUILD_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LUX_EDITOR_SOFTWARE_VIEWPORT=1")
 endif()
 
+if(LUX_BUILD_TESTS AND NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    add_executable(LuxPreviewScriptsTests Tests/PreviewScriptsTest.cpp)
+    target_link_libraries(LuxPreviewScriptsTests PRIVATE LuxEditorUi)
+    target_include_directories(LuxPreviewScriptsTests PRIVATE ${LUX_EDITOR_PRIVATE_INCLUDE_DIRS})
+    add_dependencies(LuxPreviewScriptsTests LuxTestScripts)
+    lux_editor_copy_runtime(LuxPreviewScriptsTests)
+    lux_editor_copy_qt_plugins(LuxPreviewScriptsTests)
+    add_test(NAME Editor_preview_scripts COMMAND LuxPreviewScriptsTests "${CMAKE_BINARY_DIR}/test-scripts/Scripts.dll")
+    set_tests_properties(Editor_preview_scripts PROPERTIES LABELS "headless;editor;scripting" TIMEOUT 90
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LUX_EDITOR_SOFTWARE_VIEWPORT=1;DOTNET_ROOT=${LUX_DOTNET_ROOT};DOTNET_ROOT_X64=${LUX_DOTNET_ROOT}")
+endif()
+
 if(LUX_BUILD_TESTS)
     foreach(suite GameView ModelImport FbxViewport MeshModeling ModelingWorkspace ModelingViewport CameraUi CameraGizmo)
         add_executable(Lux${suite}Tests Tests/${suite}Test.cpp)
