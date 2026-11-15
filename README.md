@@ -19,7 +19,7 @@ LuxEngine은 C++20과 The Forge를 사용하는 2D·3D 게임 엔진입니다. W
 |---|---|
 | The Forge | 플랫폼 그래픽 API, GPU 리소스·파이프라인·셰이더 실행 |
 | SDL3 3.2 이상 | 창, 입력, 오디오, 테마·아이콘, 플랫폼 표면 |
-| Box2D 2.4 계열 | 씬의 2D 충돌·물리 |
+| Jolt Physics 5.6.0 | 씬과 프레임워크의 2D·3D 강체·충돌·트리거 |
 | stb_image | PNG·JPEG·BMP·TGA 등 이미지 디코딩 |
 | nlohmann_json 3.11 이상 | 씬·프로젝트·재질·스크립트 필드 저장 |
 | ufbx | 저장소에 포함한 고정 버전의 정적 FBX 로더 |
@@ -33,7 +33,7 @@ LuxEngine은 C++20과 The Forge를 사용하는 2D·3D 게임 엔진입니다. W
 
 ### 설치된 의존성과 오프라인 빌드
 
-CMake는 의존성을 다운로드하지 않습니다. SDL3·Box2D·stb_image·JSON 라이브러리·Python·.NET 호스팅 팩·The Forge 소스를 먼저 준비합니다. 에디터를 빌드할 때는 Qt·libzip도 필요합니다. 워크스페이스 안의 포터블 도구·의존성을 사용하고 `CMAKE_PREFIX_PATH`, `SDL3_DIR`, `STB_IMAGE_INCLUDE_DIR`, `LUX_FORGE_ROOT`, `LUX_DOTNET_EXECUTABLE`로 위치를 지정할 수 있습니다.
+CMake는 의존성을 다운로드하지 않습니다. SDL3·Jolt·stb_image·JSON 라이브러리·Python·.NET 호스팅 팩·The Forge 소스를 먼저 준비합니다. 에디터를 빌드할 때는 Qt·libzip도 필요합니다. 워크스페이스 안의 포터블 도구·의존성을 사용하고 `CMAKE_PREFIX_PATH`, `SDL3_DIR`, `Jolt_DIR`, `STB_IMAGE_INCLUDE_DIR`, `LUX_FORGE_ROOT`, `LUX_DOTNET_EXECUTABLE`로 위치를 지정할 수 있습니다.
 
 Linux에는 Vulkan 개발 헤더·드라이버와 X11·Wayland 개발 패키지가 필요합니다. Windows의 D3D12 경로와 macOS의 Metal 경로에는 이전 Native Vulkan용 SDK·VMA 설치 절차를 적용하지 않습니다. C# 실행 컴퓨터에는 .NET 10 런타임이 필요하며 비표준 설치 위치는 `DOTNET_ROOT` 또는 런타임 설정으로 지정합니다. 자세한 준비와 배포 범위는 [C# 문서](docs/CSharpScripting.md)에 정리했습니다.
 
@@ -135,7 +135,7 @@ ctest --test-dir build/desktop -L headless --output-on-failure
 - 밉맵·Clamp/Repeat·이방성 샘플링, 기본색·노멀·금속성·거칠기·AO 텍스처
 - OBJ·정적 FBX 가져오기, 법선·UV·축·단위 처리와 기본 FBX 모델 10종
 - ECS, 부모·자식 계층, 버전 있는 씬·프로젝트 JSON, 다중 씬과 로딩·스트리밍
-- Box2D 기반 2D 충돌·트리거, 기본 3D 중력·바닥 충돌
+- Jolt 기반 2D·3D 박스 강체·충돌·트리거, 정적·동적·키네마틱 바디
 - Qt 레벨 에디터, 2D·3D 뷰포트, 선택·기즈모·스냅·Details·콘텐츠 탐색·Undo/Redo
 - Transform 키프레임·타임라인·독립 애니메이션 작업 공간
 - C# 수명 콜백·Transform·입력, 사용자 필드 Inspector·씬 저장·런타임 적용과 엔티티 참조 재매핑
@@ -146,6 +146,7 @@ ctest --test-dir build/desktop -L headless --output-on-failure
 | --- | --- |
 | 재질 모드·PBR 텍스처·샘플링 | [3D 재질과 텍스처](docs/Materials.md) |
 | C# 사용자 필드와 Inspector | [C# 스크립트](docs/CSharpScripting.md#사용자-필드와-inspector) |
+| 2D·3D 강체와 충돌·트리거 | [Jolt 물리](docs/JoltPhysics.md) |
 | 프리팹 생성·배치·갱신 | [씬 관리](docs/SceneManagement.md#프리팹) |
 | 레벨·애니메이션 편집 | [에디터 작업 공간](docs/EditorWorkspace.md), [애니메이션](docs/AnimationWorkspace.md) |
 | 모델 가져오기 | [FBX와 기본 모델](docs/FbxModels.md) |
@@ -161,7 +162,7 @@ ctest --test-dir build/desktop -L headless --output-on-failure
 
 `Application::Run()`은 정상 종료와 예외 경로에서 파생 클래스 종료 훅을 실행합니다. 초기화 후 Run을 호출하지 않는 사용 방식에서는 파생 객체가 살아 있을 때 `Shutdown()`을 호출해야 합니다.
 
-현재 3D 물리는 기본 중력·운동학 이동·고정 바닥 충돌 범위이며, 범용 3D 접촉 솔버는 후속 기능입니다. FBX는 정적 지오메트리 가져오기 범위로 스킨·모프·클립 재생을 포함하지 않습니다. 애니메이션은 Transform 클립·선형 보간이며 스켈레탈 애니메이션과 상태 머신은 후속 범위입니다. C# 디버거·자동 컴파일·핫 리로드와 고급 프리팹 제작 도구도 각 기능 문서의 지원 범위를 확인해야 합니다.
+현재 물리 어댑터는 Jolt의 박스 강체와 접촉 시작 이벤트를 지원하며, 구·캡슐·메시 충돌체·캐릭터 컨트롤러·조인트는 후속 범위입니다. 바닥은 사용자가 배치한 정적 충돌체입니다. FBX와 애니메이션의 현재 지원 범위는 [FBX 문서](docs/FbxModels.md)와 [에디터 작업 공간](docs/EditorWorkspace.md)을 따릅니다. C# 디버거·자동 컴파일·핫 리로드와 고급 프리팹 제작 도구도 각 기능 문서의 지원 범위를 확인해야 합니다.
 
 반투명은 오브젝트 원점 거리 정렬을 사용하므로 교차하는 투명 메시의 순서를 보장하지 않습니다. 기존 부분 알파 재질은 `Blend`를 명시해야 하며 물 전용 반사·굴절은 별도 기능입니다. 자세한 마이그레이션과 샘플링 한계는 [재질 문서](docs/Materials.md)에 정리했습니다.
 

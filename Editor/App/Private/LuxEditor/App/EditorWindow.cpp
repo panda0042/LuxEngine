@@ -1295,6 +1295,10 @@ void EditorWindow::StartPreview() {
         return;
     }
     runtime->SetSourcePath(document_.GetScene().GetSourcePath());
+    for (const auto id :
+         document_.GetScene().GetComponentEntityIds<LuxEngine::AnimationComponent>())
+        runtime->GetComponent<LuxEngine::AnimationComponent>(id).currentTime =
+            document_.GetScene().GetComponent<LuxEngine::AnimationComponent>(id).currentTime;
     const auto scriptEntities = runtime->GetComponentEntityIds<LuxEngine::ScriptComponent>();
     const bool hasScripts =
         std::any_of(scriptEntities.begin(), scriptEntities.end(), [&runtime](auto id) {
@@ -1307,7 +1311,8 @@ void EditorWindow::StartPreview() {
         if (playAssemblyProject_ == projectFile)
             config.assemblyPath = playAssembly_;
         if (config.assemblyPath.empty() && project_)
-            config.assemblyPath = project_->GetFile().parent_path() / ".lux/managed/GameScripts.dll";
+            config.assemblyPath =
+                project_->GetFile().parent_path() / ".lux/managed/GameScripts.dll";
         if (!previewScripts_.Initialize(*runtime, config)) {
             const auto error = previewScripts_.GetLastError();
             previewScripts_.Shutdown();

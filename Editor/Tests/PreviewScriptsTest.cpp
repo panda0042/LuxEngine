@@ -2,6 +2,7 @@
 #include <LuxEditor/Project/EditorProject.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
 #include <LuxEditor/Viewport/GameViewport.hpp>
+#include <LuxEngine/Animation/AnimationEngine.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxUI/Widgets.hpp>
 #include <cmath>
@@ -44,6 +45,13 @@ int main(int argc, char** argv) {
         auto actor = document.CreateEntity("Preview script actor");
         actor.AddComponent<ScriptComponent>() = {"ScriptTests.Mover", true};
         const auto id = actor.GetId();
+        auto animated = document.CreateEntity("Preview animation actor");
+        auto& animation = animated.AddComponent<AnimationComponent>();
+        animation.clip.duration = 2;
+        animation.clip.AddKeyframe({0, {0, 0, 0}});
+        animation.clip.AddKeyframe({2, {2, 0, 0}});
+        animation.currentTime = .75f;
+        const auto animatedId = animated.GetId();
         auto settings = document.GetScene().GetSettings();
         settings.fixedStep = 1.0f / 73;
         Check(document.GetScene().SetSettings(settings), "custom fixed step accepted");
@@ -68,6 +76,12 @@ int main(int argc, char** argv) {
                 window.GetRuntimeScene()->GetComponent<TransformComponent>(id).position;
             Check(position.y == 10 && std::abs(position.x - settings.fixedStep) < 1e-7f,
                   "OnCreate and exactly one OnUpdate use the configured scene fixed step");
+            Check(std::abs(window.GetRuntimeScene()
+                               ->GetComponent<AnimationComponent>(animatedId)
+                               .currentTime -
+                           (.75f + settings.fixedStep)) < 1e-6f &&
+                      animation.currentTime == .75f,
+                  "play advances from the authored animation time without changing its source");
             app.processEvents();
             Check(window.GetRuntimeScene()->GetComponent<TransformComponent>(id).position.x ==
                       position.x,
@@ -93,6 +107,23 @@ int main(int argc, char** argv) {
         trigger("previewStop");
         Check(&document.GetScene() == authored && actor.IsValid(),
               "error recovery preserves original scene");
+        actor.GetComponent<ScriptComponent>().typeName = "ScriptTests.Mover";
+        std::filesystem::rename(managed / "GameScripts.dll", managed / "MissingScripts.dll");
+        trigger("previewStep");
+        Check(!window.GetRuntimeScene() && &document.GetScene() == authored && actor.IsValid() &&
+                  window.findChild<LuxUI::Action*>(LUX_UI_TEXT("previewStart"))->isEnabled(),
+              "missing assembly leaves the authored scene and play controls usable");
+        std::filesystem::rename(managed / "MissingScripts.dll", managed / "GameScripts.dll");
+        trigger("previewStep");
+        Check(window.GetRuntimeScene() && view->IsPaused(),
+              "play recovers after restoring the missing assembly");
+        Check(document.Save(), "authored scene can be saved during isolated play");
+        Scene saved;
+        Check(saved.Deserialize(document.GetPath()) &&
+                  saved.GetComponent<TransformComponent>(id).position.y == 0 &&
+                  window.GetRuntimeScene()->GetComponent<TransformComponent>(id).position.y == 10,
+              "saving during play writes authored values instead of runtime changes");
+        trigger("previewStop");
         document.SetDirty(false);
         std::cout << "Generated assembly, fixed-step scripts, repeated play, pause, stop and "
                      "errors passed\n";
