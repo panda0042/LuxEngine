@@ -109,6 +109,8 @@ std::vector<Entity> Scene::GetEntitiesIn2DLayerOrder() {
 }
 
 void Scene::OnUpdate(double dt) {
+    collisionEvents2D_.clear();
+    collisionEvents3D_.clear();
     if (!std::isfinite(dt) || dt <= 0.0)
         return;
     updateBuffer_.assign(entities_.begin(), entities_.end());
@@ -194,8 +196,6 @@ void Scene::OnUpdate(double dt) {
         physics2D_.reset();
     if (!has3D)
         physics3D_.reset();
-    collisionEvents2D_.clear();
-    collisionEvents3D_.clear();
     physicsAccumulator_ += std::min(dt, .25);
     const double fixedStep = settings_.fixedStep;
     while (physicsAccumulator_ + 1e-8 >= fixedStep) {

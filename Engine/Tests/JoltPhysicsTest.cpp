@@ -16,6 +16,42 @@ void Check(bool condition, const char* message) {
 
 int Run(int, char**) {
     using namespace LuxEngine;
+    for (bool planar : {false, true}) {
+        for (const double skipped : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
+                                     std::numeric_limits<double>::infinity(), 1.0 / 120}) {
+            Scene scene;
+            auto settings = scene.GetSettings();
+            settings.overrideGravity = true;
+            settings.gravity = {};
+            settings.gravity3D = {};
+            Check(scene.SetSettings(settings), "contact lifetime settings");
+            auto sensor = scene.CreateEntity("Contact sensor");
+            auto actor = scene.CreateEntity("Contact actor");
+            if (planar) {
+                sensor.AddComponent<BoxCollider2DComponent>().isTrigger = true;
+                actor.AddComponent<BoxCollider2DComponent>();
+                actor.AddComponent<Rigidbody2DComponent>().velocity = {1, 0};
+            } else {
+                sensor.AddComponent<BoxCollider3DComponent>().isTrigger = true;
+                actor.AddComponent<BoxCollider3DComponent>();
+                actor.AddComponent<Rigidbody3DComponent>().velocity = {1, 0, 0};
+            }
+            scene.OnUpdate(1.0 / 60);
+            Check(planar ? !scene.GetCollisionEvents2D().empty()
+                         : !scene.GetCollisionEvents3D().empty(),
+                  "contact lifetime fixture must produce an event");
+            const auto before = scene.GetWorldTransform(actor.GetId()).position;
+            scene.OnUpdate(skipped);
+            Check(scene.GetCollisionEvents2D().empty() && scene.GetCollisionEvents3D().empty(),
+                  "updates without a physics step must not replay previous collision events");
+            const auto after = scene.GetWorldTransform(actor.GetId()).position;
+            Check(after.x == before.x && after.y == before.y && after.z == before.z,
+                  "updates without a physics step must preserve body poses");
+            scene.OnUpdate(1.0 / 60);
+            Check(scene.GetCollisionEvents2D().empty() && scene.GetCollisionEvents3D().empty(),
+                  "continued contact after a skipped update must not restart the trigger");
+        }
+    }
     for (const bool planar : {false, true}) {
         PhysicsWorld world(planar);
         PhysicsBodyDescription floor;
