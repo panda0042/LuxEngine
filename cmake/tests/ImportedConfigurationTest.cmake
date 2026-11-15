@@ -11,6 +11,12 @@ project(ImportedConfigurationRegression NONE)
 include("@mappings@")
 add_executable(Qt6::moc IMPORTED)
 set_target_properties(Qt6::moc PROPERTIES IMPORTED_LOCATION "${CMAKE_COMMAND}")
+add_library(Qt6::Core STATIC IMPORTED)
+set_target_properties(Qt6::Core PROPERTIES
+    IMPORTED_CONFIGURATIONS "Debug;Release"
+    IMPORTED_LOCATION_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}/qt-debug.lib"
+    IMPORTED_LOCATION_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/qt-release.lib"
+    INTERFACE_COMPILE_DEFINITIONS "$<$<CONFIG:Debug>:QT_DEBUG>$<$<NOT:$<CONFIG:Debug>>:QT_NO_DEBUG>")
 add_library(SDL3::SDL3-shared SHARED IMPORTED)
 set_target_properties(SDL3::SDL3-shared PROPERTIES
     IMPORTED_CONFIGURATIONS Release
@@ -26,7 +32,7 @@ if(NOT RELEASE_ONLY)
 endif()
 lux_configure_jolt_imports()
 file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/selected-$<CONFIG>.txt" CONTENT
-    "$<TARGET_FILE:Qt6::moc>\n$<TARGET_FILE:SDL3::SDL3-shared>\n$<TARGET_FILE:Jolt::Jolt>\n$<TARGET_GENEX_EVAL:Jolt::Jolt,$<TARGET_PROPERTY:Jolt::Jolt,INTERFACE_COMPILE_DEFINITIONS>>\n")
+    "$<TARGET_FILE:Qt6::moc>\n$<TARGET_FILE:SDL3::SDL3-shared>\n$<TARGET_FILE:Jolt::Jolt>\n$<TARGET_GENEX_EVAL:Jolt::Jolt,$<TARGET_PROPERTY:Jolt::Jolt,INTERFACE_COMPILE_DEFINITIONS>>\n$<TARGET_FILE:Qt6::Core>\n$<TARGET_GENEX_EVAL:Qt6::Core,$<TARGET_PROPERTY:Qt6::Core,INTERFACE_COMPILE_DEFINITIONS>>\n")
 ]=])
 string(CONFIGURE "${fixture}" fixture @ONLY)
 file(WRITE "${TEST_ROOT}/source/CMakeLists.txt" "${fixture}")
@@ -48,8 +54,13 @@ foreach(configuration Debug Release RelWithDebInfo MinSizeRel)
         if(NOT selected MATCHES "jolt-debug.lib\nJOLT_DEBUG\n")
             message(FATAL_ERROR "Debug must select the Debug Jolt archive and definitions.")
         endif()
+        if(NOT selected MATCHES "qt-debug.lib\nQT_DEBUG\n")
+            message(FATAL_ERROR "Debug Qt libraries and definitions must agree.")
+        endif()
     elseif(NOT selected MATCHES "jolt-release.lib\n\n")
         message(FATAL_ERROR "${configuration} must select the Release Jolt archive and definitions.")
+    elseif(NOT selected MATCHES "qt-release.lib\nQT_NO_DEBUG\n")
+        message(FATAL_ERROR "${configuration} Qt libraries and definitions must agree.")
     endif()
 endforeach()
 
