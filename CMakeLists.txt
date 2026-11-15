@@ -39,18 +39,12 @@ if(NOT DEFINED CMAKE_DEBUG_POSTFIX)
     set(CMAKE_DEBUG_POSTFIX d)
 endif()
 
-# Fallback mapping for imported targets (e.g. Jolt) that only provide Debug and/or Release builds,
-# preventing Visual Studio multi-config generators from failing on RelWithDebInfo or MinSizeRel.
-set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO "RelWithDebInfo;Release;None;NOCONFIG")
-set(CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL "MinSizeRel;Release;None;NOCONFIG")
-set(CMAKE_MAP_IMPORTED_CONFIG_RELEASE "Release;None;NOCONFIG")
-set(CMAKE_MAP_IMPORTED_CONFIG_DEBUG "Debug;None;NOCONFIG")
-
 # -------------------------------------------------------------
 # Include Custom CMake Modules
 # -------------------------------------------------------------
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerWarnings)
+include(ImportedConfigurations)
 include(Dependencies)
 include(Shaders)
 include(Models)
@@ -65,6 +59,11 @@ if(LUX_BUILD_TESTS)
         "-DTEST_ROOT=${CMAKE_BINARY_DIR}/cmake-tests"
         -P "${CMAKE_SOURCE_DIR}/cmake/tests/DotnetHostTest.cmake")
     set_tests_properties(CMake_dotnet_host_discovery PROPERTIES LABELS headless TIMEOUT 30)
+    add_test(NAME CMake_imported_configurations COMMAND ${CMAKE_COMMAND}
+        "-DTEST_ROOT=${CMAKE_BINARY_DIR}/cmake-tests/imported-configurations"
+        "-DTEST_GENERATOR=${CMAKE_GENERATOR}"
+        -P "${CMAKE_SOURCE_DIR}/cmake/tests/ImportedConfigurationTest.cmake")
+    set_tests_properties(CMake_imported_configurations PROPERTIES LABELS headless TIMEOUT 60)
 endif()
 
 # -------------------------------------------------------------
