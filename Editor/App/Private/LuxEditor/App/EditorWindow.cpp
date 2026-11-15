@@ -1307,12 +1307,7 @@ void EditorWindow::StartPreview() {
         });
     if (hasScripts) {
         LuxEngine::ScriptRuntimeConfig config;
-        const auto projectFile = project_ ? project_->GetFile() : std::filesystem::path{};
-        if (playAssemblyProject_ == projectFile)
-            config.assemblyPath = playAssembly_;
-        if (config.assemblyPath.empty() && project_)
-            config.assemblyPath =
-                project_->GetFile().parent_path() / ".lux/managed/GameScripts.dll";
+        config.assemblyPath = ResolvePlayAssembly();
         if (!previewScripts_.Initialize(*runtime, config)) {
             const auto error = previewScripts_.GetLastError();
             previewScripts_.Shutdown();
@@ -1391,6 +1386,10 @@ void EditorWindow::TickPreview() {
         if (previewScripts_.IsRunning() && !previewScripts_.Update(step))
             throw std::runtime_error(previewScripts_.GetLastError());
         scene.OnUpdate(step);
+        if (!scene.GetLastPhysicsError2D().empty())
+            throw std::runtime_error(scene.GetLastPhysicsError2D());
+        if (!scene.GetLastPhysicsError3D().empty())
+            throw std::runtime_error(scene.GetLastPhysicsError3D());
         LuxEngine::Input::AdvanceFrame();
     } catch (const std::exception& error) {
         previewPaused_ = true;

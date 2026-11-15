@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 
 namespace LuxEngine {
 
@@ -25,6 +26,13 @@ struct PhysicsBodyState {
     Vec3 rotation;
     Vec3 velocity;
     bool grounded = false;
+};
+
+struct RaycastHit3D {
+    uint32 entityId = 0;
+    Vec3 point{};
+    Vec3 normal{};
+    float distance = 0;
 };
 
 struct Collision3DEvent {
@@ -51,6 +59,9 @@ public:
     const std::vector<Collision3DEvent>& Contacts() const;
     const std::vector<Collision3DEvent>& BeganContacts() const;
     size_t BodyCount() const;
+    const std::string& GetLastError() const;
+    bool Raycast(Vec3 origin, Vec3 direction, float maxDistance, RaycastHit3D& hit,
+                 uint32 ignoreEntity = 0, bool includeTriggers = false) const;
 
 private:
     struct Impl;

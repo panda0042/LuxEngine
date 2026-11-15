@@ -133,6 +133,14 @@ void EditorWindow::PollDevelopmentWorkspace() {
     profiler_->Sample(sample);
 }
 
+std::filesystem::path EditorWindow::ResolvePlayAssembly() const {
+    const auto projectFile = project_ ? project_->GetFile() : std::filesystem::path{};
+    if (playAssemblyProject_ == projectFile && !playAssembly_.empty())
+        return playAssembly_;
+    return project_ ? projectFile.parent_path() / ".lux/managed/GameScripts.dll"
+                    : std::filesystem::path{};
+}
+
 void EditorWindow::SelectPlayAssembly() {
     const auto path = LuxUI::FileDialog::getOpenFileName(
         this, LUX_UI_TEXT("플레이용 C# 어셈블리"),

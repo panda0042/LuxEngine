@@ -227,7 +227,11 @@ bool ScenePlayer::LoadScene() {
     streamingAccumulator_ = 0;
     lastStreamingError_.clear();
     FindPlayer();
-    if (!scene_->GetComponentEntityIds<ScriptComponent>().empty()) {
+    const auto scripts = scene_->GetComponentEntityIds<ScriptComponent>();
+    const bool hasActiveScripts = std::any_of(scripts.begin(), scripts.end(), [this](uint32 id) {
+        return scene_->GetComponent<ScriptComponent>(id).enabled;
+    });
+    if (hasActiveScripts) {
         ScriptRuntimeConfig config;
         const auto base = SDL_GetBasePath();
         const auto directory =

@@ -253,6 +253,71 @@ void Scene::RemovePhysicsBody(uint32 id) {
                   [id](const auto& event) { return event.entityA == id || event.entityB == id; });
 }
 
+bool Scene::Raycast3D(Vec3 origin, Vec3 direction, float maxDistance, RaycastHit3D& hit,
+                      uint32 ignoreEntity, bool includeTriggers) const {
+    hit = {};
+    return physics3D_ &&
+           physics3D_->Raycast(origin, direction, maxDistance, hit, ignoreEntity, includeTriggers);
+}
+
+bool Scene::GetVelocity3D(uint32 entity, Vec3& velocity) const {
+    velocity = {};
+    const auto* body = TryGetComponent<Rigidbody3DComponent>(entity);
+    if (!body || body->type < BodyType::Static || body->type > BodyType::Kinematic)
+        return false;
+    if (body->type == BodyType::Static)
+        return true;
+    if (!std::isfinite(body->velocity.x) || !std::isfinite(body->velocity.y) ||
+        !std::isfinite(body->velocity.z) || std::abs(body->velocity.x) > 100000 ||
+        std::abs(body->velocity.y) > 100000 || std::abs(body->velocity.z) > 100000)
+        return false;
+    velocity = body->velocity;
+    return true;
+}
+
+bool Scene::SetVelocity3D(uint32 entity, Vec3 velocity) {
+    auto* body = TryGetComponent<Rigidbody3DComponent>(entity);
+    if (!body || (body->type != BodyType::Dynamic && body->type != BodyType::Kinematic) ||
+        !std::isfinite(velocity.x) || !std::isfinite(velocity.y) || !std::isfinite(velocity.z) ||
+        std::abs(velocity.x) > 100000 || std::abs(velocity.y) > 100000 ||
+        std::abs(velocity.z) > 100000)
+        return false;
+    body->velocity = velocity;
+    return true;
+}
+
+bool Scene::AddImpulse3D(uint32 entity, Vec3 impulse) {
+    const auto* body = TryGetComponent<Rigidbody3DComponent>(entity);
+    if (!body || body->type != BodyType::Dynamic || !std::isfinite(body->mass) ||
+        body->mass < .001f || body->mass > 1000000 || !std::isfinite(impulse.x) ||
+        !std::isfinite(impulse.y) || !std::isfinite(impulse.z))
+        return false;
+    const double x = body->velocity.x + static_cast<double>(impulse.x) / body->mass;
+    const double y = body->velocity.y + static_cast<double>(impulse.y) / body->mass;
+    const double z = body->velocity.z + static_cast<double>(impulse.z) / body->mass;
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || std::abs(x) > 100000 ||
+        std::abs(y) > 100000 || std::abs(z) > 100000)
+        return false;
+    return SetVelocity3D(entity,
+                         {static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)});
+}
+
+bool Scene::IsGrounded3D(uint32 entity) const {
+    const auto* body = TryGetComponent<Rigidbody3DComponent>(entity);
+    return body && (body->type == BodyType::Dynamic || body->type == BodyType::Kinematic) &&
+           physics3D_ && physics3D_->IsGrounded(entity);
+}
+
+const std::string& Scene::GetLastPhysicsError2D() const {
+    static const std::string empty;
+    return physics2D_ ? physics2D_->GetLastError() : empty;
+}
+
+const std::string& Scene::GetLastPhysicsError3D() const {
+    static const std::string empty;
+    return physics3D_ ? physics3D_->GetLastError() : empty;
+}
+
 namespace {
 Vec4 TileColor(uint8_t tile) {
     switch (tile) {

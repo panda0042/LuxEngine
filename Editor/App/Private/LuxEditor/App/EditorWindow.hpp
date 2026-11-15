@@ -73,6 +73,7 @@ private:
     void PollDevelopmentWorkspace();
     void LoadProjectTools();
     void SelectPlayAssembly();
+    std::filesystem::path ResolvePlayAssembly() const;
     void BuildAssetBrowserCommands();
     void ImportAssetsDialog();
     void CreateAssetFolder();

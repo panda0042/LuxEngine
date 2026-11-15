@@ -39,6 +39,14 @@ public:
     Scene(Scene&&) = delete;
     Scene& operator=(Scene&&) = delete;
     std::vector<Entity> GetEntities();
+    bool Raycast3D(Vec3 origin, Vec3 direction, float maxDistance, RaycastHit3D& hit,
+                   uint32 ignoreEntity = 0, bool includeTriggers = false) const;
+    bool GetVelocity3D(uint32 entity, Vec3& velocity) const;
+    bool SetVelocity3D(uint32 entity, Vec3 velocity);
+    bool AddImpulse3D(uint32 entity, Vec3 impulse);
+    bool IsGrounded3D(uint32 entity) const;
+    const std::string& GetLastPhysicsError2D() const;
+    const std::string& GetLastPhysicsError3D() const;
     std::vector<Entity> GetEntitiesInHierarchyOrder();
     // Stable ascending Z order within each 2D pass: tilemaps, then sprites.
     std::vector<Entity> GetEntitiesIn2DLayerOrder();

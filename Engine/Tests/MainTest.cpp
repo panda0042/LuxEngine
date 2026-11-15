@@ -2352,6 +2352,7 @@ void RenderOutput(Graphics& graphics) {
     PointLight red;
     red.position = {0, 0, 2};
     red.color = {1, 0, 0};
+    const float lightRadius = red.radius;
     const auto ambient = Pixel(pointLit({}), 0.5f, 0.5f);
     const auto front = Pixel(pointLit(std::span(&red, 1)), 0.5f, 0.5f);
     red.position = {0, 0, -3};
@@ -2359,8 +2360,17 @@ void RenderOutput(Graphics& graphics) {
     red.position = {0, 0, 2};
     red.radius = 1.0f;
     const auto outOfRange = Pixel(pointLit(std::span(&red, 1)), 0.5f, 0.5f);
-    Check(ambient[0] < 60 && front[0] > 200 && front[1] < 60,
-          "point light in front of a face lights it with its own color");
+    const auto displayByte = [](float linear) {
+        const float srgb =
+            linear <= .0031308f ? 12.92f * linear : 1.055f * std::pow(linear, 1.f / 2.4f) - .055f;
+        return static_cast<int>(std::lround(std::clamp(srgb, 0.f, 1.f) * 255));
+    };
+    const int expectedAmbient = displayByte(.15f);
+    const float falloff = 1.f - 1.5f / lightRadius;
+    Check(IsColor(ambient, expectedAmbient, expectedAmbient, expectedAmbient, 2) &&
+              IsColor(front, displayByte(.15f + falloff * falloff), expectedAmbient,
+                      expectedAmbient, 2),
+          "point light falloff and ambient are encoded to display sRGB once");
     Check(IsColor(behind, ambient[0], ambient[1], ambient[2], 2) &&
               IsColor(outOfRange, ambient[0], ambient[1], ambient[2], 2),
           "point light behind a face or beyond its radius adds nothing");
@@ -2453,7 +2463,7 @@ void RenderOutput(Graphics& graphics) {
     const auto gpuFront = Pixel(drawCube(true, Mat4{}, dark, std::span(&warm, 1)), 0.5f, 0.5f);
     warm.position = {0, 0, -3};
     const auto gpuBehind = Pixel(drawCube(true, Mat4{}, dark, std::span(&warm, 1)), 0.5f, 0.5f);
-    Check(gpuFront[0] > 200 && gpuFront[1] < 60 &&
+    Check(IsColor(gpuFront, front[0], front[1], front[2], 2) &&
               IsColor(gpuBehind, ambient[0], ambient[1], ambient[2], 2),
           "GPU mesh point lighting matches the CPU path at the face center");
 
@@ -2508,7 +2518,8 @@ void RenderOutput(Graphics& graphics) {
     facing.direction = {-1, 0, 0};
     facing.intensity = 1;
     const auto normalFrame = drawAttributed(Mat4::Scale({2, 1, .5f}), nullptr, facing);
-    Check(IsColor(Pixel(normalFrame, .5f, .5f), 100, 100, 100, 5),
+    const int expectedNormal = displayByte(.15f + .5f / std::hypot(.5f, 2.f));
+    Check(IsColor(Pixel(normalFrame, .5f, .5f), expectedNormal, expectedNormal, expectedNormal, 3),
           "authored vertex normals use inverse transpose under nonuniform scale");
     Files assetFiles;
     assetFiles.Text("scene-mesh.obj", "v -1 -1 0\nv 1 -1 0\nv 0 1 0\nvn 0 0 1\nf 1//1 2//1 3//1\n");

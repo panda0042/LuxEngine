@@ -84,7 +84,7 @@ add_test(NAME Runtime_player_scene
     COMMAND LuxRuntimeTests write-scene "${CMAKE_CURRENT_BINARY_DIR}/PlayerSmoke.lux")
 set_tests_properties(Runtime_player_scene PROPERTIES FIXTURES_SETUP lux_player_scene LABELS gpu)
 add_test(NAME Runtime_player
-    COMMAND LuxPlayer "${CMAKE_CURRENT_BINARY_DIR}/PlayerSmoke.lux" --frames 30)
+    COMMAND LuxPlayer "${CMAKE_CURRENT_BINARY_DIR}/PlayerSmoke.lux" --frames 30 --scripts "missing-disabled-scripts.dll")
 set_tests_properties(Runtime_player PROPERTIES TIMEOUT 60 LABELS gpu
     FIXTURES_REQUIRED lux_player_scene
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:LuxPlayer>"
@@ -191,6 +191,12 @@ add_test(NAME Engine_prefab_library COMMAND LuxPrefabLibraryTests)
 set_tests_properties(Engine_prefab_library PROPERTIES LABELS "headless;scene;prefab" TIMEOUT 90)
 
 add_executable(LuxJoltPhysicsTests JoltPhysicsTest.cpp)
+add_executable(LuxPhysicsIntegrationTests PhysicsIntegrationTest.cpp)
+target_link_libraries(LuxPhysicsIntegrationTests PRIVATE LuxEngine::Engine)
+lux_set_target_warnings(LuxPhysicsIntegrationTests)
+lux_copy_runtime(LuxPhysicsIntegrationTests)
+add_test(NAME Engine_physics_integration COMMAND LuxPhysicsIntegrationTests)
+set_tests_properties(Engine_physics_integration PROPERTIES LABELS "headless;physics;jolt" TIMEOUT 90)
 target_link_libraries(LuxJoltPhysicsTests PRIVATE LuxEngine::Engine)
 lux_set_target_warnings(LuxJoltPhysicsTests)
 lux_copy_runtime(LuxJoltPhysicsTests)
