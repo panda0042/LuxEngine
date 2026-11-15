@@ -152,7 +152,8 @@ add_custom_command(OUTPUT "${_lux_test_scripts}/Scripts.dll"
 add_custom_target(LuxTestScripts DEPENDS "${_lux_test_scripts}/Scripts.dll")
 add_dependencies(LuxScriptRuntimeTests LuxTestScripts)
 add_test(NAME Engine_csharp COMMAND LuxScriptRuntimeTests "${_lux_test_scripts}/Scripts.dll")
-set_tests_properties(Engine_csharp PROPERTIES LABELS "headless;scripting" TIMEOUT 60)
+set_tests_properties(Engine_csharp PROPERTIES LABELS "headless;scripting" TIMEOUT 60
+    ENVIRONMENT "DOTNET_ROOT=${LUX_DOTNET_ROOT};DOTNET_ROOT_X64=${LUX_DOTNET_ROOT}")
 
 add_executable(LuxForgeBackendTests ForgeBackendTest.cpp)
 target_link_libraries(LuxForgeBackendTests PRIVATE LuxEngine::Engine)

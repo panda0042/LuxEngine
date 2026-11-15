@@ -1,6 +1,8 @@
 # Build dependencies are installed by the developer, never downloaded by CMake.
+find_package(Threads REQUIRED)
 find_package(SDL3 3.2 CONFIG REQUIRED)
 find_package(Jolt CONFIG REQUIRED HINTS "$ENV{LUX_JOLT_ROOT}" "$ENV{HOME}/.local")
+lux_configure_jolt_imports()
 # Older configurations cached an empty value before downloading stb.
 # An empty cache entry prevents find_path from searching installed headers.
 if(DEFINED STB_IMAGE_INCLUDE_DIR AND STB_IMAGE_INCLUDE_DIR STREQUAL "")

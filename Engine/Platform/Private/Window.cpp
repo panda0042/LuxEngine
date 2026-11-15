@@ -121,7 +121,9 @@ void Window::PollEvents() {
             ((event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
               event.type == SDL_EVENT_MOUSE_BUTTON_UP) &&
              event.button.windowID != currentWindowID) ||
-            (event.type == SDL_EVENT_WINDOW_FOCUS_LOST && event.window.windowID != currentWindowID);
+            ((event.type == SDL_EVENT_WINDOW_FOCUS_LOST ||
+              event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) &&
+             event.window.windowID != currentWindowID);
         if (foreignInput)
             continue;
         Input::ProcessEvent(event);
@@ -132,6 +134,16 @@ void Window::PollEvents() {
             isRunning_ = false;
             if (eventCallback_) {
                 WindowCloseEvent e;
+                eventCallback_(e);
+            }
+        } else if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
+            if (event.window.windowID == currentWindowID && eventCallback_) {
+                WindowFocusEvent e;
+                eventCallback_(e);
+            }
+        } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+            if (event.window.windowID == currentWindowID && eventCallback_) {
+                WindowLostFocusEvent e;
                 eventCallback_(e);
             }
         } else if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {

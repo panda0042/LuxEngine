@@ -16,6 +16,7 @@ LuxUI::String PlayerExecutable() {
 } // namespace
 
 void EditorWindow::RunSceneInWindow() {
+    StopPreview();
     const LuxUI::String executable = PlayerExecutable();
     if (!LuxUI::FileInfo::exists(executable)) {
         ShowError(LUX_UI_TEXT("게임 실행"),
@@ -24,15 +25,16 @@ void EditorWindow::RunSceneInWindow() {
     }
     StopSceneWindow();
     // Run what is on screen, including unsaved edits, without touching the user's scene file.
-    LuxUI::TemporaryFile temporary(LuxUI::Dir::tempPath() +
-                                   LUX_UI_TEXT("/LuxEditor-play-XXXXXX.lux"));
-    if (!temporary.open()) {
-        ShowError(LUX_UI_TEXT("게임 실행"), LUX_UI_TEXT("실행용 씬 파일을 만들 수 없습니다."));
-        return;
+    {
+        LuxUI::TemporaryFile temporary(LuxUI::Dir::tempPath() +
+                                       LUX_UI_TEXT("/LuxEditor-play-XXXXXX.lux"));
+        if (!temporary.open()) {
+            ShowError(LUX_UI_TEXT("게임 실행"), LUX_UI_TEXT("실행용 씬 파일을 만들 수 없습니다."));
+            return;
+        }
+        playerScenePath_ = temporary.fileName();
+        temporary.setAutoRemove(false);
     }
-    playerScenePath_ = temporary.fileName();
-    temporary.setAutoRemove(false);
-    temporary.close();
     std::string error;
     if (!LuxEngine::SceneManager::Save(document_.GetScene(),
                                        std::filesystem::path(playerScenePath_.toStdU16String()),

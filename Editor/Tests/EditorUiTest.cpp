@@ -38,6 +38,9 @@
 #ifdef small
 #undef small
 #endif
+#ifdef MessageBox
+#undef MessageBox
+#endif
 #endif
 
 namespace {

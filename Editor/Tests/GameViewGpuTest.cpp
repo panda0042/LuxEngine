@@ -211,6 +211,11 @@ void StoppedAndPlaying(LuxUI::Application& app) {
           "Game View did not restore the selected scene's camera preview");
     Check(view->GetRenderer()->GetGpuDevice()->GetCounters().validationErrors == 0,
           "edit/play Game View transitions reported GPU validation errors");
+    action("previewStep");
+    action("playWindow");
+    Check(!window.GetRuntimeScene() && !view->IsInputEnabled() &&
+              view->GetScene() == &window.GetDocument().GetScene(),
+          "launching the standalone player stops embedded play and releases its input");
     for (const auto& tab : window.GetDocument().ListTabs())
         window.GetDocument().SetDirty(tab.id, false);
     window.close();

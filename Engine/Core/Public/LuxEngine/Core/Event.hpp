@@ -86,6 +86,32 @@ private:
     uint32 height_;
 };
 
+class WindowFocusEvent : public Event {
+public:
+    LUX_API WindowFocusEvent();
+
+    LUX_API static EventType GetStaticType();
+
+    LUX_API EventType GetEventType() const override;
+
+    LUX_API const char* GetName() const override;
+
+    LUX_API int GetCategoryFlags() const override;
+};
+
+class WindowLostFocusEvent : public Event {
+public:
+    LUX_API WindowLostFocusEvent();
+
+    LUX_API static EventType GetStaticType();
+
+    LUX_API EventType GetEventType() const override;
+
+    LUX_API const char* GetName() const override;
+
+    LUX_API int GetCategoryFlags() const override;
+};
+
 class KeyPressedEvent : public Event {
 public:
     LUX_API KeyPressedEvent(int32 keycode, bool isRepeat = false);

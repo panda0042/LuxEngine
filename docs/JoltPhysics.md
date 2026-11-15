@@ -14,11 +14,16 @@ cmake -S JoltPhysics/Build -B jolt-debug -G Ninja \
   -DTARGET_VIEWER=OFF -DTARGET_PERFORMANCE_TEST=OFF \
   -DJPH_USE_DX12=OFF -DJPH_USE_VK=OFF -DJPH_USE_MTL=OFF -DJPH_USE_CPU_COMPUTE=OFF \
   -DINTERPROCEDURAL_OPTIMIZATION=OFF -DOVERRIDE_CXX_FLAGS=OFF \
+  -DCPP_RTTI_ENABLED=ON \
   -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF -DPROFILER_IN_DEBUG_AND_RELEASE=OFF
 cmake --build jolt-debug --target install --parallel
 ```
 
 Release도 별도 빌드 디렉터리에서 같은 prefix에 설치한다. Debug/Release 아카이브를 섞지 않는다. Windows는 `USE_STATIC_MSVC_RUNTIME_LIBRARY=OFF`로 엔진과 같은 동적 CRT를 사용한다. `tools/InstallDeps.ps1`과 `tools/ci/SetupUnixDependencies.sh`에 준비 절차를 반영했다. Jolt GPU 컴퓨트는 사용하지 않아 DXC가 필요하지 않다.
+
+Unix CI는 Jolt의 `CPP_RTTI_ENABLED=ON`으로 빌드한다. UBSan의 가상 함수 검사는 Jolt 클래스의 C++ 타입 정보를 참조하므로, RTTI가 없는 기본 Jolt 아카이브와 결합하면 링크에 실패한다.
+
+엔진의 Debug는 Jolt Debug, Release는 Jolt Release를 사용하며 두 구성을 서로 대체하지 않는다. RelWithDebInfo·MinSizeRel은 Release 계열로 매핑한다. 이 제한은 `Jolt::Jolt`에만 적용하고 Qt 도구·SDL·X11 등의 일반 가져온 타깃은 설치된 구성과 구성 없는 위치를 사용할 수 있다. Jolt 구성 매핑에 Debug와 Release를 동시에 넣으면 가져온 타깃의 조건부 `NDEBUG` 정의가 잘못 적용될 수 있어, Debug 엔진과 Jolt의 검증 코드·내부 구조가 달라진다. 필요한 구성의 라이브러리를 먼저 설치해야 한다.
 
 ## 씬과 프레임워크
 

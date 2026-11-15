@@ -13,6 +13,10 @@
 #include <stdexcept>
 #include <unordered_set>
 
+#ifdef MessageBox
+#undef MessageBox
+#endif
+
 namespace LuxEditor {
 namespace {
 LuxUI::String Q(const std::filesystem::path& path) {

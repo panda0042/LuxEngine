@@ -70,6 +70,7 @@ if [[ ! -f "$prefix/lib/cmake/Jolt/JoltConfig.cmake" ||
         -DTARGET_VIEWER=OFF -DTARGET_PERFORMANCE_TEST=OFF \
         -DJPH_USE_DX12=OFF -DJPH_USE_VK=OFF -DJPH_USE_MTL=OFF -DJPH_USE_CPU_COMPUTE=OFF \
         -DINTERPROCEDURAL_OPTIMIZATION=OFF -DOVERRIDE_CXX_FLAGS=OFF \
+        -DCPP_RTTI_ENABLED=ON \
         -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF -DPROFILER_IN_DEBUG_AND_RELEASE=OFF
     cmake --build "$source_root/jolt-build" --parallel "$jobs"
     cmake --install "$source_root/jolt-build"
