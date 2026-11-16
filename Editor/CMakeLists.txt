@@ -92,6 +92,7 @@ set(LUX_EDITOR_PRIVATE_INCLUDE_DIRS
     "${CMAKE_CURRENT_SOURCE_DIR}/Modeling/Private"
     "${CMAKE_CURRENT_SOURCE_DIR}/Project/Private"
     "${CMAKE_CURRENT_SOURCE_DIR}/Scene/Private"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Scripting/Private"
     "${CMAKE_CURRENT_SOURCE_DIR}/Ui/Private"
     "${CMAKE_CURRENT_SOURCE_DIR}/Viewport/Private"
 )
@@ -103,6 +104,7 @@ add_subdirectory(Animation)
 add_subdirectory(Debug)
 add_subdirectory(Project)
 add_subdirectory(Scene)
+add_subdirectory(Scripting)
 add_subdirectory(Modeling)
 add_subdirectory(Ui)
 add_subdirectory(Viewport)
