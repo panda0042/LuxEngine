@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace LuxEngine {
+struct ModelPose;
 
 struct TagComponent {
     std::string tag = "Entity";
@@ -39,8 +40,8 @@ struct SceneReferenceComponent {
     std::string suspended;
     std::vector<std::pair<uint32, uint32>> entityMap;
     Vec2 streamCenter{};
-    float streamLoadRadius = 0;
-    float streamUnloadRadius = 0;
+    double streamLoadRadius = 0;
+    double streamUnloadRadius = 0;
     bool loaded = true;
 };
 
@@ -51,12 +52,14 @@ struct InstanceSourceComponent {
 
 struct SpriteRendererComponent {
     Vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
+    std::string texturePath{};
+    uint32 frame = 0, columns = 1, rows = 1;
 };
 
 struct TilemapComponent {
     uint32 width = 32;
     uint32 height = 16;
-    float tileSize = 1.0f;
+    double tileSize = 1.0f;
     std::vector<uint8_t> tiles = std::vector<uint8_t>(width * height, 0);
 
     LUX_API uint8_t Get(uint32 x, uint32 y) const;
@@ -81,6 +84,9 @@ struct ModelAnimationComponent {
     bool playing = false;
     bool loop = true;
     bool applyNodeTransform = true;
+    Ref<ModelPose> mixedPose;
+    uint64 poseRevision = 0;
+    uint32 poseOwner = 0;
 };
 
 struct ScriptComponent {
@@ -92,10 +98,10 @@ struct ScriptComponent {
 struct CameraComponent {
     bool isPrimary = true;
     bool isPerspective = false;
-    float fov = 45.0f;
-    float orthoSize = 10.0f;
-    float nearClip = .1f;
-    float farClip = 1000.f;
+    double fov = 45.0f;
+    double orthoSize = 10.0f;
+    double nearClip = .1f;
+    double farClip = 1000000.0;
 };
 
 } // namespace LuxEngine
