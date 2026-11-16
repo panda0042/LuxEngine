@@ -19,7 +19,7 @@ namespace Game {
     public sealed class Mover : EntityScript {
         protected override void OnUpdate(double deltaTime) {
             Transform value = Entity.Transform;
-            value.Position.X += (float)deltaTime;
+            value.Position.X += deltaTime;
             Entity.Transform = value;
         }
     }
@@ -63,7 +63,7 @@ scripts.Shutdown();
 
 C# 예외는 네이티브 ABI 경계를 넘어 전파하지 않고 오류 문자열로 반환한다. 잘못된 스레드에서 업데이트하거나 수명이 끝난 씬에 접근하면 요청을 거부한다. 관리 코드에서 임의의 백그라운드 스레드로 씬·입력 API를 호출하는 흐름은 지원하지 않는다.
 
-현재 연결한 범위는 수명 콜백, 엔티티 유효성, Transform, 키 입력 조회, 사용자 필드 Inspector 편집과 씬 직렬화다. 스크립트 디버거와 자동 컴파일·핫 리로드는 후속 개발 범위다. C++의 임의 ECS 컴포넌트와 템플릿 확장은 유지하고 필요한 구현만 `.inl`에 두었다.
+현재 연결한 범위는 수명 콜백, 엔티티 유효성, 64비트 Transform, 키 입력 조회, Animator 제어·이벤트, 사용자 필드 Inspector 편집과 씬 직렬화다. 내장 소스 편집·명시적 빌드·진단 위치 이동은 [에디터 작업 공간](EditorWorkspace.md)에 정리했다. 스크립트 디버거와 자동 컴파일·핫 리로드는 후속 개발 범위다. C++의 임의 ECS 컴포넌트와 템플릿 확장은 유지하고 필요한 구현만 `.inl`에 두었다.
 
 ## 회귀 테스트
 
@@ -71,7 +71,7 @@ C# 예외는 네이티브 ABI 경계를 넘어 전파하지 않고 오류 문자
 
 ## 사용자 필드와 Inspector
 
-지원하는 필드 형식은 `bool`, `int`, `float`, `string`, `System.Numerics.Vector2/Vector3/Vector4`, `Entity` 참조다. public 인스턴스 필드 또는 `[SerializeField]`가 붙은 비공개 필드를 노출하며 static·readonly 필드와 속성은 편집하지 않는다. 지원하지 않는 노출 필드 형식이나 같은 이름의 숨겨진 필드는 진단 오류를 반환한다.
+지원하는 필드 형식은 `bool`, `int`, `float`, `string`, `System.Numerics.Vector2/Vector3/Vector4`, `LuxEngine.Vector3d`, `Entity` 참조다. public 인스턴스 필드 또는 `[SerializeField]`가 붙은 비공개 필드를 노출하며 static·readonly 필드와 속성은 편집하지 않는다. 지원하지 않는 노출 필드 형식이나 같은 이름의 숨겨진 필드는 진단 오류를 반환한다.
 
 ```csharp
 public sealed class Player : EntityScript {
@@ -91,6 +91,6 @@ public sealed class Player : EntityScript {
 
 엔티티 참조는 씬 내부 ID로 저장하고 현재 런타임 세계의 Entity 핸들로 복원한다. 계층 가져오기와 프리팹 인스턴싱에서는 대상 ID로 재매핑하며 가져오기 범위 밖 참조는 0으로 비운다. 씬 참조 원본 갱신에서도 내부 참조를 재매핑하고, ID 차이만으로 사용자 재정의로 판단하지 않는다. 삭제된 대상의 핸들은 `IsValid`가 false를 반환한다.
 
-실행 중 C++에서 authored 필드 값을 바꾸면 다음 업데이트에 해당 스크립트 인스턴스를 종료하고 새 값으로 다시 생성한다. 관리 스크립트가 자신의 런타임 필드를 변경하는 동작은 매 프레임 authored 값으로 덮어쓰지 않는다. 필드 스키마 조회와 편집은 자동 컴파일이나 핫 리로드 기능을 의미하지 않는다. 네이티브/관리 브리지 ABI는 2이며 엔진과 ScriptCore를 함께 빌드한다.
+실행 중 C++에서 authored 필드 값을 바꾸면 다음 업데이트에 해당 스크립트 인스턴스를 종료하고 새 값으로 다시 생성한다. 관리 스크립트가 자신의 런타임 필드를 변경하는 동작은 매 프레임 authored 값으로 덮어쓰지 않는다. 필드 스키마 조회와 편집은 자동 컴파일이나 핫 리로드 기능을 의미하지 않는다. 네이티브/관리 브리지 ABI는 4이며 엔진과 ScriptCore를 함께 빌드한다.
 
 `Engine_csharp`은 실제 호스팅으로 필드 reflection, private 속성, OnCreate 이전 적용, 엔티티 참조, 씬 저장/로드, 가져오기 ID 재매핑과 형식 불일치 거부를 검사한다. `Editor_script_fields`는 실제 Qt 입력으로 정수·실수·벡터·엔티티 참조 편집, Undo/Redo와 저장·다시 열기를 검사한다.

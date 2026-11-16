@@ -1,5 +1,6 @@
 #include <LuxEditor/App/EditorWindow.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
+#include <LuxEditor/Scripting/ScriptWorkspace.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scripting/ScriptRuntime.hpp>
 #include <LuxUI/Widgets.hpp>
@@ -25,6 +26,10 @@ void EditorWindow::BuildScriptDetails(LuxUI::VBoxLayout* layout) {
     form->addRow(scriptAttached_);
     form->addRow(LUX_UI_TEXT("클래스"), scriptType_);
     form->addRow(scriptEnabled_);
+    auto* source = new LuxUI::PushButton(LUX_UI_TEXT("소스 편집"), group);
+    source->setObjectName(LUX_UI_TEXT("editSelectedScript"));
+    form->addRow(source);
+    connect(source, &LuxUI::PushButton::clicked, this, [this] { OpenSelectedScript(); });
     form->addRow(inspect);
     form->addRow(scriptFieldsPanel_);
     layout->addWidget(group);
@@ -70,6 +75,41 @@ void EditorWindow::BuildScriptDetails(LuxUI::VBoxLayout* layout) {
         LuxUI::Timer::singleShot(0, this, [this] { RefreshInspector(); });
     });
     connect(inspect, &LuxUI::PushButton::clicked, this, [this] { InspectScriptFields(); });
+}
+
+void EditorWindow::OpenSelectedScript() {
+    const auto* script = document_.GetSelected().TryGetComponent<LuxEngine::ScriptComponent>();
+    if (!project_ || !script || script->typeName.empty()) {
+        SetWorkspace(Workspace::Script);
+        return;
+    }
+    auto name = script->typeName.substr(0, script->typeName.find(','));
+    name = name.substr(name.find_last_of(".+") + 1);
+    const auto root = project_->GetFile().parent_path() / "Scripts";
+    std::error_code error;
+    std::filesystem::recursive_directory_iterator it(
+        root, std::filesystem::directory_options::skip_permission_denied, error),
+        end;
+    std::vector<std::filesystem::path> matches;
+    size_t visited = 0;
+    for (; !error && it != end && ++visited < 5000; it.increment(error)) {
+        if (it->is_directory(error) &&
+            (it->path().filename() == "bin" || it->path().filename() == "obj"))
+            it.disable_recursion_pending();
+        else if (it->is_regular_file(error) && it->path().extension() == ".cs" &&
+                 PathUtf8(it->path().stem()) == name)
+            matches.push_back(it->path());
+    }
+    if (matches.size() == 1)
+        OpenScriptFile(matches.front());
+    else {
+        SetWorkspace(Workspace::Script);
+        statusBar()->showMessage(
+            matches.empty()
+                ? LUX_UI_TEXT("클래스 이름과 같은 C# 파일을 Scripts 폴더에서 찾지 못했습니다.")
+                : LUX_UI_TEXT("같은 이름의 파일이 여러 개입니다. 스크립트 목록에서 선택해 주세요."),
+            5000);
+    }
 }
 
 void EditorWindow::InspectScriptFields() {

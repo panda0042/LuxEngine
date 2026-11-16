@@ -48,6 +48,9 @@ int main(int argc, char** argv) {
               "Workspace structure is incomplete");
         Check(!contents->isVisible() && details->isVisible() && outliner->isVisible(),
               "Default level layout is incorrect");
+        Check(window.dockWidgetArea(outliner) == LuxUI::Flags::LeftDockWidgetArea &&
+                  window.dockWidgetArea(details) == LuxUI::Flags::RightDockWidgetArea,
+              "Hierarchy and Inspector do not flank the document workspace");
         Check(workspace->width() > window.width() * .6, "Viewport is crowded by default panels");
         contentButton->click();
         app.processEvents();
@@ -104,6 +107,26 @@ int main(int argc, char** argv) {
         if (!capture.isEmpty())
             Check(window.grab().save(capture + LUX_UI_TEXT("-animation.png")),
                   "Animation screenshot failed");
+        tabs->setCurrentIndex(2);
+        app.processEvents();
+        Check(workspace->currentIndex() == 2 && !details->isVisible() &&
+                  window.findChild<LuxUI::Widget*>(LUX_UI_TEXT("scriptWorkspace"))->isVisible(),
+              "Script workspace did not open from animation");
+        LuxUI::MimeData sourceDrop;
+        sourceDrop.setUrls({LuxUI::Url::fromLocalFile(
+            LuxUI::String::fromUtf8(LuxEditor::PathUtf8(directory / "Scripts/Mover.cs")))});
+        LuxUI::DragEnterEvent enter({20, 20}, LuxUI::Flags::CopyAction, &sourceDrop,
+                                    LuxUI::Flags::LeftButton, LuxUI::Flags::NoModifier);
+        app.sendEvent(&window, &enter);
+        Check(enter.isAccepted(), "Script source drop was rejected");
+        LuxUI::DropEvent drop({20, 20}, LuxUI::Flags::CopyAction, &sourceDrop,
+                              LuxUI::Flags::LeftButton, LuxUI::Flags::NoModifier);
+        app.sendEvent(&window, &drop);
+        Check(window.findChild<LuxUI::TabWidget*>(LUX_UI_TEXT("scriptDocuments"))->count() == 1,
+              "Script drop did not open a document");
+        if (!capture.isEmpty())
+            Check(window.grab().save(capture + LUX_UI_TEXT("-script.png")),
+                  "Script screenshot failed");
         tabs->setCurrentIndex(0);
         app.processEvents();
         Check(details->isVisible() && outliner->isVisible(),

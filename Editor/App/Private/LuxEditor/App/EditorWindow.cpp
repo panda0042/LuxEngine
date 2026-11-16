@@ -5,6 +5,7 @@
 #include <LuxEditor/Project/ProjectArchive.hpp>
 #include <LuxEditor/Project/ProjectDialog.hpp>
 #include <LuxEditor/Scene/SceneHistory.hpp>
+#include <LuxEditor/Scripting/ScriptWorkspace.hpp>
 #include <LuxEditor/Ui/IconFactory.hpp>
 #include <LuxEditor/Viewport/GameViewport.hpp>
 #include <LuxEditor/Viewport/SceneViewport2D.hpp>
@@ -205,17 +206,29 @@ void EditorWindow::BuildMenus() {
     rescanAction_ = add(file, LUX_UI_TEXT("리소스 재검색"), LUX_UI_TEXT("rescanResources"), {},
                         [this] { RescanProjectResources(); });
     file->addSeparator();
-    add(file, LUX_UI_TEXT("새 씬"), LUX_UI_TEXT("newScene"), LuxUI::KeySequence::New,
-        [this] { NewSceneDocument(); });
+    add(file, LUX_UI_TEXT("새 씬"), LUX_UI_TEXT("newScene"), LuxUI::KeySequence::New, [this] {
+        if (workspaceStack_->currentIndex() == 2)
+            scriptWorkspace_->findChild<LuxUI::ToolButton*>(LUX_UI_TEXT("newScript"))->click();
+        else
+            NewSceneDocument();
+    });
     add(file, LUX_UI_TEXT("장면 열기..."), LUX_UI_TEXT("openScene"), LuxUI::KeySequence::Open,
         [this] {
+            if (workspaceStack_->currentIndex() == 2) {
+                scriptWorkspace_->findChild<LuxUI::ToolButton*>(LUX_UI_TEXT("openScript"))->click();
+                return;
+            }
             const LuxUI::String file = LuxUI::FileDialog::getOpenFileName(
                 this, LUX_UI_TEXT("장면 열기"), {}, LUX_UI_TEXT("Lux 장면 (*.lux);;모든 파일 (*)"));
             if (!file.isEmpty())
                 OpenProjectScene(PathFromUtf8(Utf8(file)));
         });
-    add(file, LUX_UI_TEXT("저장"), LUX_UI_TEXT("saveScene"), LuxUI::KeySequence::Save,
-        [this] { SaveScene(false); });
+    add(file, LUX_UI_TEXT("저장"), LUX_UI_TEXT("saveScene"), LuxUI::KeySequence::Save, [this] {
+        if (workspaceStack_->currentIndex() == 2)
+            scriptWorkspace_->SaveAll();
+        else
+            SaveScene(false);
+    });
     add(file, LUX_UI_TEXT("다른 이름으로 저장..."), LUX_UI_TEXT("saveSceneAs"),
         LuxUI::KeySequence::SaveAs, [this] { SaveScene(true); });
     file->addSeparator();
@@ -225,22 +238,37 @@ void EditorWindow::BuildMenus() {
     LuxUI::Menu* edit = menuBar()->addMenu(LUX_UI_TEXT("편집"));
     undoAction_ = add(edit, LUX_UI_TEXT("실행 취소"), LUX_UI_TEXT("undoEdit"),
                       LuxUI::KeySequence::Undo, [this] {
-                          if (!viewportEditBefore_.isEmpty())
+                          if (workspaceStack_->currentIndex() == 2) {
+                              if (auto* editor = scriptWorkspace_->CurrentEditor())
+                                  editor->undo();
+                          } else if (!viewportEditBefore_.isEmpty())
                               CancelViewportEdit();
                           else
                               undo_->undo();
                       });
     redoAction_ = add(edit, LUX_UI_TEXT("다시 실행"), LUX_UI_TEXT("redoEdit"),
                       LuxUI::KeySequence::Redo, [this] {
-                          if (!viewportEditBefore_.isEmpty())
+                          if (workspaceStack_->currentIndex() == 2) {
+                              if (auto* editor = scriptWorkspace_->CurrentEditor())
+                                  editor->redo();
+                          } else if (!viewportEditBefore_.isEmpty())
                               CancelViewportEdit();
                           else
                               undo_->redo();
                       });
-    add(edit, LUX_UI_TEXT("복사"), LUX_UI_TEXT("copyEntity"), LuxUI::KeySequence::Copy,
-        [this] { CopyEntity(); });
+    add(edit, LUX_UI_TEXT("복사"), LUX_UI_TEXT("copyEntity"), LuxUI::KeySequence::Copy, [this] {
+        if (workspaceStack_->currentIndex() == 2 && scriptWorkspace_->CurrentEditor())
+            scriptWorkspace_->CurrentEditor()->copy();
+        else if (workspaceStack_->currentIndex() == 0)
+            CopyEntity();
+    });
     add(edit, LUX_UI_TEXT("붙여넣기"), LUX_UI_TEXT("pasteEntity"), LuxUI::KeySequence::Paste,
-        [this] { PasteEntity(); });
+        [this] {
+            if (workspaceStack_->currentIndex() == 2 && scriptWorkspace_->CurrentEditor())
+                scriptWorkspace_->CurrentEditor()->paste();
+            else if (workspaceStack_->currentIndex() == 0)
+                PasteEntity();
+        });
     edit->addSeparator();
     add(edit, LUX_UI_TEXT("2D 엔티티 추가"), LUX_UI_TEXT("addEntity"),
         LuxUI::KeySequence(LuxUI::Flags::CTRL | LuxUI::Flags::Key_E), [this] { AddEntity(); });
@@ -251,6 +279,8 @@ void EditorWindow::BuildMenus() {
     add(edit, LUX_UI_TEXT("선택 삭제"), LUX_UI_TEXT("deleteEntity"), LuxUI::KeySequence::Delete,
         [this] { DeleteEntity(); });
     LuxUI::Menu* view = menuBar()->addMenu(LUX_UI_TEXT("보기"));
+    add(view, LUX_UI_TEXT("스크립트 에디터"), LUX_UI_TEXT("openScriptWorkspace"), {},
+        [this] { SetWorkspace(Workspace::Script); });
     add(view, LUX_UI_TEXT("애니메이션 에디터"), LUX_UI_TEXT("openAnimationWorkspace"), {},
         [this] { SetWorkspace(true); });
     view->addSeparator();
@@ -562,6 +592,10 @@ void EditorWindow::RunWithProgress(const LuxUI::String& message,
 }
 
 void EditorWindow::closeEvent(LuxUI::CloseEvent* event) {
+    if (scriptWorkspace_ && !scriptWorkspace_->ConfirmCloseAll()) {
+        event->ignore();
+        return;
+    }
     if (auto* editor = dynamic_cast<AnimationAssetEditor*>(
             findChild<LuxUI::Widget*>(LUX_UI_TEXT("animationAssetEditor")));
         editor && !editor->ConfirmDiscard()) {
@@ -600,7 +634,10 @@ void EditorWindow::dragEnterEvent(LuxUI::DragEnterEvent* event) {
         const LuxUI::String suffix = LuxUI::FileInfo(url.toLocalFile()).suffix().toLower();
         if (suffix == LuxUI::Latin1String("luxproject") ||
             suffix == LuxUI::Latin1String("luxproj") || suffix == LuxUI::Latin1String("lux") ||
-            suffix == LuxUI::Latin1String("luxpack") ||
+            suffix == LuxUI::Latin1String("luxpack") || suffix == LuxUI::Latin1String("cs") ||
+            suffix == LuxUI::Latin1String("luxprefab") ||
+            suffix == LuxUI::Latin1String("luxanim") ||
+            suffix == LuxUI::Latin1String("luxanimator") ||
             suffix == LuxUI::Latin1String("luxbackup")) {
             event->acceptProposedAction();
             return;
@@ -619,6 +656,8 @@ void EditorWindow::dropEvent(LuxUI::DropEvent* event) {
         AddPrefabAsset(path);
     else if (path.extension() == ".luxanim" || path.extension() == ".luxanimator")
         OpenAnimationAsset(path);
+    else if (path.extension() == ".cs")
+        OpenScriptFile(path);
     else if (path.extension() == ".lux")
         OpenProjectScene(path);
     else if (path.extension() == ".luxpack" || path.extension() == ".luxbackup") {
@@ -637,6 +676,9 @@ void EditorWindow::dropEvent(LuxUI::DropEvent* event) {
 }
 
 void EditorWindow::RefreshAll() {
+    if (scriptWorkspace_)
+        scriptWorkspace_->SetProjectRoot(project_ ? project_->GetFile().parent_path()
+                                                  : std::filesystem::path{});
     RefreshSceneTabs();
     RefreshHierarchy();
     RefreshProjectExplorer();
@@ -993,9 +1035,11 @@ void EditorWindow::UpdateChrome() {
         gameCanvas_->RefreshScene();
     RefreshModelingWorkspace();
     if (undoAction_)
-        undoAction_->setEnabled(!viewportEditBefore_.isEmpty() || undo_->canUndo());
+        undoAction_->setEnabled(workspaceStack_->currentIndex() == 2 ||
+                                !viewportEditBefore_.isEmpty() || undo_->canUndo());
     if (redoAction_)
-        redoAction_->setEnabled(!viewportEditBefore_.isEmpty() || undo_->canRedo());
+        redoAction_->setEnabled(workspaceStack_->currentIndex() == 2 ||
+                                !viewportEditBefore_.isEmpty() || undo_->canRedo());
     const LuxUI::String name = document_.GetPath().empty()
                                    ? LUX_UI_TEXT("새 장면")
                                    : LuxUI::FileInfo(Q(document_.GetPath())).fileName();
@@ -1292,6 +1336,10 @@ void EditorWindow::OnPhysicsChanged(const LuxUI::Widget* field) {
 }
 
 void EditorWindow::StartPreview() {
+    if (scriptWorkspace_->IsBuilding() || buildProcess_) {
+        Log(LUX_UI_TEXT("빌드가 끝난 뒤 실행해 주세요."), true);
+        return;
+    }
     CancelViewportEdit();
     if (previewActive_)
         return;

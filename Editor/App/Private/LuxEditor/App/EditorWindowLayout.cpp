@@ -433,6 +433,8 @@ void EditorWindow::BuildLayout() {
             OpenAnimationAsset(path);
         else if (suffix == LuxUI::Latin1String(".lux"))
             OpenProjectScene(path);
+        else if (suffix == LuxUI::Latin1String(".cs"))
+            OpenScriptFile(path);
         else if (suffix == LuxUI::Latin1String(".obj") || suffix == LuxUI::Latin1String(".fbx"))
             AddModelAsset(path);
     });
@@ -902,9 +904,9 @@ void EditorWindow::BuildLayout() {
     debugPanel_ = new DebugPanel(this, [this](LuxEngine::uint32 id) { SelectEntity(id); });
 
     const std::array<std::pair<LuxUI::String, LuxUI::Widget*>, 8> panels{
-        {{LUX_UI_TEXT("Outliner"), hierarchyPanel},
+        {{LUX_UI_TEXT("Hierarchy"), hierarchyPanel},
          {LUX_UI_TEXT("Content Browser"), assetsPanel},
-         {LUX_UI_TEXT("Details"), inspectorScroll},
+         {LUX_UI_TEXT("Inspector"), inspectorScroll},
          {LUX_UI_TEXT("Console"), consoleOutput_},
          {LUX_UI_TEXT("Problems"), issuesOutput_},
          {LUX_UI_TEXT("Place Actors"), toolsPanel},
@@ -919,18 +921,17 @@ void EditorWindow::BuildLayout() {
                           LuxUI::DockWidget::DockWidgetClosable);
         dock->setWidget(panels[index].second);
         docks_[index] = dock;
-        const auto area = index == 0 || index == 2 ? LuxUI::Flags::RightDockWidgetArea
-                          : index == 5             ? LuxUI::Flags::LeftDockWidgetArea
-                                                   : LuxUI::Flags::BottomDockWidgetArea;
+        const auto area = index == 2                 ? LuxUI::Flags::RightDockWidgetArea
+                          : index == 0 || index == 5 ? LuxUI::Flags::LeftDockWidgetArea
+                                                     : LuxUI::Flags::BottomDockWidgetArea;
         addDockWidget(area, dock);
     }
-    splitDockWidget(docks_[0], docks_[2], LuxUI::Flags::Vertical);
+    tabifyDockWidget(docks_[0], docks_[5]);
     for (size_t index : {size_t{3}, size_t{4}, size_t{7}})
         tabifyDockWidget(docks_[1], docks_[index]);
     for (size_t index : {size_t{1}, size_t{3}, size_t{4}, size_t{5}, size_t{6}, size_t{7}})
         docks_[index]->hide();
-    resizeDocks({docks_[0], docks_[2]}, {230, 520}, LuxUI::Flags::Vertical);
-    resizeDocks({docks_[0]}, {360}, LuxUI::Flags::Horizontal);
+    resizeDocks({docks_[0], docks_[2]}, {210, 300}, LuxUI::Flags::Horizontal);
     BuildAnimationPanel();
 
     auto* toolbar = addToolBar(LUX_UI_TEXT("편집 도구"));
@@ -1006,8 +1007,6 @@ void EditorWindow::BuildLayout() {
     auto* spacer = new LuxUI::Widget(toolbar);
     spacer->setSizePolicy(LuxUI::SizePolicy::Expanding, LuxUI::SizePolicy::Preferred);
     toolbar->addWidget(spacer);
-    projectLabel_ = Caption(LUX_UI_TEXT("프로젝트 없음"), toolbar);
-    toolbar->addWidget(projectLabel_);
     auto* assetSearch = new LuxUI::LineEdit(toolbar);
     assetSearch->setPlaceholderText(LUX_UI_TEXT("에셋 검색"));
     assetSearch->setMaximumWidth(160);
@@ -1023,7 +1022,7 @@ void EditorWindow::BuildLayout() {
     });
 
     BuildWorkspaceChrome();
-    defaultLayout_ = saveState(5);
+    defaultLayout_ = saveState(6);
     previewPauseAction_->setEnabled(false);
     previewStepAction_->setEnabled(false);
     previewStopAction_->setEnabled(false);
@@ -1038,8 +1037,8 @@ void EditorWindow::RestoreWorkspaceLayout() {
     ApplyTheme();
     restoreGeometry(settings.value(LUX_UI_TEXT("geometry")).toByteArray());
     const auto state = settings.value(LUX_UI_TEXT("layout")).toByteArray();
-    if (!state.isEmpty() && !restoreState(state, 5))
-        restoreState(defaultLayout_, 5);
+    if (!state.isEmpty() && !restoreState(state, 6))
+        restoreState(defaultLayout_, 6);
 }
 
 void EditorWindow::SaveWorkspaceLayout() {
@@ -1047,7 +1046,7 @@ void EditorWindow::SaveWorkspaceLayout() {
     settings.setValue(LUX_UI_TEXT("theme"), theme_);
     settings.setValue(LUX_UI_TEXT("uiScale"), uiScale_);
     settings.setValue(LUX_UI_TEXT("geometry"), saveGeometry());
-    settings.setValue(LUX_UI_TEXT("layout"), levelLayout_.isEmpty() ? saveState(5) : levelLayout_);
+    settings.setValue(LUX_UI_TEXT("layout"), levelLayout_.isEmpty() ? saveState(6) : levelLayout_);
     if (project_)
         settings.setValue(LUX_UI_TEXT("lastProject"),
                           LuxUI::String::fromUtf8(PathUtf8(project_->GetFile())));
@@ -1072,7 +1071,7 @@ void EditorWindow::SaveWorkspaceLayout() {
 
 void EditorWindow::ResetWorkspaceLayout() {
     SetWorkspace(false);
-    restoreState(defaultLayout_, 5);
+    restoreState(defaultLayout_, 6);
     docks_[0]->show();
     docks_[2]->show();
     for (size_t index : {size_t{1}, size_t{3}, size_t{4}, size_t{5}, size_t{6}, size_t{7}})

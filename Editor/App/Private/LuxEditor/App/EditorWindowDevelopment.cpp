@@ -1,6 +1,7 @@
 #include <LuxEditor/App/EditorWindow.hpp>
 #include <LuxEditor/Debug/DebugPanel.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
+#include <LuxEditor/Scripting/ScriptWorkspace.hpp>
 #include <LuxEditor/Viewport/EngineSceneRenderer.hpp>
 #include <LuxEditor/Viewport/GameViewport.hpp>
 #include <LuxEditor/Viewport/SceneViewport2D.hpp>
@@ -104,6 +105,7 @@ void EditorWindow::BuildDevelopmentWorkspace() {
 }
 
 void EditorWindow::PollDevelopmentWorkspace() {
+    scriptWorkspace_->SetExecutionActive(previewActive_ || buildProcess_);
     for (const auto& entry : LuxEngine::Log::ReadAfter(lastEngineLog_)) {
         lastEngineLog_ = entry.sequence;
         const auto severity = entry.level >= LuxEngine::LogLevel::Error  ? LuxUI::Severity::Error
