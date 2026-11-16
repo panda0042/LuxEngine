@@ -1,6 +1,9 @@
 #include <LuxUI/CodeEditor.hpp>
+#include <QAbstractItemView>
+#include <QCompleter>
 #include <QFontDatabase>
 #include <QRegularExpression>
+#include <QStandardItemModel>
 #include <QSyntaxHighlighter>
 #include <QTextBlock>
 #include <QTextCursor>
@@ -79,12 +82,33 @@ protected:
         editor_->PaintGutter(event);
     }
 
+    void mousePressEvent(QMouseEvent* event) override {
+        editor_->ClickGutter(qRound(event->position().y()), event->button() == Qt::RightButton);
+    }
+
 private:
     CodeEditor* editor_;
 };
 } // namespace
 
-CodeEditor::CodeEditor(Widget* parent) : PlainTextEdit(parent), gutter_(new CodeGutter(this)) {
+struct CodeEditor::Services {
+    struct Marker {
+        QTextCursor cursor;
+        String condition;
+        bool verified = false;
+    };
+
+    std::vector<Marker> markers;
+    int executionLine = 0;
+    QCompleter* completer = nullptr;
+    std::vector<CodeCompletion> completions;
+    int completionRevision = 0;
+    QTimer completionTimer;
+};
+
+CodeEditor::CodeEditor(Widget* parent)
+    : PlainTextEdit(parent), gutter_(new CodeGutter(this)),
+      services_(std::make_unique<Services>()) {
     setObjectName(QStringLiteral("scriptCodeEditor"));
     setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     setLineWrapMode(QPlainTextEdit::NoWrap);
@@ -100,13 +124,42 @@ CodeEditor::CodeEditor(Widget* parent) : PlainTextEdit(parent), gutter_(new Code
     connect(this, &QPlainTextEdit::cursorPositionChanged, this, &CodeEditor::HighlightLine);
     UpdateGutter();
     HighlightLine();
+    services_->completer = new QCompleter(this);
+    services_->completer->setWidget(this);
+    services_->completer->setCaseSensitivity(Qt::CaseInsensitive);
+    services_->completer->setCompletionMode(QCompleter::PopupCompletion);
+    connect(services_->completer, qOverload<const QModelIndex&>(&QCompleter::activated), this,
+            [this](const QModelIndex& index) {
+                const int selected = index.data(Qt::UserRole).toInt();
+                if (document()->revision() == services_->completionRevision && selected >= 0 &&
+                    size_t(selected) < services_->completions.size())
+                    ApplyEdits(services_->completions[selected].edits);
+            });
+    services_->completionTimer.setSingleShot(true);
+    services_->completionTimer.setInterval(180);
+    connect(&services_->completionTimer, &QTimer::timeout, this, [this] {
+        if (hasFocus())
+            Q_EMIT CompletionRequested();
+    });
+    connect(this, &QPlainTextEdit::textChanged, this, [this] {
+        services_->completer->popup()->hide();
+        if (!services_->markers.empty())
+            Q_EMIT BreakpointsChanged();
+    });
 }
 
 CodeEditor::~CodeEditor() = default;
 
 void CodeEditor::SetCleanText(const String& text) {
-    setPlainText(text);
-    document()->setModified(false);
+    const auto points = Breakpoints();
+    {
+        const QSignalBlocker blocker(this);
+        setPlainText(text);
+        document()->setModified(false);
+        SetBreakpoints(points);
+    }
+    Q_EMIT textChanged();
+    Q_EMIT modificationChanged(false);
 }
 
 void CodeEditor::MarkSaved() {
@@ -126,7 +179,7 @@ int CodeEditor::CurrentColumn() const {
 }
 
 int CodeEditor::GutterWidth() const {
-    return 18 + fontMetrics().horizontalAdvance(u'9') * QString::number(blockCount()).size();
+    return 32 + fontMetrics().horizontalAdvance(u'9') * QString::number(blockCount()).size();
 }
 
 void CodeEditor::UpdateGutter() {
@@ -149,6 +202,18 @@ void CodeEditor::PaintGutter(PaintEvent* event) {
     while (block.isValid() && top <= event->rect().bottom()) {
         const int height = qRound(blockBoundingRect(block).height());
         if (block.isVisible() && top + height >= event->rect().top()) {
+            for (const auto& marker : services_->markers)
+                if (marker.cursor.blockNumber() == block.blockNumber()) {
+                    painter.setPen(QColor("#ec6868"));
+                    painter.setBrush(marker.verified ? QBrush(QColor("#ec6868"))
+                                                     : QBrush(Qt::NoBrush));
+                    painter.drawEllipse(QPointF(8, top + height * .5), 5, 5);
+                }
+            if (services_->executionLine == block.blockNumber() + 1) {
+                painter.setPen(QColor("#eecb68"));
+                painter.drawText(15, top, 12, fontMetrics().height(), Qt::AlignCenter,
+                                 QStringLiteral("▶"));
+            }
             painter.setPen(block.blockNumber() == textCursor().blockNumber()
                                ? palette().color(QPalette::Text)
                                : palette().color(QPalette::PlaceholderText));
@@ -236,7 +301,10 @@ bool CodeEditor::event(QEvent* event) {
     if (event->type() == QEvent::ShortcutOverride) {
         auto* key = static_cast<QKeyEvent*>(event);
         // Text editing owns keys here; W/E/R/Delete must never manipulate scene entities.
-        const bool command = key->matches(QKeySequence::Save) || key->matches(QKeySequence::Find);
+        const bool command =
+            key->matches(QKeySequence::Save) || key->matches(QKeySequence::Find) ||
+            (key->key() == Qt::Key_Space && key->modifiers() == Qt::ControlModifier) ||
+            key->key() == Qt::Key_F12 || key->key() == Qt::Key_F9;
         if (command || key->matches(QKeySequence::Undo) || key->matches(QKeySequence::Redo) ||
             key->matches(QKeySequence::Copy) || key->matches(QKeySequence::Paste) ||
             key->matches(QKeySequence::Cut) || key->matches(QKeySequence::SelectAll) ||
@@ -247,10 +315,35 @@ bool CodeEditor::event(QEvent* event) {
             return true;
         }
     }
-    return PlainTextEdit::event(event);
+    const bool handled = PlainTextEdit::event(event);
+    if (services_ && (event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange ||
+                      event->type() == QEvent::PaletteChange)) {
+        setTabStopDistance(fontMetrics().horizontalAdvance(u' ') * 4);
+        UpdateGutter();
+        HighlightLine();
+    }
+    return handled;
 }
 
 void CodeEditor::keyPressEvent(KeyEvent* event) {
+    if (services_->completer->popup()->isVisible() &&
+        (event->key() == Qt::Key_Enter || event->key() == Qt::Key_Return ||
+         event->key() == Qt::Key_Tab || event->key() == Qt::Key_Escape)) {
+        event->ignore();
+        return;
+    }
+    if (event->key() == Qt::Key_F12) {
+        Q_EMIT DefinitionRequested();
+        return;
+    }
+    if (event->key() == Qt::Key_F9) {
+        ToggleBreakpoint(CurrentLine());
+        return;
+    }
+    if (event->key() == Qt::Key_Space && event->modifiers() == Qt::ControlModifier) {
+        Q_EMIT CompletionRequested();
+        return;
+    }
     if (event->matches(QKeySequence::Save)) {
         Q_EMIT SaveRequested();
         return;
@@ -277,5 +370,129 @@ void CodeEditor::keyPressEvent(KeyEvent* event) {
         return;
     }
     PlainTextEdit::keyPressEvent(event);
+    if (!event->text().isEmpty() &&
+        (event->text() == QStringLiteral(".") || CurrentWord().size() >= 2))
+        services_->completionTimer.start();
+}
+
+String CodeEditor::CurrentWord() const {
+    const auto prefix = textCursor().block().text().left(textCursor().positionInBlock());
+    static const QRegularExpression word(QStringLiteral(R"([@\p{L}_][\p{L}\p{N}_]*$)"));
+    return word.match(prefix).captured();
+}
+
+bool CodeEditor::ApplyEdits(const std::vector<CodeTextEdit>& edits) {
+    if (isReadOnly())
+        return false;
+
+    struct Edit {
+        int from, to;
+        String text;
+    };
+
+    std::vector<Edit> valid;
+    for (const auto& edit : edits) {
+        const auto start = document()->findBlockByNumber(edit.line - 1);
+        const auto end = document()->findBlockByNumber(edit.endLine - 1);
+        if (!start.isValid() || !end.isValid() || edit.column < 1 || edit.endColumn < 1 ||
+            edit.column > start.length() || edit.endColumn > end.length())
+            return false;
+        const int from = start.position() + edit.column - 1,
+                  to = end.position() + edit.endColumn - 1;
+        if (from > to)
+            return false;
+        valid.push_back({from, to, edit.text});
+    }
+    std::sort(valid.begin(), valid.end(),
+              [](const auto& a, const auto& b) { return a.from > b.from; });
+    for (size_t i = 1; i < valid.size(); ++i)
+        if (valid[i].to > valid[i - 1].from)
+            return false;
+    auto caret = textCursor();
+    auto cursor = caret;
+    cursor.beginEditBlock();
+    for (const auto& edit : valid) {
+        cursor.setPosition(edit.from);
+        cursor.setPosition(edit.to, QTextCursor::KeepAnchor);
+        cursor.insertText(edit.text);
+    }
+    cursor.endEditBlock();
+    setTextCursor(caret);
+    services_->completer->popup()->hide();
+    return true;
+}
+
+void CodeEditor::ShowCompletions(const std::vector<CodeCompletion>& items) {
+    if (isReadOnly())
+        return;
+    services_->completions = items;
+    services_->completionRevision = document()->revision();
+    auto* model = new QStandardItemModel(services_->completer);
+    for (size_t i = 0; i < items.size(); ++i) {
+        auto* row = new QStandardItem(items[i].label);
+        row->setData(int(i), Qt::UserRole);
+        row->setToolTip(items[i].detail);
+        model->appendRow(row);
+    }
+    auto* old = services_->completer->model();
+    services_->completer->setModel(model);
+    if (old)
+        old->deleteLater();
+    services_->completer->setCompletionPrefix(CurrentWord());
+    if (items.empty()) {
+        services_->completer->popup()->hide();
+        return;
+    }
+    auto rect = cursorRect();
+    rect.setWidth(std::min(500, std::max(240, width() / 2)));
+    services_->completer->complete(rect);
+}
+
+void CodeEditor::ClickGutter(int y, bool condition) {
+    const int line = cursorForPosition(QPoint(0, y)).blockNumber() + 1;
+    if (condition)
+        Q_EMIT BreakpointConditionRequested(line);
+    else
+        ToggleBreakpoint(line);
+}
+
+void CodeEditor::ToggleBreakpoint(int line) {
+    const auto marker =
+        std::find_if(services_->markers.begin(), services_->markers.end(),
+                     [line](const auto& value) { return value.cursor.blockNumber() + 1 == line; });
+    if (marker != services_->markers.end())
+        services_->markers.erase(marker);
+    else {
+        const auto block = document()->findBlockByNumber(line - 1);
+        if (!block.isValid())
+            return;
+        services_->markers.push_back({QTextCursor(block), {}, false});
+    }
+    gutter_->update();
+    Q_EMIT BreakpointsChanged();
+}
+
+std::vector<CodeBreakpoint> CodeEditor::Breakpoints() const {
+    std::vector<CodeBreakpoint> result;
+    for (const auto& marker : services_->markers)
+        result.push_back({marker.cursor.blockNumber() + 1, marker.condition, marker.verified});
+    return result;
+}
+
+void CodeEditor::SetBreakpoints(const std::vector<CodeBreakpoint>& breakpoints) {
+    services_->markers.clear();
+    for (const auto& point : breakpoints) {
+        const auto block = document()->findBlockByNumber(point.line - 1);
+        if (block.isValid())
+            services_->markers.push_back({QTextCursor(block), point.condition, point.verified});
+    }
+    gutter_->update();
+}
+
+void CodeEditor::SetExecutionLine(int line) {
+    services_->executionLine = line;
+    if (line > 0)
+        GoTo(line);
+    gutter_->update();
 }
 } // namespace LuxUI
