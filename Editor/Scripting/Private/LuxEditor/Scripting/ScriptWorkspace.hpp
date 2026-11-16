@@ -3,9 +3,12 @@
 #include <LuxEditor/Build/ProjectBuild.hpp>
 #include <LuxUI/CodeEditor.hpp>
 #include <filesystem>
+#include <memory>
 #include <vector>
 
 namespace LuxEditor {
+class CSharpLanguageClient;
+class ScriptDebugger;
 
 class ScriptWorkspace final : public LuxUI::Widget {
 public:
@@ -25,6 +28,11 @@ public:
     void AddDiagnostic(const BuildDiagnostic& diagnostic,
                        const std::filesystem::path& relativeRoot = {});
     LuxUI::CodeEditor* CurrentEditor() const;
+    void AttachDebugger(qint64 processId);
+    void StopDebugger();
+    bool IsDebugging() const;
+    std::function<void()> debugRequested;
+    std::function<void()> debugStopped;
 
 private:
     struct Source {
@@ -33,6 +41,7 @@ private:
         LuxUI::ByteArray disk;
         bool crlf = false;
         bool bom = false;
+        int version = 1;
     };
 
     void CloseFile(int index);
@@ -43,6 +52,16 @@ private:
     void ShowFailure(const std::string& error);
     void ReadBuildOutput(bool flush = false);
     void StopBuild();
+    void BuildScriptServices(LuxUI::ToolBar* toolbar, LuxUI::TabWidget* bottom);
+    void ConfigureScriptTools();
+    void RestartLanguage();
+    void SourceChanged(LuxUI::CodeEditor* editor);
+    void CompleteCode();
+    void GoToDefinition();
+    void SaveBreakpoints(LuxUI::CodeEditor* editor);
+    void OnDebugEvent(const LuxUI::JsonObject& event);
+    void ShowDebugFrame(const LuxUI::JsonObject& frame);
+    void RefreshDebugControls();
     std::vector<Source> sources_;
     std::filesystem::path root_;
     LuxUI::TabWidget* tabs_ = nullptr;
@@ -63,5 +82,13 @@ private:
     LuxUI::ByteArray buildBuffer_;
     LuxUI::Timer outlineTimer_;
     bool executionActive_ = false;
+    bool debugAfterBuild_ = false;
+    std::unique_ptr<CSharpLanguageClient> language_;
+    std::unique_ptr<ScriptDebugger> debugger_;
+    LuxUI::ListWidget* stack_ = nullptr;
+    LuxUI::TreeWidget* variables_ = nullptr;
+    LuxUI::LineEdit* watch_ = nullptr;
+    std::vector<LuxUI::ToolButton*> debugControls_;
+    int debugFrame_ = 0;
 };
 } // namespace LuxEditor
