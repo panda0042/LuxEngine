@@ -86,4 +86,15 @@ public sealed class AnimationDriver : EntityScript {
         Entity.Transform = value;
     }
 }
+
+public sealed class DebugProbe : EntityScript {
+    public int Counter = 0;
+
+    protected override void OnUpdate(double deltaTime) {
+        Counter += 1; // LuxEditor debugger integration breakpoint
+        int snapshot = Counter;
+        if (snapshot < 0)
+            throw new InvalidOperationException("Unexpected counter value.");
+    }
+}
 }

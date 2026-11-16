@@ -2,11 +2,16 @@
 #include <LuxEngine/Platform/Input.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
 #include <LuxEngine/Scripting/ScriptRuntime.hpp>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#include <unistd.h>
+#endif
 #include <SDL3/SDL_filesystem.h>
 #include <SDL3/SDL_loadso.h>
 #include <atomic>
 #include <cmath>
 #include <coreclr_delegates.h>
+#include <cstdlib>
 #include <cstring>
 #include <hostfxr.h>
 #include <map>
@@ -325,6 +330,16 @@ bool ScriptRuntime::Initialize(Scene& scene, const ScriptRuntimeConfig& config) 
     Shutdown();
     impl_->error.clear();
     try {
+#if defined(__linux__)
+        // Permit only the launching editor and its debugger descendants under Yama ptrace_scope=1.
+        if (const auto* wait = std::getenv("LUX_SCRIPT_DEBUG_WAIT");
+            wait && std::string_view(wait) == "1") {
+            if (prctl(PR_SET_PTRACER, getppid(), 0, 0, 0) != 0) {
+                impl_->error = "Could not authorize the parent editor's script debugger.";
+                return false;
+            }
+        }
+#endif
         std::lock_guard managedLock(managedMutex);
         if (!Host().Initialize(config, impl_->error))
             return false;

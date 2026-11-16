@@ -152,6 +152,7 @@ EditorWindow::~EditorWindow() {
     sceneStreamingTimer_.stop();
     StopPreview();
     StopSceneWindow();
+    scriptWorkspace_->StopDebugger();
     CancelBuild();
     pendingSceneLoads_.clear();
     undo_->clear();
@@ -1339,7 +1340,7 @@ void EditorWindow::OnPhysicsChanged(const LuxUI::Widget* field) {
 }
 
 void EditorWindow::StartPreview() {
-    if (scriptWorkspace_->IsBuilding() || buildProcess_) {
+    if (scriptWorkspace_->IsBuilding() || scriptWorkspace_->IsDebugging() || buildProcess_) {
         Log(LUX_UI_TEXT("빌드가 끝난 뒤 실행해 주세요."), true);
         return;
     }

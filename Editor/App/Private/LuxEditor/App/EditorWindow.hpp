@@ -203,6 +203,7 @@ private:
     void TickPreview();
     // Saves the current scene and runs it in a separate LuxPlayer window.
     void RunSceneInWindow();
+    void StartScriptDebug();
     void StopSceneWindow();
     // Builds the open project with CMake (Debug/Release), optionally running or packaging it.
     enum class BuildFollowUp { None, Run, Package };
