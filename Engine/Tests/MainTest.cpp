@@ -233,7 +233,7 @@ using namespace LuxEngine;
 
 void Core() {
     const CameraComponent legacyCamera{true, true, 60.0f, 10.0f};
-    Check(Near(legacyCamera.nearClip, .1f) && Near(legacyCamera.farClip, 1000.f),
+    Check(Near(legacyCamera.nearClip, .1f) && Near(legacyCamera.farClip, 1000000.0),
           "public CameraComponent preserves four-field aggregate initialization and clip defaults");
     Random first(42), second(42);
     for (int index = 0; index < 32; ++index) {

@@ -152,6 +152,15 @@ void Test() {
     reject("{\"format\":\"LuxEngine.Scene\",\"format\":\"LuxEngine.Scene\"}");
     reject(text + " trailing");
     reject(std::string("{\"deep\":") + std::string(100, '[') + "0" + std::string(100, ']') + "}");
+    for (int version : {1, 2}) {
+        Scene legacyCamera;
+        const auto source = "LuxEngineScene " + std::to_string(version) + " 1\n" +
+                            (version == 2 ? "1\n" : "") + "0\n0\n0\n0\n1 1 1 60 10\n0\n0\n0\n0\n" +
+                            (version == 2 ? "0\n0\n" : "");
+        Check(legacyCamera.DeserializeFromString(source) &&
+                  legacyCamera.GetComponent<CameraComponent>(1).farClip == 1000.0,
+              "legacy text cameras retain their original clipping defaults");
+    }
     Scene old;
     Check(old.DeserializeFromString("LuxEngineScene 1 0\n"), "legacy v1 reads");
     Check(old.DeserializeFromString("LuxEngineScene 2 0\n"), "legacy v2 reads");

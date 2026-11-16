@@ -499,6 +499,7 @@ void EditorWindow::BuildAnimationPanel() {
     connect(animationTimeline_, &LuxUI::Slider::sliderReleased, this,
             [this] { EndTimelineEdit(); });
     auto* assetTabs = new LuxUI::TabWidget(animationDock_);
+    assetTabs->setObjectName(LUX_UI_TEXT("animationDocuments"));
     auto* assetEditor = new AnimationAssetEditor(
         assetTabs, document_, [this](const LuxUI::String& name, const std::function<void()>& edit) {
             ExecuteRecordedEdit(name, edit);

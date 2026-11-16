@@ -94,3 +94,5 @@ public sealed class Player : EntityScript {
 실행 중 C++에서 authored 필드 값을 바꾸면 다음 업데이트에 해당 스크립트 인스턴스를 종료하고 새 값으로 다시 생성한다. 관리 스크립트가 자신의 런타임 필드를 변경하는 동작은 매 프레임 authored 값으로 덮어쓰지 않는다. 필드 스키마 조회와 편집은 자동 컴파일이나 핫 리로드 기능을 의미하지 않는다. 네이티브/관리 브리지 ABI는 4이며 엔진과 ScriptCore를 함께 빌드한다.
 
 `Engine_csharp`은 실제 호스팅으로 필드 reflection, private 속성, OnCreate 이전 적용, 엔티티 참조, 씬 저장/로드, 가져오기 ID 재매핑과 형식 불일치 거부를 검사한다. `Editor_script_fields`는 실제 Qt 입력으로 정수·실수·벡터·엔티티 참조 편집, Undo/Redo와 저장·다시 열기를 검사한다.
+
+스크립트 작업 공간의 빌드는 `DOTNET_ROOT`에 `dotnet` 실행 파일이 있으면 해당 SDK를 사용하고, 그렇지 않으면 PATH의 `dotnet`을 사용한다. 워크스페이스에 설치한 포터블 SDK를 쓰려면 에디터 실행 전에 `DOTNET_ROOT`를 그 설치 경로로 지정한다.

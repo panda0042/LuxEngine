@@ -31,8 +31,8 @@ int main(int argc, char** argv) {
     try {
         LuxUI::TemporaryDir temporary;
         Check(temporary.isValid(), "Temporary directory unavailable");
-        const auto root =
-            LuxEditor::PathFromUtf8(temporary.path().toUtf8().toStdString()) / "한글 Project";
+        const auto root = LuxEditor::PathFromUtf8(temporary.path().toUtf8().toStdString()) /
+                          LuxEditor::PathFromUtf8("한글 Project");
         std::string error;
         const auto project = LuxEditor::EditorProject::Create(
             root, "ScriptWorkspace", LuxEditor::ProjectTemplate::Empty, error);
