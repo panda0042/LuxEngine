@@ -82,6 +82,8 @@ private:
     std::string lastError_;
     GpuDeviceInfo info_;
     GpuFrameStats frameStats_;
+    GpuLighting lighting_;
+    std::vector<GpuPointLight> lightPoints_;
     GpuDeviceCounters counters_;
     std::unordered_set<uint64> textures_;
     std::unordered_set<uint64> buffers_;

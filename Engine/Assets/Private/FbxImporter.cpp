@@ -45,7 +45,7 @@ bool Finite(ufbx_vec3 value) {
 }
 
 bool Representable(ufbx_real value) {
-    return std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max();
+    return std::isfinite(value) && std::abs(value) <= std::numeric_limits<double>::max();
 }
 
 bool FiniteMatrix(const ufbx_matrix& matrix) {
@@ -169,13 +169,13 @@ bool AppendNode(const ufbx_node& node, RawMeshData& result, bool& allUvs, std::s
         normal.z /= length;
         target = static_cast<uint32>(result.vertices.size() / 3);
         result.vertices.insert(result.vertices.end(),
-                               {static_cast<float>(position.x), static_cast<float>(position.y),
-                                static_cast<float>(position.z)});
+                               {static_cast<double>(position.x), static_cast<double>(position.y),
+                                static_cast<double>(position.z)});
         result.normals.insert(result.normals.end(),
-                              {static_cast<float>(normal.x), static_cast<float>(normal.y),
-                               static_cast<float>(normal.z)});
+                              {static_cast<double>(normal.x), static_cast<double>(normal.y),
+                               static_cast<double>(normal.z)});
         result.texCoords.insert(result.texCoords.end(),
-                                {static_cast<float>(uv.x), static_cast<float>(textureV)});
+                                {static_cast<double>(uv.x), static_cast<double>(textureV)});
         vertices.emplace(corner, target);
         return true;
     };
@@ -262,12 +262,12 @@ bool ReadFbxMesh(const std::string& filepath, RawMeshData& outMesh, std::string&
         result.boundsMin =
             result.boundsMax = {result.vertices[0], result.vertices[1], result.vertices[2]};
         for (size_t index = 0; index < result.vertices.size(); index += 3) {
-            result.boundsMin.x = std::min(result.boundsMin.x, result.vertices[index]);
-            result.boundsMin.y = std::min(result.boundsMin.y, result.vertices[index + 1]);
-            result.boundsMin.z = std::min(result.boundsMin.z, result.vertices[index + 2]);
-            result.boundsMax.x = std::max(result.boundsMax.x, result.vertices[index]);
-            result.boundsMax.y = std::max(result.boundsMax.y, result.vertices[index + 1]);
-            result.boundsMax.z = std::max(result.boundsMax.z, result.vertices[index + 2]);
+            result.boundsMin.x = std::min<double>(result.boundsMin.x, result.vertices[index]);
+            result.boundsMin.y = std::min<double>(result.boundsMin.y, result.vertices[index + 1]);
+            result.boundsMin.z = std::min<double>(result.boundsMin.z, result.vertices[index + 2]);
+            result.boundsMax.x = std::max<double>(result.boundsMax.x, result.vertices[index]);
+            result.boundsMax.y = std::max<double>(result.boundsMax.y, result.vertices[index + 1]);
+            result.boundsMax.z = std::max<double>(result.boundsMax.z, result.vertices[index + 2]);
         }
         if (!StableFile(file, size, modified)) {
             error = "FBX 파일을 가져오는 동안 원본이 변경되었습니다.";

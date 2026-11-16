@@ -1,0 +1,358 @@
+#include <LuxEngine/Assets/ModelAsset.hpp>
+#include <LuxEngine/Core/Log.hpp>
+#include <LuxEngine/Scene/Entity.hpp>
+#include <LuxEngine/Scene/Scene.hpp>
+#include <algorithm>
+#include <cmath>
+#include <map>
+
+namespace LuxEngine {
+namespace {
+uint32 Bind(Scene& scene, uint32 owner, const std::string& path) {
+    if (path.empty())
+        return owner;
+    size_t start = 0;
+    uint32 current = owner;
+    while (start < path.size()) {
+        const auto end = path.find('/', start);
+        const auto name = path.substr(start, end == std::string::npos ? end : end - start);
+        uint32 match = 0;
+        for (auto child : scene.GetChildren(current)) {
+            auto* tag = scene.TryGetComponent<TagComponent>(child);
+            if (tag && tag->tag == name) {
+                if (match)
+                    return 0;
+                match = child;
+            }
+        }
+        if (!match)
+            return 0;
+        current = match;
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+    return current;
+}
+
+void Fail(const std::string& error) {
+    Log::Warn("애니메이션을 적용하지 못했습니다: " + error);
+}
+} // namespace
+
+void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, double dt,
+                                bool rootMotion) {
+    if (!IsAlive(owner))
+        return;
+    for (auto id : GetComponentEntityIds<ModelAnimationComponent>()) {
+        auto& model = GetComponent<ModelAnimationComponent>(id);
+        if (model.poseOwner == owner)
+            model.mixedPose.reset();
+    }
+    auto applyMotion = [&](Vec3 delta) {
+        auto* transform = TryGetComponent<TransformComponent>(owner);
+        if (!rootMotion || !transform || dt <= 0)
+            return;
+        if (auto* body = TryGetComponent<Rigidbody3DComponent>(owner);
+            body && body->type == BodyType::Dynamic)
+            body->velocity = GetWorldMatrix(owner).TransformDirection(delta) * (1 / dt);
+        else if (auto* body = TryGetComponent<Rigidbody2DComponent>(owner);
+                 body && body->type == BodyType::Dynamic) {
+            const auto velocity = GetWorldMatrix(owner).TransformDirection(delta) * (1 / dt);
+            body->velocity = {velocity.x, velocity.y};
+        } else
+            transform->position += transform->GetTransform().TransformDirection(delta);
+    };
+    for (const auto& sample : frame.samples) {
+        const uint32 target = Bind(*this, owner, sample.target);
+        if (!target)
+            continue;
+        const auto& v = sample.value;
+        auto* transform = TryGetComponent<TransformComponent>(target);
+        if (sample.property == AnimationProperty::Position && transform) {
+            const Vec3 position{v[0], v[1], v[2]};
+            if (!(rootMotion && target == owner))
+                transform->position = position;
+        } else if (sample.property == AnimationProperty::Rotation && transform)
+            transform->rotation = {v[0], v[1], v[2]};
+        else if (sample.property == AnimationProperty::Scale && transform)
+            transform->scale = {v[0], v[1], v[2]};
+        else if (sample.property == AnimationProperty::Color) {
+            const Vec4 color{static_cast<float>(v[0]), static_cast<float>(v[1]),
+                             static_cast<float>(v[2]), static_cast<float>(v[3])};
+            if (auto* sprite = TryGetComponent<SpriteRendererComponent>(target))
+                sprite->color = color;
+            if (auto* mesh = TryGetComponent<MeshRendererComponent>(target))
+                mesh->material.albedoColor = color;
+        } else if (sample.property == AnimationProperty::Opacity) {
+            const auto alpha = static_cast<float>(std::clamp(v[0], 0.0, 1.0));
+            if (auto* sprite = TryGetComponent<SpriteRendererComponent>(target))
+                sprite->color.w = alpha;
+            if (auto* mesh = TryGetComponent<MeshRendererComponent>(target)) {
+                mesh->material.albedoColor.w = alpha;
+                mesh->material.alphaMode = MaterialAlphaMode::Blend;
+            }
+        } else if (sample.property == AnimationProperty::SpriteFrame) {
+            if (auto* sprite = TryGetComponent<SpriteRendererComponent>(target)) {
+                sprite->columns = frame.spriteColumns;
+                sprite->rows = frame.spriteRows;
+                sprite->texturePath = frame.spriteSheet;
+                sprite->frame = static_cast<uint32>(
+                    std::clamp(std::floor(v[0]), 0.0, double(sprite->columns) * sprite->rows - 1));
+            }
+        } else if (sample.property == AnimationProperty::Float) {
+            if (auto* camera = TryGetComponent<CameraComponent>(target)) {
+                if (sample.field == "camera.fov")
+                    camera->fov = std::clamp(v[0], .01, 179.99);
+                if (sample.field == "camera.orthoSize")
+                    camera->orthoSize = std::max(.0001, v[0]);
+                if (sample.field == "camera.nearClip")
+                    camera->nearClip = std::clamp(v[0], .0001, camera->farClip * .5);
+                if (sample.field == "camera.farClip")
+                    camera->farClip = std::max(camera->nearClip * 2, v[0]);
+            }
+            if (auto* mesh = TryGetComponent<MeshRendererComponent>(target)) {
+                if (sample.field == "material.metallic")
+                    mesh->material.metallic = static_cast<float>(std::clamp(v[0], 0., 1.));
+                if (sample.field == "material.roughness")
+                    mesh->material.roughness = static_cast<float>(std::clamp(v[0], 0., 1.));
+            }
+            if (auto* script = TryGetComponent<ScriptComponent>(target)) {
+                auto at = script->fields.find(sample.field);
+                if (at != script->fields.end() && std::holds_alternative<float>(at->second))
+                    at->second = static_cast<float>(v[0]);
+            }
+        }
+    }
+    if (frame.models.empty()) {
+        if (frame.rootDelta)
+            applyMotion(*frame.rootDelta);
+        return;
+    }
+    const auto& path = frame.models.front().path;
+    std::string error;
+    auto model = ModelAsset::LoadFbx(ResolveAssetPath(path), error);
+    if (!model) {
+        Fail(error);
+        return;
+    }
+    std::vector<ModelPose> poses;
+    poses.reserve(frame.models.size());
+    std::vector<const AnimationModelSample*> evaluated;
+    std::vector<ModelPoseLayer> layers;
+    for (const auto& sample : frame.models) {
+        if (sample.path != path || sample.weight <= 0)
+            continue;
+        ModelPose pose;
+        if (!model->Evaluate(sample.time, sample.clip, pose, error)) {
+            Fail(error);
+            return;
+        }
+        poses.push_back(std::move(pose));
+        evaluated.push_back(&sample);
+        layers.push_back(
+            {&poses.back(), sample.weight, sample.layer, sample.additive, sample.mask});
+    }
+    std::vector<ModelPoseOverride> overrides;
+    for (const auto& sample : frame.samples) {
+        if (sample.target.empty() || int(sample.property) > 2)
+            continue;
+        std::optional<uint32> match;
+        for (uint32 node = 0; node < model->nodes.size(); ++node) {
+            std::string path = model->nodes[node].name;
+            auto parent = model->nodes[node].parent;
+            while (parent >= 0) {
+                path = model->nodes[parent].name + "/" + path;
+                parent = model->nodes[parent].parent;
+            }
+            if (path == sample.target || path.ends_with("/" + sample.target)) {
+                if (match) {
+                    match.reset();
+                    break;
+                }
+                match = node;
+            }
+        }
+        if (!match)
+            continue;
+        ModelPoseOverride value;
+        value.node = *match;
+        const Vec3 vector{sample.value[0], sample.value[1], sample.value[2]};
+        if (sample.property == AnimationProperty::Position)
+            value.position = vector;
+        if (sample.property == AnimationProperty::Rotation)
+            value.rotation = vector;
+        if (sample.property == AnimationProperty::Scale)
+            value.scale = vector;
+        overrides.push_back(value);
+    }
+
+    if (rootMotion) {
+        Vec3 delta = frame.rootDelta.value_or(Vec3{});
+        double total = 0;
+        for (size_t index = 0; index < poses.size(); ++index) {
+            const auto& sample = *evaluated[index];
+            if (sample.weight <= 0 || sample.path != path)
+                continue;
+            uint32 root = model->submeshes.front().node;
+            for (uint32 node = 0; node < model->nodes.size(); ++node)
+                if ((!sample.rootMotionTarget.empty() &&
+                     model->nodes[node].name == sample.rootMotionTarget) ||
+                    (sample.rootMotionTarget.empty() && model->nodes[node].bone &&
+                     (model->nodes[node].parent < 0 ||
+                      !model->nodes[model->nodes[node].parent].bone))) {
+                    root = node;
+                    break;
+                }
+            if (!frame.rootDelta) {
+                ModelPose previous;
+                if (!model->Evaluate(sample.previousTime, sample.clip, previous, error)) {
+                    Fail(error);
+                    return;
+                }
+                auto position = [&](const ModelPose& pose) {
+                    const auto* m = pose.nodeWorldTransforms.at(root).elements;
+                    return Vec3{m[12], m[13], m[14]};
+                };
+                Vec3 movement = position(poses[index]) - position(previous);
+                if (sample.cycles != 0 && sample.clip >= 0) {
+                    ModelPose start, end;
+                    if (!model->Evaluate(0, sample.clip, start, error) ||
+                        !model->Evaluate(model->animations[sample.clip].duration, sample.clip, end,
+                                         error)) {
+                        Fail(error);
+                        return;
+                    }
+                    movement += (position(end) - position(start)) * sample.cycles;
+                }
+                delta += movement * sample.weight;
+                total += sample.weight;
+            }
+            ModelPoseOverride extraction;
+            extraction.node = root;
+            extraction.position = model->nodes[root].localTransform.position;
+            overrides.push_back(extraction);
+        }
+        if (!frame.rootDelta && total > 1)
+            delta = delta * (1 / total);
+        applyMotion(delta);
+    }
+    auto mixed = CreateRef<ModelPose>();
+    if (!model->MixPoses(layers, *mixed, error, overrides)) {
+        Fail(error);
+        return;
+    }
+    std::vector<uint32> pending{owner};
+    while (!pending.empty()) {
+        auto id = pending.back();
+        pending.pop_back();
+        const auto children = GetChildren(id);
+        pending.insert(pending.end(), children.begin(), children.end());
+        auto* animation = TryGetComponent<ModelAnimationComponent>(id);
+        if (!animation || ResolveAssetPath(animation->modelPath) != ResolveAssetPath(path) ||
+            animation->nodeIndex >= mixed->nodeLocalTransforms.size())
+            continue;
+        animation->mixedPose = mixed;
+        animation->poseOwner = owner;
+        animation->playing = false;
+        ++animation->poseRevision;
+        if (animation->applyNodeTransform && id != owner) {
+            const auto& node = mixed->nodeLocalTransforms[animation->nodeIndex];
+            if (auto* transform = TryGetComponent<TransformComponent>(id)) {
+                transform->position = node.position;
+                transform->rotation = node.rotation;
+                transform->scale = node.scale;
+            }
+        }
+    }
+}
+
+void Scene::UpdateAnimations(double dt, bool emitEvents) {
+    for (auto id : GetComponentEntityIds<ModelAnimationComponent>()) {
+        auto& model = GetComponent<ModelAnimationComponent>(id);
+        if (model.poseOwner && !HasComponent<AnimationComponent>(model.poseOwner) &&
+            !HasComponent<AnimatorComponent>(model.poseOwner)) {
+            model.mixedPose.reset();
+            model.poseOwner = 0;
+        }
+    }
+    for (auto id : GetComponentEntityIds<AnimationComponent>()) {
+        auto* animation = TryGetComponent<AnimationComponent>(id);
+        if (!animation)
+            continue;
+        animation->pendingEvents.clear();
+        if (!animation->playing)
+            continue;
+        if (!animation->assetPath.empty() &&
+            animation->loadedPath != ResolveAssetPath(animation->assetPath)) {
+            std::string error;
+            auto clip = AnimationClip::Load(ResolveAssetPath(animation->assetPath), error);
+            if (!clip) {
+                animation->playing = false;
+                Fail(error);
+                continue;
+            }
+            animation->asset = std::move(clip);
+            animation->loadedPath = ResolveAssetPath(animation->assetPath);
+        }
+        const auto& clip = animation->asset ? *animation->asset : animation->clip;
+        AnimationPlayback playback{animation->currentTime, animation->speed, animation->playing};
+        auto events = playback.Advance(dt, clip.duration, clip.GetWrap(), clip.events);
+        animation->currentTime = playback.cursor;
+        animation->playing = playback.playing;
+        AnimationFrame frame;
+        frame.rootDelta = clip.RootDelta(playback.previousCursor, playback.cursor);
+        frame.samples = clip.SampleTracks(playback.cursor);
+        frame.spriteSheet = clip.spriteSheet;
+        frame.spriteColumns = clip.spriteColumns;
+        frame.spriteRows = clip.spriteRows;
+        if (!clip.modelPath.empty()) {
+            AnimationModelSample sample;
+            sample.path = clip.modelPath;
+            sample.clip = clip.modelClip;
+            sample.time = playback.Time(clip.duration, clip.GetWrap());
+            sample.previousTime =
+                AnimationTime(playback.previousCursor, clip.duration, clip.GetWrap());
+            sample.cycles = clip.GetWrap() == AnimationWrap::Loop
+                                ? std::floor(playback.cursor / clip.duration) -
+                                      std::floor(playback.previousCursor / clip.duration)
+                                : 0;
+            sample.rootMotionTarget = clip.rootMotionTarget;
+            frame.models.push_back(sample);
+        }
+        ApplyAnimationFrame(id, frame, dt, animation->rootMotion);
+        if (emitEvents)
+            animation->pendingEvents = std::move(events);
+    }
+    for (auto id : GetComponentEntityIds<AnimatorComponent>()) {
+        auto* animation = TryGetComponent<AnimatorComponent>(id);
+        if (!animation)
+            continue;
+        animation->pendingEvents.clear();
+        if (!animation->playing)
+            continue;
+        const auto path = ResolveAssetPath(animation->controllerPath);
+        if (!animation->player || animation->loadedPath != path) {
+            std::string error;
+            auto controller = AnimatorController::Load(path, error);
+            auto player = CreateRef<AnimatorPlayer>();
+            if (!controller || !player->SetController(controller, error)) {
+                animation->playing = false;
+                Fail(error);
+                continue;
+            }
+            animation->player = std::move(player);
+            animation->loadedPath = path;
+            for (const auto& parameter : animation->parameters)
+                animation->player->SetParameter(parameter.name, parameter.value);
+            if (animation->rootMotion)
+                ApplyAnimationFrame(id, animation->player->Update(0, false), 0, true);
+        }
+        animation->player->SetPlaying(animation->playing);
+        auto frame = animation->player->Update(dt, emitEvents);
+        ApplyAnimationFrame(id, frame, dt, animation->rootMotion);
+        if (emitEvents)
+            animation->pendingEvents = std::move(frame.events);
+    }
+}
+} // namespace LuxEngine

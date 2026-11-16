@@ -88,12 +88,12 @@ std::vector<Entity> Scene::GetEntities() {
 }
 
 std::vector<Entity> Scene::GetEntitiesIn2DLayerOrder() {
-    std::vector<std::pair<Entity, float>> depths;
+    std::vector<std::pair<Entity, double>> depths;
     depths.reserve(entities_.size());
     for (const auto& entity : GetEntities()) {
         if (!entity.HasComponent<TransformComponent>())
             continue;
-        const float depth = GetWorldMatrix(entity.GetId()).elements[14];
+        const double depth = GetWorldMatrix(entity.GetId()).elements[14];
         if (std::isfinite(depth))
             depths.emplace_back(entity, depth);
     }
@@ -112,11 +112,14 @@ void Scene::OnUpdate(double dt) {
     if (!std::isfinite(dt) || dt <= 0.0)
         return;
     updateBuffer_.assign(entities_.begin(), entities_.end());
+    UpdateAnimations(dt);
     std::unordered_map<std::string, Ref<ModelAsset>> models;
     std::map<std::tuple<std::string, int32, double>, ModelPose> modelPoses;
     for (const auto id : updateBuffer_) {
         auto* animation = TryGetComponent<ModelAnimationComponent>(id);
         auto* transform = TryGetComponent<TransformComponent>(id);
+        if (animation && animation->mixedPose)
+            continue;
         if (!animation || !transform || animation->modelPath.empty() ||
             !std::isfinite(animation->time) || !std::isfinite(animation->speed))
             continue;
@@ -169,17 +172,6 @@ void Scene::OnUpdate(double dt) {
     for (const auto& [path, model] : models)
         if (model && (modelAssets_.contains(path) || modelAssets_.size() < 128))
             modelAssets_[path] = model;
-    for (auto id : updateBuffer_) {
-        if (!entities_.contains(id))
-            continue;
-        if (!HasComponent<AnimationComponent>(id) || !HasComponent<TransformComponent>(id))
-            continue;
-        auto& animation = GetComponent<AnimationComponent>(id);
-        if (animation.playing && !animation.clip.keyframes.empty())
-            AnimationEngine::UpdateClip(animation.clip, animation.currentTime,
-                                        static_cast<float>(dt),
-                                        GetComponent<TransformComponent>(id));
-    }
     const auto colliders2D = GetComponentEntityIds<BoxCollider2DComponent>();
     const auto colliders3D = GetComponentEntityIds<BoxCollider3DComponent>();
     const bool has2D = std::any_of(colliders2D.begin(), colliders2D.end(), [this](uint32 id) {
@@ -271,7 +263,7 @@ Vec4 TileColor(uint8_t tile) {
     }
 }
 
-bool Finite(float v) {
+bool Finite(double v) {
     return std::isfinite(v);
 }
 
@@ -317,7 +309,7 @@ void Scene::OnRender() {
                         const uint8_t tile = map.Get(x, y);
                         if (tile == 0)
                             continue;
-                        const float size = map.tileSize;
+                        const double size = map.tileSize;
                         Renderer2D::DrawQuad(
                             matrix * Mat4::Translate({(x + .5f) * size, (y + .5f) * size, 0}) *
                                 Mat4::Scale({size, size, 1}),
@@ -326,8 +318,14 @@ void Scene::OnRender() {
             }
             if (!tilemaps && entity.HasComponent<SpriteRendererComponent>()) {
                 const auto& sprite = entity.GetComponent<SpriteRendererComponent>();
-                if (Finite(sprite.color))
-                    Renderer2D::DrawQuad(matrix, Exposed(sprite.color, settings_.exposure));
+                if (Finite(sprite.color)) {
+                    if (sprite.texturePath.empty())
+                        Renderer2D::DrawQuad(matrix, Exposed(sprite.color, settings_.exposure));
+                    else
+                        Renderer2D::DrawSpriteAsset(matrix, ResolveAssetPath(sprite.texturePath),
+                                                    sprite.frame, sprite.columns, sprite.rows,
+                                                    Exposed(sprite.color, settings_.exposure));
+                }
             }
         }
     }
@@ -359,7 +357,9 @@ void Scene::OnRender3D() {
                 const auto* animation = entity.TryGetComponent<ModelAnimationComponent>();
                 Renderer3D::DrawMeshAsset(ResolveAssetPath(meshComp.meshPath), world, material,
                                           meshComp.modelSubmesh, animation ? animation->clip : -1,
-                                          animation ? animation->time : 0.0, entity.GetId());
+                                          animation ? animation->time : 0.0, entity.GetId(),
+                                          animation ? animation->mixedPose.get() : nullptr,
+                                          animation ? animation->poseRevision : 0);
             }
         }
     }
@@ -823,6 +823,7 @@ bool Scene::ValidateForSerialization() {
                                                         typeid(BoxCollider3DComponent),
                                                         typeid(TilemapComponent),
                                                         typeid(AnimationComponent),
+                                                        typeid(AnimatorComponent),
                                                         typeid(ScriptComponent),
                                                         typeid(HierarchyComponent),
                                                         typeid(SceneReferenceComponent),
@@ -934,7 +935,7 @@ bool Scene::ValidateForSerialization() {
                 !IsValidUtf8(animation->clip.name) || !std::isfinite(animation->clip.duration) ||
                 animation->clip.duration <= 0 || animation->clip.keyframes.size() > 4096)
                 return false;
-            float previousTime = -1;
+            double previousTime = -1;
             for (const auto& key : animation->clip.keyframes) {
                 if (!std::isfinite(key.time) || key.time < 0 || key.time <= previousTime ||
                     !Finite(key.position) || !Finite(key.rotation) || !Finite(key.scale))

@@ -34,7 +34,8 @@ std::unordered_map<std::string, std::string> s_AssetKeys;
 std::unordered_map<std::string, size_t> s_TextureSizes;
 
 size_t MeshBytes(const RawMeshData& mesh) {
-    return (mesh.vertices.size() + mesh.normals.size() + mesh.texCoords.size()) * sizeof(float) +
+    return mesh.vertices.size() * sizeof(double) +
+           (mesh.normals.size() + mesh.texCoords.size()) * sizeof(float) +
            mesh.indices.size() * sizeof(uint32);
 }
 
@@ -505,12 +506,12 @@ bool ReadMeshFile(const std::string& filepath, RawMeshData& outMesh, std::string
     mesh.hasTexCoords = allUvs && sawUv;
     mesh.boundsMin = mesh.boundsMax = {mesh.vertices[0], mesh.vertices[1], mesh.vertices[2]};
     for (size_t i = 0; i < mesh.vertices.size(); i += 3) {
-        mesh.boundsMin.x = std::min(mesh.boundsMin.x, mesh.vertices[i]);
-        mesh.boundsMin.y = std::min(mesh.boundsMin.y, mesh.vertices[i + 1]);
-        mesh.boundsMin.z = std::min(mesh.boundsMin.z, mesh.vertices[i + 2]);
-        mesh.boundsMax.x = std::max(mesh.boundsMax.x, mesh.vertices[i]);
-        mesh.boundsMax.y = std::max(mesh.boundsMax.y, mesh.vertices[i + 1]);
-        mesh.boundsMax.z = std::max(mesh.boundsMax.z, mesh.vertices[i + 2]);
+        mesh.boundsMin.x = std::min<double>(mesh.boundsMin.x, mesh.vertices[i]);
+        mesh.boundsMin.y = std::min<double>(mesh.boundsMin.y, mesh.vertices[i + 1]);
+        mesh.boundsMin.z = std::min<double>(mesh.boundsMin.z, mesh.vertices[i + 2]);
+        mesh.boundsMax.x = std::max<double>(mesh.boundsMax.x, mesh.vertices[i]);
+        mesh.boundsMax.y = std::max<double>(mesh.boundsMax.y, mesh.vertices[i + 1]);
+        mesh.boundsMax.z = std::max<double>(mesh.boundsMax.z, mesh.vertices[i + 2]);
     }
     const auto position = [&](uint32 index) {
         return Vec3{mesh.vertices[index * 3], mesh.vertices[index * 3 + 1],

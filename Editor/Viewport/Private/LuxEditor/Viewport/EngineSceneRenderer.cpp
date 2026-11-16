@@ -167,9 +167,9 @@ void EngineSceneRenderer::ClearMeshPreview() {
 
 GameViewCamera ResolveGameViewCamera(LuxEngine::Scene& scene, int width, int height) {
     GameViewCamera result;
-    const float aspect = static_cast<float>(std::max(1, width)) / std::max(1, height);
+    const double aspect = static_cast<double>(std::max(1, width)) / std::max(1, height);
     auto view = LuxEngine::FitSceneView(scene);
-    float rotation = 0;
+    double rotation = 0;
     auto cameras = scene.GetComponentEntityIds<LuxEngine::CameraComponent>();
     std::sort(cameras.begin(), cameras.end());
     bool foundCamera = false;
@@ -188,7 +188,7 @@ GameViewCamera ResolveGameViewCamera(LuxEngine::Scene& scene, int width, int hei
                 continue;
             const auto matrix = scene.GetWorldMatrix(id);
             const auto* m = matrix.elements;
-            float angle = 0;
+            double angle = 0;
             try {
                 angle = scene.GetWorldTransform(id).rotation.z;
             } catch (const std::logic_error&) {
@@ -210,7 +210,7 @@ GameViewCamera ResolveGameViewCamera(LuxEngine::Scene& scene, int width, int hei
     if (!foundCamera)
         result.perspective =
             !scene.GetComponentEntityIds<LuxEngine::MeshRendererComponent>().empty();
-    const float halfWidth = view.halfHeight * aspect;
+    const double halfWidth = view.halfHeight * aspect;
     result.camera2D.SetProjection(-halfWidth, halfWidth, -view.halfHeight, view.halfHeight);
     result.camera2D.SetPosition({view.centerX, view.centerY, 0});
     result.camera2D.SetRotation(rotation);
@@ -449,8 +449,8 @@ bool EngineSceneRenderer::Render(LuxEngine::Scene& scene, int pixelWidth, int pi
     // The widget draws the scene background and grid before compositing object pixels.
     s.gpu.Clear(0, 0, 0, 0);
     const LuxEngine::OrthographicCamera camera(
-        static_cast<float>(worldBounds.left()), static_cast<float>(worldBounds.right()),
-        static_cast<float>(worldBounds.bottom()), static_cast<float>(worldBounds.top()));
+        static_cast<double>(worldBounds.left()), static_cast<double>(worldBounds.right()),
+        static_cast<double>(worldBounds.bottom()), static_cast<double>(worldBounds.top()));
     s.context2D.Init(&s.gpu);
     LuxEngine::Renderer2D::ScopedContext scope2D(s.context2D);
     try {
@@ -688,7 +688,8 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
                     LuxEngine::Renderer3D::DrawMeshAsset(
                         scene.ResolveAssetPath(mesh->meshPath), world, material, mesh->modelSubmesh,
                         animation ? animation->clip : -1, animation ? animation->time : 0.0,
-                        entity.GetId());
+                        entity.GetId(), animation ? animation->mixedPose.get() : nullptr,
+                        animation ? animation->poseRevision : 0);
                 }
             } else if (const auto* sprite =
                            entity.TryGetComponent<LuxEngine::SpriteRendererComponent>()) {

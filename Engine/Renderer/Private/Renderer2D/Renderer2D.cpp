@@ -1,4 +1,5 @@
 #include "RHI/RenderBackend.hpp"
+#include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/Renderer/Renderer2D/Renderer2D.hpp>
 #include <array>
 #include <cmath>
@@ -29,6 +30,8 @@ Renderer2D::Context& DefaultContext2D() {
 } // namespace
 
 struct Renderer2D::Context::Impl {
+    Vec3 origin;
+    std::vector<Ref<GpuTexture>> textures;
     GpuDevice* device = nullptr;
     std::weak_ptr<Rhi::RenderBackend> deviceOwner;
     Mat4 viewProjection;
@@ -49,7 +52,7 @@ struct Renderer2D::Context::Impl {
         return locked;
     }
 
-    void Quad(const Vec3& position, const Vec2& size, float angle,
+    void Quad(const Vec3& position, const Vec2& size, double angle,
               const std::weak_ptr<Rhi::RenderBackend>& owner, uint64 texture, const Vec4& color) {
         if (!active)
             return;
@@ -69,14 +72,15 @@ struct Renderer2D::Context::Impl {
             batch.vertices.clear();
             batch.vertices.reserve(6000);
         }
-        const float c = std::cos(angle), s = std::sin(angle);
+        const double c = std::cos(angle), s = std::sin(angle);
         const std::array<Vec2, 4> corners{
             {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}}};
         const std::array<Vec2, 4> uv{{{0, 1}, {1, 1}, {1, 0}, {0, 0}}};
         for (auto i : {0, 1, 2, 2, 3, 0}) {
-            const float x = corners[i].x * size.x, y = corners[i].y * size.y;
+            const double x = corners[i].x * size.x, y = corners[i].y * size.y;
             batches[usedBatches - 1].vertices.push_back(
-                {{position.x + c * x - s * y, position.y + s * x + c * y, position.z},
+                {{position.x - origin.x + c * x - s * y, position.y - origin.y + s * x + c * y,
+                  position.z - origin.z},
                  color,
                  uv[i]});
         }
@@ -84,11 +88,11 @@ struct Renderer2D::Context::Impl {
     }
 };
 
-OrthographicCamera::OrthographicCamera(float left, float right, float bottom, float top) {
+OrthographicCamera::OrthographicCamera(double left, double right, double bottom, double top) {
     SetProjection(left, right, bottom, top);
 }
 
-void OrthographicCamera::SetProjection(float left, float right, float bottom, float top) {
+void OrthographicCamera::SetProjection(double left, double right, double bottom, double top) {
     projectionMatrix_ = Mat4::Orthographic(left, right, bottom, top, -1.0f, 1.0f);
     RecalculateMatrix();
 }
@@ -163,7 +167,10 @@ void Renderer2D::Context::BeginScene(const OrthographicCamera& camera) {
         impl_ = std::make_unique<Impl>();
     if (impl_->active)
         throw std::logic_error("2D scene already active");
-    impl_->viewProjection = camera.GetViewProjectionMatrix();
+    impl_->textures.clear();
+    impl_->origin = camera.GetPosition();
+    impl_->viewProjection =
+        camera.GetProjectionMatrix() * camera.GetViewMatrix() * Mat4::Translate(impl_->origin);
     impl_->usedBatches = 0;
     impl_->stats = {};
     impl_->active = true;
@@ -222,8 +229,8 @@ void Renderer2D::Context::DrawQuad(const Mat4& transform, const Vec4& color) {
     const auto* m = transform.elements;
     for (size_t index = 0; index < points.size(); ++index) {
         const auto point = points[index];
-        positions[index] = {m[0] * point.x + m[4] * point.y + m[12],
-                            m[1] * point.x + m[5] * point.y + m[13], 0};
+        positions[index] = {m[0] * point.x + m[4] * point.y + m[12] - impl_->origin.x,
+                            m[1] * point.x + m[5] * point.y + m[13] - impl_->origin.y, 0};
         if (!std::isfinite(positions[index].x) || !std::isfinite(positions[index].y))
             return;
     }
@@ -234,7 +241,7 @@ void Renderer2D::Context::DrawQuad(const Mat4& transform, const Vec4& color) {
         vertices[vertices.size() - positions.size() + index].position = positions[index];
 }
 
-void Renderer2D::Context::DrawRotatedQuad(const Vec2& p, const Vec2& size, float angle,
+void Renderer2D::Context::DrawRotatedQuad(const Vec2& p, const Vec2& size, double angle,
                                           const Vec4& color) {
     if (impl_)
         impl_->Quad({p.x, p.y, 0}, size, angle, {}, 0, color);
@@ -245,6 +252,30 @@ void Renderer2D::Context::DrawSprite(const Vec2& p, const Vec2& size, GpuTexture
     if (!impl_ || !texture || !texture->IsValid())
         return;
     impl_->Quad({p.x, p.y, 0}, size, 0, texture->owner_, texture->handle_, tint);
+}
+
+bool Renderer2D::Context::DrawSpriteAsset(const Mat4& transform, const std::string& path,
+                                          uint32 frame, uint32 columns, uint32 rows,
+                                          const Vec4& tint) {
+    if (!impl_ || !impl_->active || !impl_->LockValidState() || !columns || !rows ||
+        columns > 4096 || rows > 4096 || frame >= columns * rows)
+        return false;
+    auto texture = AssetManager::LoadTexture(path, impl_->device);
+    if (!texture || !texture->IsValid())
+        return false;
+    impl_->textures.push_back(texture);
+    impl_->Quad({}, {1, 1}, 0, texture->owner_, texture->handle_, tint);
+    auto& vertices = impl_->batches[impl_->usedBatches - 1].vertices;
+    constexpr std::array<Vec2, 6> corners{
+        {{-.5, -.5}, {.5, -.5}, {.5, .5}, {.5, .5}, {-.5, .5}, {-.5, -.5}}};
+    for (size_t i = 0; i < 6; ++i) {
+        auto& vertex = vertices[vertices.size() - 6 + i];
+        vertex.position = transform.TransformPoint({corners[i].x, corners[i].y, 0}) - impl_->origin;
+        vertex.position.z = 0;
+        vertex.uv = {(double(frame % columns) + corners[i].x + .5) / columns,
+                     (double(frame / columns) + .5 - corners[i].y) / rows};
+    }
+    return true;
 }
 
 void Renderer2D::Context::ResetStats() {
@@ -337,7 +368,7 @@ void Renderer2D::DrawQuad(const Mat4& transform, const Vec4& color) {
     DefaultContext2D().DrawQuad(transform, color);
 }
 
-void Renderer2D::DrawRotatedQuad(const Vec2& p, const Vec2& size, float angle, const Vec4& color) {
+void Renderer2D::DrawRotatedQuad(const Vec2& p, const Vec2& size, double angle, const Vec4& color) {
     if (t_ActiveContext2D) {
         t_ActiveContext2D->DrawRotatedQuad(p, size, angle, color);
         return;
@@ -354,6 +385,14 @@ void Renderer2D::DrawSprite(const Vec2& p, const Vec2& size, GpuTexture* texture
     }
     std::lock_guard<std::recursive_mutex> lock(s_DefaultContext2DMutex);
     DefaultContext2D().DrawSprite(p, size, texture, tint);
+}
+
+bool Renderer2D::DrawSpriteAsset(const Mat4& transform, const std::string& path, uint32 frame,
+                                 uint32 columns, uint32 rows, const Vec4& tint) {
+    if (t_ActiveContext2D)
+        return t_ActiveContext2D->DrawSpriteAsset(transform, path, frame, columns, rows, tint);
+    std::lock_guard<std::recursive_mutex> lock(s_DefaultContext2DMutex);
+    return DefaultContext2D().DrawSpriteAsset(transform, path, frame, columns, rows, tint);
 }
 
 void Renderer2D::ResetStats() {
@@ -377,7 +416,7 @@ void OrthographicCamera::SetPosition(const Vec3& position) {
     RecalculateMatrix();
 }
 
-void OrthographicCamera::SetRotation(float rotationRadians) {
+void OrthographicCamera::SetRotation(double rotationRadians) {
     rotation_ = rotationRadians;
     RecalculateMatrix();
 }
@@ -386,7 +425,7 @@ const Vec3& OrthographicCamera::GetPosition() const {
     return position_;
 }
 
-float OrthographicCamera::GetRotation() const {
+double OrthographicCamera::GetRotation() const {
     return rotation_;
 }
 

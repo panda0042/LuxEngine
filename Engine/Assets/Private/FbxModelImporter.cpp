@@ -77,10 +77,10 @@ bool ValidPath(const std::string& value) {
     return true;
 }
 
-float Scalar(double value) {
+double Scalar(double value) {
     Require(std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max(),
             "FBX 값이 유효한 실수 범위를 벗어났습니다.");
-    return static_cast<float>(value);
+    return static_cast<double>(value);
 }
 
 Vec3 Vector(ufbx_vec3 value) {
@@ -597,6 +597,22 @@ bool ModelAsset::Evaluate(double seconds, int32 clip, ModelPose& output, std::st
                         Normal(normalMatrix, AttributeValue(mesh.skinned_normal, corner));
                 }
             }
+            std::vector<Vec3> inputs;
+            inputs.reserve(vertices.size());
+            for (size_t vertex = 0; vertex < vertices.size(); ++vertex) {
+                const auto corner = mapping.corners.at(vertex);
+                const auto control = mesh.vertex_indices.data[corner];
+                ufbx_vec3 offset{};
+                for (const auto* blend : mesh.blend_deformers) {
+                    const auto value = ufbx_get_blend_vertex_offset(blend, control);
+                    offset.x += value.x;
+                    offset.y += value.y;
+                    offset.z += value.z;
+                }
+                const auto deformed = ufbx_transform_direction(&node->geometry_to_node, offset);
+                inputs.push_back(submeshes[index].vertices[vertex].position + Vector(deformed));
+            }
+            result.deformationPositions.push_back(std::move(inputs));
             result.submeshes.push_back(std::move(vertices));
         }
         impl_->cachedPose = result;
