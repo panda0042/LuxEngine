@@ -10,7 +10,10 @@ String Text(std::string_view value) {
 }
 } // namespace
 
-Application::Application(int& argc, char** argv) : QApplication(argc, argv) {}
+Application::Application(int& argc, char** argv) : QApplication(argc, argv) {
+    // Apply the portable style before constructing children, including native Windows controls.
+    setStyle(StyleFactory::create(LUX_UI_TEXT("Fusion")));
+}
 
 Application::~Application() = default;
 

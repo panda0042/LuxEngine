@@ -511,8 +511,8 @@ struct AnimationAssetEditor::Impl {
                     *layers = nullptr;
     LuxUI::LineEdit *binding = nullptr, *field = nullptr, *eventName = nullptr,
                     *eventPayload = nullptr;
-    LuxUI::CheckBox* autoKey = nullptr;
-    LuxUI::CheckBox* rootMotion = nullptr;
+    LuxUI::Action* autoKey = nullptr;
+    LuxUI::Action* rootMotion = nullptr;
     LuxUI::Timer* timer = nullptr;
     LuxUI::ElapsedTimer clock;
     Ref<AnimatorPlayer> animator;
@@ -527,6 +527,13 @@ struct AnimationAssetEditor::Impl {
         layout->addWidget(button);
         LuxUI::Object::connect(button, &LuxUI::PushButton::clicked, &owner, action);
         return button;
+    }
+
+    LuxUI::Action* Button(LuxUI::ToolBar* toolbar, const char* label,
+                          const std::function<void()>& action) {
+        auto* command = toolbar->addAction(LuxUI::String::fromUtf8(label));
+        LuxUI::Object::connect(command, &LuxUI::Action::triggered, &owner, action);
+        return command;
     }
 
     LuxUI::DoubleSpinBox* Spin(LuxUI::FormLayout* form, const char* label, double low,
@@ -910,8 +917,12 @@ AnimationAssetEditor::AnimationAssetEditor(
     auto& p = *impl_;
     auto* layout = new LuxUI::VBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
-    auto* toolbar = new LuxUI::HBoxLayout;
-    layout->addLayout(toolbar);
+    // A toolbar can overflow at Windows display scaling instead of widening the whole editor.
+    auto* toolbar = new LuxUI::ToolBar(this);
+    toolbar->setObjectName(LUX_UI_TEXT("animationAssetToolbar"));
+    toolbar->setMinimumWidth(0);
+    toolbar->setSizePolicy(LuxUI::SizePolicy::Ignored, LuxUI::SizePolicy::Preferred);
+    layout->addWidget(toolbar);
     p.Button(toolbar, "새 클립", [&p] {
         if (!p.owner.ConfirmDiscard())
             return;
@@ -955,10 +966,10 @@ AnimationAssetEditor::AnimationAssetEditor(
         impl_->ResetPreview();
         Seek(0);
     });
-    p.autoKey = new LuxUI::CheckBox(LUX_UI_TEXT("자동 키"), this);
-    toolbar->addWidget(p.autoKey);
-    p.rootMotion = new LuxUI::CheckBox(LUX_UI_TEXT("루트 모션"), this);
-    toolbar->addWidget(p.rootMotion);
+    p.autoKey = toolbar->addAction(LUX_UI_TEXT("자동 키"));
+    p.autoKey->setCheckable(true);
+    p.rootMotion = toolbar->addAction(LUX_UI_TEXT("루트 모션"));
+    p.rootMotion->setCheckable(true);
     auto* split = new LuxUI::Splitter(LuxUI::Flags::Horizontal, this);
     layout->addWidget(split, 1);
     auto* left = new LuxUI::Widget(split);
@@ -1760,6 +1771,8 @@ bool AnimationAssetEditor::ConfirmDiscard() {
 }
 
 bool AnimationAssetEditor::event(LuxUI::Event* event) {
+    if (event->type() == LuxUI::Event::Hide)
+        Play(false);
     if (event->type() == LuxUI::Event::ShortcutOverride) {
         auto* key = static_cast<LuxUI::KeyEvent*>(event);
         if (key->matches(LuxUI::KeySequence::Undo) || key->matches(LuxUI::KeySequence::Redo) ||
