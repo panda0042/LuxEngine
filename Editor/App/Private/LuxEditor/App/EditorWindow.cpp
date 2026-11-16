@@ -1,3 +1,4 @@
+#include <LuxEditor/Animation/AnimationAssetEditor.hpp>
 #include <LuxEditor/App/EditorWindow.hpp>
 #include <LuxEditor/Debug/DebugPanel.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
@@ -561,6 +562,12 @@ void EditorWindow::RunWithProgress(const LuxUI::String& message,
 }
 
 void EditorWindow::closeEvent(LuxUI::CloseEvent* event) {
+    if (auto* editor = dynamic_cast<AnimationAssetEditor*>(
+            findChild<LuxUI::Widget*>(LUX_UI_TEXT("animationAssetEditor")));
+        editor && !editor->ConfirmDiscard()) {
+        event->ignore();
+        return;
+    }
     CancelViewportEdit();
     StopPreview();
     StopSceneWindow();
@@ -610,6 +617,8 @@ void EditorWindow::dropEvent(LuxUI::DropEvent* event) {
     else if (LuxUI::String::fromUtf8(PathUtf8(path.extension())).toLower() ==
              LuxUI::Latin1String(".luxprefab"))
         AddPrefabAsset(path);
+    else if (path.extension() == ".luxanim" || path.extension() == ".luxanimator")
+        OpenAnimationAsset(path);
     else if (path.extension() == ".lux")
         OpenProjectScene(path);
     else if (path.extension() == ".luxpack" || path.extension() == ".luxbackup") {
@@ -961,7 +970,8 @@ void EditorWindow::RefreshInspector() {
         animationTimeline_->setValue(
             animation.clip.duration > 0
                 ? static_cast<int>(
-                      std::clamp(animation.currentTime / animation.clip.duration, 0.0f, 1.0f) *
+                      std::clamp<double>(animation.currentTime / animation.clip.duration, 0.0f,
+                                         1.0f) *
                       1000)
                 : 0);
         keyframeList_->clear();
@@ -1094,13 +1104,13 @@ void EditorWindow::OnTransformChanged(int row, int axis) {
         return;
     // Display values can be rounded or clamped; write only the field that the user edited.
     RecordEdit(LUX_UI_TEXT("변환 변경"), [this, row, axis] {
-        const auto edited = static_cast<float>(transform_[row][axis]->value());
+        const auto edited = static_cast<double>(transform_[row][axis]->value());
         for (const auto id : document_.GetSelection()) {
             auto* value = document_.GetScene().TryGetComponent<LuxEngine::TransformComponent>(id);
             if (!value)
                 continue;
             auto& vector = row == 0 ? value->position : row == 1 ? value->rotation : value->scale;
-            const std::array<float*, 3> components{&vector.x, &vector.y, &vector.z};
+            const std::array<double*, 3> components{&vector.x, &vector.y, &vector.z};
             *components[axis] = row == 1 ? LuxEngine::ToRadians(edited) : edited;
         }
         document_.MarkDirty();
@@ -1724,7 +1734,7 @@ void EditorWindow::CopyEntity() {
 
 namespace {
 constexpr qsizetype kMaxClipboardJsonBytes = 1024 * 1024;
-constexpr float kMaxClipboardCoord = 100000.0f;
+constexpr double kMaxClipboardCoord = 1e15;
 constexpr float kMaxClipboardMass = 1000000.0f;
 constexpr float kMaxClipboardGravityScale = 10000.0f;
 constexpr float kMaxClipboardDuration = 86400.0f;
@@ -1767,14 +1777,15 @@ bool IsStrictValidUtf8(const LuxUI::ByteArray& bytes) {
     return true;
 }
 
-bool ParseFiniteFloat(const LuxUI::JsonValue& val, float& out, float minVal = -kMaxClipboardCoord,
-                      float maxVal = kMaxClipboardCoord) {
+template <class T>
+bool ParseFiniteNumber(const LuxUI::JsonValue& val, T& out, double minVal = -kMaxClipboardCoord,
+                       double maxVal = kMaxClipboardCoord) {
     if (!val.isDouble())
         return false;
     const double d = val.toDouble();
     if (!std::isfinite(d))
         return false;
-    const float f = static_cast<float>(d);
+    const T f = static_cast<T>(d);
     if (!std::isfinite(f) || f < minVal || f > maxVal)
         return false;
     out = f;
@@ -1793,39 +1804,39 @@ bool ParseExactInt(const LuxUI::JsonValue& val, int& out, int minVal, int maxVal
 }
 
 bool ParseVec2(const LuxUI::JsonValue& val, LuxEngine::Vec2& out,
-               float minVal = -kMaxClipboardCoord, float maxVal = kMaxClipboardCoord) {
+               double minVal = -kMaxClipboardCoord, double maxVal = kMaxClipboardCoord) {
     if (!val.isArray())
         return false;
     const auto arr = val.toArray();
     if (arr.size() != 2)
         return false;
-    return ParseFiniteFloat(arr[0], out.x, minVal, maxVal) &&
-           ParseFiniteFloat(arr[1], out.y, minVal, maxVal);
+    return ParseFiniteNumber(arr[0], out.x, minVal, maxVal) &&
+           ParseFiniteNumber(arr[1], out.y, minVal, maxVal);
 }
 
 bool ParseVec3(const LuxUI::JsonValue& val, LuxEngine::Vec3& out,
-               float minVal = -kMaxClipboardCoord, float maxVal = kMaxClipboardCoord) {
+               double minVal = -kMaxClipboardCoord, double maxVal = kMaxClipboardCoord) {
     if (!val.isArray())
         return false;
     const auto arr = val.toArray();
     if (arr.size() != 3)
         return false;
-    return ParseFiniteFloat(arr[0], out.x, minVal, maxVal) &&
-           ParseFiniteFloat(arr[1], out.y, minVal, maxVal) &&
-           ParseFiniteFloat(arr[2], out.z, minVal, maxVal);
+    return ParseFiniteNumber(arr[0], out.x, minVal, maxVal) &&
+           ParseFiniteNumber(arr[1], out.y, minVal, maxVal) &&
+           ParseFiniteNumber(arr[2], out.z, minVal, maxVal);
 }
 
 bool ParseVec4(const LuxUI::JsonValue& val, LuxEngine::Vec4& out,
-               float minVal = -kMaxClipboardCoord, float maxVal = kMaxClipboardCoord) {
+               double minVal = -kMaxClipboardCoord, double maxVal = kMaxClipboardCoord) {
     if (!val.isArray())
         return false;
     const auto arr = val.toArray();
     if (arr.size() != 4)
         return false;
-    return ParseFiniteFloat(arr[0], out.x, minVal, maxVal) &&
-           ParseFiniteFloat(arr[1], out.y, minVal, maxVal) &&
-           ParseFiniteFloat(arr[2], out.z, minVal, maxVal) &&
-           ParseFiniteFloat(arr[3], out.w, minVal, maxVal);
+    return ParseFiniteNumber(arr[0], out.x, minVal, maxVal) &&
+           ParseFiniteNumber(arr[1], out.y, minVal, maxVal) &&
+           ParseFiniteNumber(arr[2], out.z, minVal, maxVal) &&
+           ParseFiniteNumber(arr[3], out.w, minVal, maxVal);
 }
 
 struct ValidatedClipboardEntity {
@@ -1946,16 +1957,16 @@ bool ValidateClipboardJson(const LuxUI::JsonObject& object, ValidatedClipboardEn
             return false;
         }
         LuxEngine::MeshRendererComponent comp;
-        if (!ParseFiniteFloat(meshArr[0], comp.material.metallic, 0.0f, 1.0f) ||
-            !ParseFiniteFloat(meshArr[1], comp.material.roughness, 0.0f, 1.0f)) {
+        if (!ParseFiniteNumber(meshArr[0], comp.material.metallic, 0.0f, 1.0f) ||
+            !ParseFiniteNumber(meshArr[1], comp.material.roughness, 0.0f, 1.0f)) {
             errorMsg = LUX_UI_TEXT("메시 재질 수치가 허용 범위(0~1)를 벗어났습니다.");
             return false;
         }
         if (meshArr.size() == 6) {
-            if (!ParseFiniteFloat(meshArr[2], comp.material.albedoColor.x, 0.0f, 100.0f) ||
-                !ParseFiniteFloat(meshArr[3], comp.material.albedoColor.y, 0.0f, 100.0f) ||
-                !ParseFiniteFloat(meshArr[4], comp.material.albedoColor.z, 0.0f, 100.0f) ||
-                !ParseFiniteFloat(meshArr[5], comp.material.albedoColor.w, 0.0f, 100.0f)) {
+            if (!ParseFiniteNumber(meshArr[2], comp.material.albedoColor.x, 0.0f, 100.0f) ||
+                !ParseFiniteNumber(meshArr[3], comp.material.albedoColor.y, 0.0f, 100.0f) ||
+                !ParseFiniteNumber(meshArr[4], comp.material.albedoColor.z, 0.0f, 100.0f) ||
+                !ParseFiniteNumber(meshArr[5], comp.material.albedoColor.w, 0.0f, 100.0f)) {
                 errorMsg = LUX_UI_TEXT("메시 알베도 색상이 유효하지 않습니다.");
                 return false;
             }
@@ -2000,12 +2011,12 @@ bool ValidateClipboardJson(const LuxUI::JsonObject& object, ValidatedClipboardEn
                 !options.value(LUX_UI_TEXT("doubleSided")).isBool() ||
                 !options.value(LUX_UI_TEXT("mipmaps")).isBool() ||
                 !options.value(LUX_UI_TEXT("anisotropic")).isBool() ||
-                !ParseFiniteFloat(options.value(LUX_UI_TEXT("alphaCutoff")),
-                                  comp.material.alphaCutoff, 0, 1) ||
-                !ParseFiniteFloat(options.value(LUX_UI_TEXT("normalScale")),
-                                  comp.material.normalScale, 0, 16) ||
-                !ParseFiniteFloat(options.value(LUX_UI_TEXT("occlusionStrength")),
-                                  comp.material.occlusionStrength, 0, 1)) {
+                !ParseFiniteNumber(options.value(LUX_UI_TEXT("alphaCutoff")),
+                                   comp.material.alphaCutoff, 0, 1) ||
+                !ParseFiniteNumber(options.value(LUX_UI_TEXT("normalScale")),
+                                   comp.material.normalScale, 0, 16) ||
+                !ParseFiniteNumber(options.value(LUX_UI_TEXT("occlusionStrength")),
+                                   comp.material.occlusionStrength, 0, 1)) {
                 errorMsg = LUX_UI_TEXT("재질 옵션의 형식 또는 범위가 올바르지 않습니다.");
                 return false;
             }
@@ -2048,10 +2059,10 @@ bool ValidateClipboardJson(const LuxUI::JsonObject& object, ValidatedClipboardEn
         const LuxUI::JsonValue perspVal = camObj.value(LUX_UI_TEXT("perspective"));
         LuxEngine::CameraComponent comp;
         if (!primVal.isBool() || !perspVal.isBool() ||
-            !ParseFiniteFloat(camObj.value(LUX_UI_TEXT("fov")), comp.fov, 0.0f, 180.0f) ||
+            !ParseFiniteNumber(camObj.value(LUX_UI_TEXT("fov")), comp.fov, 0.0f, 180.0f) ||
             comp.fov <= 0.0f || comp.fov >= 180.0f ||
-            !ParseFiniteFloat(camObj.value(LUX_UI_TEXT("orthoSize")), comp.orthoSize, 0.0f,
-                              kMaxClipboardCoord) ||
+            !ParseFiniteNumber(camObj.value(LUX_UI_TEXT("orthoSize")), comp.orthoSize, 0.0f,
+                               kMaxClipboardCoord) ||
             comp.orthoSize <= 0.0f) {
             errorMsg = LUX_UI_TEXT("카메라 FOV 또는 직교 크기가 유효 범위를 벗어났습니다.");
             return false;
@@ -2072,7 +2083,7 @@ bool ValidateClipboardJson(const LuxUI::JsonObject& object, ValidatedClipboardEn
         float tileSize = 0.0f;
         if (!ParseExactInt(mapObj.value(LUX_UI_TEXT("width")), w, 1, 256) ||
             !ParseExactInt(mapObj.value(LUX_UI_TEXT("height")), h, 1, 256) ||
-            !ParseFiniteFloat(mapObj.value(LUX_UI_TEXT("tileSize")), tileSize, 0.0f, 64.0f) ||
+            !ParseFiniteNumber(mapObj.value(LUX_UI_TEXT("tileSize")), tileSize, 0.0f, 64.0f) ||
             tileSize <= 0.0f) {
             errorMsg = LUX_UI_TEXT("타일맵 크기(최대 256x256) 또는 타일 크기가 유효하지 않습니다.");
             return false;
@@ -2115,11 +2126,11 @@ bool ValidateClipboardJson(const LuxUI::JsonObject& object, ValidatedClipboardEn
         LuxEngine::Rigidbody2DComponent comp;
         if (!ParseExactInt(rbObj.value(LUX_UI_TEXT("type")), type, 0, 2) ||
             !ParseVec2(rbObj.value(LUX_UI_TEXT("velocity")), comp.velocity) ||
-            !ParseFiniteFloat(rbObj.value(LUX_UI_TEXT("mass")), comp.mass, 0.0f,
-                              kMaxClipboardMass) ||
+            !ParseFiniteNumber(rbObj.value(LUX_UI_TEXT("mass")), comp.mass, 0.0f,
+                               kMaxClipboardMass) ||
             comp.mass <= 0.0f ||
-            !ParseFiniteFloat(rbObj.value(LUX_UI_TEXT("gravityScale")), comp.gravityScale,
-                              -kMaxClipboardGravityScale, kMaxClipboardGravityScale)) {
+            !ParseFiniteNumber(rbObj.value(LUX_UI_TEXT("gravityScale")), comp.gravityScale,
+                               -kMaxClipboardGravityScale, kMaxClipboardGravityScale)) {
             errorMsg = LUX_UI_TEXT("2D 강체 속성(질량, 속도, 중력 배율)이 유효하지 않습니다.");
             return false;
         }
@@ -2158,11 +2169,11 @@ bool ValidateClipboardJson(const LuxUI::JsonObject& object, ValidatedClipboardEn
         LuxEngine::Rigidbody3DComponent comp;
         if (!ParseExactInt(rbObj.value(LUX_UI_TEXT("type")), type, 0, 2) ||
             !ParseVec3(rbObj.value(LUX_UI_TEXT("velocity")), comp.velocity) ||
-            !ParseFiniteFloat(rbObj.value(LUX_UI_TEXT("mass")), comp.mass, 0.0f,
-                              kMaxClipboardMass) ||
+            !ParseFiniteNumber(rbObj.value(LUX_UI_TEXT("mass")), comp.mass, 0.0f,
+                               kMaxClipboardMass) ||
             comp.mass <= 0.0f ||
-            !ParseFiniteFloat(rbObj.value(LUX_UI_TEXT("gravityScale")), comp.gravityScale,
-                              -kMaxClipboardGravityScale, kMaxClipboardGravityScale)) {
+            !ParseFiniteNumber(rbObj.value(LUX_UI_TEXT("gravityScale")), comp.gravityScale,
+                               -kMaxClipboardGravityScale, kMaxClipboardGravityScale)) {
             errorMsg = LUX_UI_TEXT("3D 강체 속성(질량, 속도, 중력 배율)이 유효하지 않습니다.");
             return false;
         }
@@ -2204,8 +2215,8 @@ bool ValidateClipboardJson(const LuxUI::JsonObject& object, ValidatedClipboardEn
         LuxEngine::AnimationComponent comp;
         if (!clipNameVal.isString() || !loopVal.isBool() || !playingVal.isBool() ||
             !keysVal.isArray() ||
-            !ParseFiniteFloat(animObj.value(LUX_UI_TEXT("duration")), comp.clip.duration, 0.0f,
-                              kMaxClipboardDuration) ||
+            !ParseFiniteNumber(animObj.value(LUX_UI_TEXT("duration")), comp.clip.duration, 0.0f,
+                               kMaxClipboardDuration) ||
             comp.clip.duration <= 0.0f) {
             errorMsg = LUX_UI_TEXT("애니메이션 클립 속성 또는 재생 시간이 유효하지 않습니다.");
             return false;
@@ -2231,8 +2242,8 @@ bool ValidateClipboardJson(const LuxUI::JsonObject& object, ValidatedClipboardEn
             }
             const auto kObj = kv.toObject();
             LuxEngine::Keyframe key;
-            if (!ParseFiniteFloat(kObj.value(LUX_UI_TEXT("time")), key.time, 0.0f,
-                                  kMaxClipboardDuration) ||
+            if (!ParseFiniteNumber(kObj.value(LUX_UI_TEXT("time")), key.time, 0.0f,
+                                   kMaxClipboardDuration) ||
                 key.time < 0.0f || !ParseVec3(kObj.value(LUX_UI_TEXT("position")), key.position) ||
                 !ParseVec3(kObj.value(LUX_UI_TEXT("rotation")), key.rotation) ||
                 !ParseVec3(kObj.value(LUX_UI_TEXT("scale")), key.scale) ||

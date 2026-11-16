@@ -428,6 +428,9 @@ void EditorWindow::BuildLayout() {
         const auto suffix = LuxUI::String::fromUtf8(PathUtf8(path.extension())).toLower();
         if (suffix == LuxUI::Latin1String(".luxprefab"))
             AddPrefabAsset(path);
+        else if (suffix == LuxUI::Latin1String(".luxanim") ||
+                 suffix == LuxUI::Latin1String(".luxanimator"))
+            OpenAnimationAsset(path);
         else if (suffix == LuxUI::Latin1String(".lux"))
             OpenProjectScene(path);
         else if (suffix == LuxUI::Latin1String(".obj") || suffix == LuxUI::Latin1String(".fbx"))
@@ -492,7 +495,7 @@ void EditorWindow::BuildLayout() {
                         0);
         for (int axis = 0; axis < 3; ++axis) {
             transform_[row][axis] =
-                Number(transformGroup, -100000, 100000, row == 2 ? 1 : 0, row == 1 ? 1 : .1);
+                Number(transformGroup, -1e15, 1e15, row == 2 ? 1 : 0, row == 1 ? 1 : .1);
             transform_[row][axis]->setToolTip(LUX_UI_TEXT("%1 · %2").arg(
                 LuxUI::String::fromUtf8(rows[row]), LuxUI::String::fromLatin1("XYZ" + axis, 1)));
             transform_[row][axis]->setStyleSheet(

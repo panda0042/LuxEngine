@@ -129,6 +129,7 @@
 #define LUX_UI_TEXT(text) QStringLiteral(text)
 
 namespace LuxUI {
+using Layout = QLayout;
 using BoxLayout = QBoxLayout;
 namespace Flags = Qt;
 using AbstractButton = QAbstractButton;

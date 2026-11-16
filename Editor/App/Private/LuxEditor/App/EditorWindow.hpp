@@ -109,6 +109,7 @@ private:
     void BuildLayout();
     void BuildWorkspaceChrome();
     void SetWorkspace(bool animation);
+    void OpenAnimationAsset(const std::filesystem::path& path);
     void ToggleDrawer(size_t index);
     void RefreshAssetFolders();
     void FilterDetails(const LuxUI::String& text);
@@ -121,7 +122,7 @@ private:
     void RefreshAnimationWorkspace();
     void SetAnimationTool(EditorTool tool);
     void OnAnimationKeyChanged(const LuxUI::Widget* field);
-    void MoveAnimationKey(int index, float time);
+    void MoveAnimationKey(int index, double time);
     void ApplyTheme();
     void RestoreWorkspaceLayout();
     void SaveWorkspaceLayout();
