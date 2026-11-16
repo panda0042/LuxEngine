@@ -20,6 +20,10 @@ public:
     double Time() const;
     bool PreviewSourceUnchanged() const;
     bool ConfirmDiscard();
+    void SaveCurrent(bool saveAs = false);
+    void UndoEdit();
+    void RedoEdit();
+    std::function<void()> StateChanged;
 
 protected:
     bool event(LuxUI::Event* event) override;

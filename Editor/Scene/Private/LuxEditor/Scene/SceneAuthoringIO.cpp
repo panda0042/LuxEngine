@@ -39,6 +39,28 @@ void RebaseSceneReferences(LuxEngine::Scene& scene, const fs::path& owner,
             throw std::runtime_error("Invalid rebased environment path");
     }
     for (auto entity : scene.GetEntities()) {
+        auto rebase = [&](std::string& resource) {
+            if (resource.empty())
+                return;
+            auto path = PathFromUtf8(resource);
+            if (path.is_relative())
+                path = owner.parent_path() / path;
+            const auto absolute = CanonicalPath(path);
+            const auto relative =
+                destination ? absolute.lexically_relative(destination->parent_path()) : fs::path{};
+            resource = GenericPathUtf8(destination && !relative.empty() ? relative : absolute);
+        };
+        if (auto* value = entity.TryGetComponent<LuxEngine::SpriteRendererComponent>())
+            rebase(value->texturePath);
+        if (auto* value = entity.TryGetComponent<LuxEngine::AnimatorComponent>())
+            rebase(value->controllerPath);
+        if (auto* value = entity.TryGetComponent<LuxEngine::ModelAnimationComponent>())
+            rebase(value->modelPath);
+        if (auto* value = entity.TryGetComponent<LuxEngine::AnimationComponent>()) {
+            rebase(value->assetPath);
+            rebase(value->clip.modelPath);
+            rebase(value->clip.spriteSheet);
+        }
         if (auto* mesh = entity.TryGetComponent<LuxEngine::MeshRendererComponent>())
             for (auto* resource :
                  {&mesh->meshPath, &mesh->material.baseColorTexture, &mesh->material.normalTexture,
@@ -115,6 +137,22 @@ std::shared_ptr<LuxEngine::Scene> ReadAuthoredScene(const fs::path& path, std::s
         error = failure.what();
         return {};
     }
+}
+
+bool SerializeAuthoredScene(LuxEngine::Scene& scene, const fs::path& owner, std::string& data,
+                            std::string& error) {
+    try {
+        auto copy = CloneAuthoredScene(scene);
+        const auto target = CanonicalPath(owner);
+        std::uintmax_t remaining = 128 * 1024 * 1024;
+        RebaseSceneReferences(*copy, target, &target, remaining);
+        if (copy->SerializeToString(data))
+            return true;
+        error = "씬 경로를 직렬화하지 못했습니다.";
+    } catch (const std::exception& failure) {
+        error = failure.what();
+    }
+    return false;
 }
 
 bool SaveAuthoredScene(LuxEngine::Scene& scene, const fs::path& destination,

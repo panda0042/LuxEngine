@@ -31,6 +31,7 @@ class GameViewport;
 class DebugPanel;
 class SceneEditCommand;
 class ScriptWorkspace;
+class AnimationAssetEditor;
 struct ModelingMesh;
 struct ModelingSelection;
 
@@ -77,6 +78,7 @@ private:
     void BuildAssetBrowserCommands();
     void ImportAssetsDialog();
     void CreateAssetFolder();
+    AnimationAssetEditor* ActiveAnimationAssetEditor() const;
     void BuildMenus();
     void BuildSceneMenus();
     void RefreshSceneTabs();

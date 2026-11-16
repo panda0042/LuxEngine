@@ -73,9 +73,9 @@ void EditorWindow::RunSceneInWindow() {
     if (canvas_) {
         double centerX = 0, centerY = 0, halfHeight = 0;
         canvas_->GetView(centerX, centerY, halfHeight);
-        arguments << LUX_UI_TEXT("--view") << LuxUI::String::number(centerX, 'g', 9)
-                  << LuxUI::String::number(centerY, 'g', 9)
-                  << LuxUI::String::number(halfHeight, 'g', 9);
+        arguments << LUX_UI_TEXT("--view") << LuxUI::String::number(centerX, 'g', 17)
+                  << LuxUI::String::number(centerY, 'g', 17)
+                  << LuxUI::String::number(halfHeight, 'g', 17);
     }
     playerProcess_ = new LuxUI::Process(this);
     const bool debugging = property("launchScriptDebugger").toBool();

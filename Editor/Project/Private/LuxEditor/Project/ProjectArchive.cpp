@@ -2,6 +2,7 @@
 #include <LuxEditor/Project/PathEncoding.hpp>
 #include <LuxEditor/Project/ProjectArchive.hpp>
 #include <LuxEditor/Project/ProjectFileOperations.hpp>
+#include <LuxEditor/Scene/SceneAuthoringIO.hpp>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -515,6 +516,7 @@ bool ExportProject(const EditorProject& project, const std::filesystem::path& ar
         return false;
     }
     uint64_t total = 0;
+    std::vector<std::unique_ptr<std::string>> normalizedScenes;
     size_t entries = 0;
     std::filesystem::recursive_directory_iterator iterator(
         root, std::filesystem::directory_options::skip_permission_denied, ec);
@@ -545,7 +547,18 @@ bool ExportProject(const EditorProject& project, const std::filesystem::path& ar
             }
             continue;
         }
-        const uint64_t size = iterator->file_size(ec);
+        uint64_t size = iterator->file_size(ec);
+        std::unique_ptr<std::string> normalized;
+        if (!ec && iterator->path().extension() == ".lux") {
+            std::string normalizationError;
+            if (auto scene = ReadAuthoredScene(iterator->path(), normalizationError)) {
+                auto data = std::make_unique<std::string>();
+                if (SerializeAuthoredScene(*scene, iterator->path(), *data, normalizationError)) {
+                    size = data->size();
+                    normalized = std::move(data);
+                }
+            }
+        }
         if (ec) {
             error = "프로젝트 파일 크기를 읽지 못했습니다.";
             break;
@@ -556,7 +569,9 @@ bool ExportProject(const EditorProject& project, const std::filesystem::path& ar
             break;
         }
         const std::string sourcePath = PathUtf8(iterator->path());
-        zip_source_t* source = zip_source_file(zip, sourcePath.c_str(), 0, -1);
+        zip_source_t* source =
+            normalized ? zip_source_buffer(zip, normalized->data(), normalized->size(), 0)
+                       : zip_source_file(zip, sourcePath.c_str(), 0, -1);
         if (!source ||
             zip_file_add(zip, GenericPathUtf8(relative).c_str(), source, ZIP_FL_ENC_UTF_8) < 0) {
             if (source)
@@ -564,6 +579,8 @@ bool ExportProject(const EditorProject& project, const std::filesystem::path& ar
             error = "프로젝트 파일을 압축하지 못했습니다.";
             break;
         }
+        if (normalized)
+            normalizedScenes.push_back(std::move(normalized));
         total += size;
     }
     if (ec && error.empty())
