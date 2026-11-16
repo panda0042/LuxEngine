@@ -146,6 +146,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
+      CC: clang
+      CXX: clang++
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
       UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
     steps:
@@ -183,7 +185,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.LUX_CI_PREFIX }}
-          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/ci/SetupUnixDependencies.sh') }}
+          key: native-sanitizers-clang-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/ci/SetupUnixDependencies.sh') }}
 
       - name: Install native dependencies
         shell: bash
