@@ -247,8 +247,9 @@ void ReadMaterials(const ufbx_scene& scene, ModelAsset& model) {
         const auto& pbr = source->pbr;
         const auto& color = pbr.base_color.has_value ? pbr.base_color : source->fbx.diffuse_color;
         if (color.has_value) {
-            material.baseColor = {Scalar(color.value_vec3.x), Scalar(color.value_vec3.y),
-                                  Scalar(color.value_vec3.z), 1.0f};
+            material.baseColor = {static_cast<float>(Scalar(color.value_vec3.x)),
+                                  static_cast<float>(Scalar(color.value_vec3.y)),
+                                  static_cast<float>(Scalar(color.value_vec3.z)), 1.0f};
         }
         const double factor = pbr.base_factor.has_value ? pbr.base_factor.value_real : 1.0;
         material.baseColor.x = Scalar(material.baseColor.x * factor);
@@ -306,7 +307,8 @@ void ReadWeights(const ufbx_mesh& mesh, uint32 vertex, ModelVertex& result, size
                 const auto weight = skin->weights.data[info.weight_begin + index];
                 Require(weight.cluster_index < skin->clusters.count && weight.weight >= 0,
                         "FBX 스킨 가중치가 올바르지 않습니다.");
-                result.weights.push_back({offset + weight.cluster_index, Scalar(weight.weight)});
+                result.weights.push_back(
+                    {offset + weight.cluster_index, static_cast<float>(Scalar(weight.weight))});
             }
         }
         offset += static_cast<uint32>(skin->clusters.count);

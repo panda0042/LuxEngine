@@ -155,7 +155,9 @@ template <class Sample> EnvironmentImage Cube(uint32 size, uint32 levels, Sample
                     const Vec3 d =
                         CubeDirection(face, 2 * (x + .5f) / side - 1, 2 * (y + .5f) / side - 1);
                     const Vec3 color = sample(d, level);
-                    image.pixels.insert(image.pixels.end(), {color.x, color.y, color.z, 1});
+                    image.pixels.insert(image.pixels.end(),
+                                        {static_cast<float>(color.x), static_cast<float>(color.y),
+                                         static_cast<float>(color.z), 1});
                 }
     }
     return image;

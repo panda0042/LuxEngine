@@ -79,7 +79,7 @@ ScriptFieldValue Read(const Json& field) {
     case 6:
         if (!value.is_array() || value.size() != 4)
             break;
-        return Vec4{Number(value[0]), Number(value[1]), Number(value[2]), Number(value[3])};
+        return Vec4{Number32(value[0]), Number32(value[1]), Number32(value[2]), Number32(value[3])};
     case 7:
         if (!value.is_number_integer() || value.get<double>() < 0 ||
             value.get<double>() > std::numeric_limits<uint32>::max())

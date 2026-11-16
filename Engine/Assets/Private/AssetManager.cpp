@@ -482,8 +482,11 @@ bool ReadMeshFile(const std::string& filepath, RawMeshData& outMesh, std::string
                         const auto t = uv >= 0 ? uvs[static_cast<size_t>(uv)] : Vec2{};
                         mesh.vertices.insert(mesh.vertices.end(),
                                              {position.x, position.y, position.z});
-                        mesh.normals.insert(mesh.normals.end(), {n.x, n.y, n.z});
-                        mesh.texCoords.insert(mesh.texCoords.end(), {t.x, t.y});
+                        mesh.normals.insert(mesh.normals.end(),
+                                            {static_cast<float>(n.x), static_cast<float>(n.y),
+                                             static_cast<float>(n.z)});
+                        mesh.texCoords.insert(mesh.texCoords.end(),
+                                              {static_cast<float>(t.x), static_cast<float>(t.y)});
                         authoredNormals.push_back(normal >= 0);
                         normalGroups.emplace_back(p, smoothing ? smoothing : -faceNumber);
                     }
