@@ -868,8 +868,11 @@ void EditorWindow::RefreshInspector() {
     selectionLabel_->setToolTip(
         LUX_UI_TEXT("표시 값은 활성 오브젝트 기준입니다. Transform 필드를 변경하면 선택된 "
                     "오브젝트에 함께 적용합니다."));
-    animationPanel_->setEnabled(
-        selected && selected.HasComponent<LuxEngine::TransformComponent>() && !previewActive_);
+    // Only the legacy scene clip requires an authoring selection. Asset editing is independent.
+    if (auto* legacy =
+            animationPanel_->findChild<LuxUI::Widget*>(LUX_UI_TEXT("animationWorkspace")))
+        legacy->setEnabled(selected && selected.HasComponent<LuxEngine::TransformComponent>() &&
+                           !previewActive_);
     animationTarget_->setText(selected ? LUX_UI_TEXT("대상 · 엔티티 #%1").arg(selected.GetId())
                                        : LUX_UI_TEXT("대상 없음"));
     inspectorBody_->setVisible(static_cast<bool>(selected));

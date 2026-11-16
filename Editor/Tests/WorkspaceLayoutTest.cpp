@@ -102,6 +102,28 @@ int main(int argc, char** argv) {
                   "Level screenshot failed");
         tabs->setCurrentIndex(1);
         app.processEvents();
+        window.GetDocument().Select(std::nullopt);
+        window.ExecuteRecordedEdit(LUX_UI_TEXT("Clear animation selection"), [] {});
+        auto* assetAction = window.findChild<LuxUI::Action*>(LUX_UI_TEXT("assetAnimationPlay"));
+        auto* assetToolbar =
+            window.findChild<LuxUI::ToolBar*>(LUX_UI_TEXT("animationAssetToolbar"));
+        auto* assetPlay =
+            dynamic_cast<LuxUI::ToolButton*>(assetToolbar->widgetForAction(assetAction));
+        Check(assetPlay && assetPlay->isEnabled(),
+              "Animation asset controls were disabled without a selected scene entity");
+        LuxUI::MouseEvent press(
+            LuxUI::Event::MouseButtonPress, LuxUI::PointF(assetPlay->rect().center()),
+            LuxUI::PointF(assetPlay->mapToGlobal(assetPlay->rect().center())),
+            LuxUI::Flags::LeftButton, LuxUI::Flags::LeftButton, LuxUI::Flags::NoModifier);
+        LuxUI::MouseEvent release(
+            LuxUI::Event::MouseButtonRelease, LuxUI::PointF(assetPlay->rect().center()),
+            LuxUI::PointF(assetPlay->mapToGlobal(assetPlay->rect().center())),
+            LuxUI::Flags::LeftButton, LuxUI::Flags::NoButton, LuxUI::Flags::NoModifier);
+        bool clicked = false;
+        LuxUI::Object::connect(assetPlay, &LuxUI::ToolButton::clicked, [&] { clicked = true; });
+        app.sendEvent(assetPlay, &press);
+        app.sendEvent(assetPlay, &release);
+        Check(clicked, "Animation play button rejected mouse input");
         Check(workspace->currentIndex() == 1 && !details->isVisible(),
               "Animation did not open as a dedicated workspace");
         if (!capture.isEmpty())
