@@ -550,6 +550,7 @@ bool Scene::DeserializeJson(const std::string& data) {
                     entity.AddComponent<ModelAnimationComponent>(std::move(component));
                 } else if (name == "camera") {
                     CameraComponent component;
+                    component.farClip = 1000.0;
                     RequireValidScene(value.is_object());
                     ReadJsonValue(value.at("primary"), component.isPrimary);
                     ReadJsonValue(value.at("perspective"), component.isPerspective);

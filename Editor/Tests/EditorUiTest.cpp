@@ -767,7 +767,7 @@ int RunHeadlessEditorUiTests(LuxUI::Application& app, LuxUI::TemporaryDir& setti
     // 6. Invalid Transform (out-of-bounds position, zero scale, wrong array length)
     {
         auto badPos = MakeValidClipboardEntityJson();
-        badPos.insert(LUX_UI_TEXT("position"), LuxUI::JsonArray{250000.0, 0.0, 0.0});
+        badPos.insert(LUX_UI_TEXT("position"), LuxUI::JsonArray{1000000000000001.0, 0.0, 0.0});
         SetClipboardJsonObject(badPos);
         assertRejected("6a. out-of-bounds transform position rejected");
 
@@ -931,6 +931,20 @@ int RunHeadlessEditorUiTests(LuxUI::Application& app, LuxUI::TemporaryDir& setti
     Check(debugState && debugState->topLevelItemCount() > 0, "debugger shows runtime state");
     stopPreview->trigger();
     Check(hierarchy->topLevelItemCount() == 2, "preview restores editable scene");
+
+    for (double position : {250000.125, -1e15, 1e15}) {
+        auto valid = MakeValidClipboardEntityJson();
+        valid.insert(LUX_UI_TEXT("position"), LuxUI::JsonArray{position, 0.0, 0.0});
+        SetClipboardJsonObject(valid);
+        const auto count = window.GetDocument().GetScene().GetEntityCount();
+        pasteAction->trigger();
+        Check(
+            window.GetDocument().GetScene().GetEntityCount() == count + 1 &&
+                window.GetDocument().GetSelected().GetComponent<TransformComponent>().position.x ==
+                    position,
+            "clipboard preserves valid large world coordinates");
+        undo->undo();
+    }
 
     tabs->setCurrentIndex(0);
     std::cerr << "[Editor_ui] offscreen widget render\n";

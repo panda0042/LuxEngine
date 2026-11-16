@@ -6,6 +6,7 @@
 #include <LuxUI/Widgets.hpp>
 #include <cmath>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 
 namespace {
@@ -57,80 +58,106 @@ Connections: {
 
 int main(int argc, char** argv) {
     LuxUI::Application app(argc, argv);
-    LuxUI::CoreApplication::setOrganizationName(LUX_UI_TEXT("LuxFbxViewportTests"));
-    LuxUI::CoreApplication::setApplicationName(LUX_UI_TEXT("FbxViewport"));
-    LuxUI::TemporaryDir files;
-    Check(files.isValid(), "test directory is unavailable");
-    LuxUI::Settings::setDefaultFormat(LuxUI::Settings::IniFormat);
-    LuxUI::Settings::setPath(LuxUI::Settings::IniFormat, LuxUI::Settings::UserScope, files.path());
-    LuxUI::Settings().clear();
-    const auto directory = LuxEditor::PathFromUtf8(files.path().toUtf8().toStdString());
-    const auto path = directory / "animated.fbx";
-    WriteFixture(path);
-    std::string error;
-    auto model = LuxEngine::ModelAsset::LoadFbx(LuxEditor::PathUtf8(path), error);
-    Check(model && model->animations.size() == 1 && model->submeshes.size() == 1,
-          "FBX viewport fixture did not load");
-    LuxEditor::EditorWindow window;
-    LuxEditor::ModelImportResult imported;
-    window.ExecuteRecordedEdit(LUX_UI_TEXT("Import fixture"), [&] {
-        Check(LuxEditor::ImportModelAsset(window.GetDocument().GetScene(), *model, directory,
-                                          imported, error),
-              "FBX fixture import failed");
-        window.GetDocument().Select(imported.root);
-    });
-    auto& scene = window.GetDocument().GetScene();
-    const auto meshes = scene.GetComponentEntityIds<LuxEngine::MeshRendererComponent>();
-    Check(meshes.size() == 1, "imported submesh is missing");
-    LuxEngine::Entity mesh{meshes.front(), &scene};
-    LuxEngine::Vec3 minimum, maximum;
-    Check(LuxEditor::ModelViewportBounds(mesh, minimum, maximum) && std::abs(minimum.x) < .001 &&
-              std::abs(maximum.x - 1) < .001,
-          "FBX bounds flattened node transforms or ignored the selected submesh");
-    const auto origin = scene.GetWorldTransform(mesh.GetId()).position;
-    Check(
-        LuxEditor::IntersectModelViewport({origin + LuxEngine::Vec3{.2f, .2f, 2}, {0, 0, -1}}, mesh)
-            .has_value(),
-        "FBX triangle picking missed the visible surface");
-    Check(!LuxEditor::IntersectModelViewport({origin + LuxEngine::Vec3{.8f, .8f, 2}, {0, 0, -1}},
-                                             mesh),
-          "FBX picking selected empty space inside the mesh bounding box");
-    window.show();
-    app.processEvents();
-    auto* open = window.findChild<LuxUI::Action*>(LUX_UI_TEXT("openAnimationWorkspace"));
-    Check(open, "animation workspace command is missing");
-    open->trigger();
-    app.processEvents();
-    auto* mode = window.findChild<LuxUI::ComboBox*>(LUX_UI_TEXT("animationSourceMode"));
-    auto* clip = window.findChild<LuxUI::ComboBox*>(LUX_UI_TEXT("modelAnimationClip"));
-    auto* time = window.findChild<LuxUI::DoubleSpinBox*>(LUX_UI_TEXT("modelAnimationTime"));
-    auto* speed = window.findChild<LuxUI::DoubleSpinBox*>(LUX_UI_TEXT("modelAnimationSpeed"));
-    auto* loop = window.findChild<LuxUI::CheckBox*>(LUX_UI_TEXT("modelAnimationLoop"));
-    auto* history = window.findChild<LuxUI::UndoStack*>();
-    Check(mode && mode->currentIndex() == 1 && clip && clip->count() == 2 && time && speed &&
-              loop && history,
-          "FBX clip controls were not separated into the animation workspace");
-    Check(window.findChild<LuxUI::Widget*>(LUX_UI_TEXT("modelAnimationWorkspace"))->isVisible() &&
-              !window.findChild<LuxUI::Widget*>(LUX_UI_TEXT("animationSequence"))->isVisible(),
-          "transform tracks are still mixed with FBX clip controls");
-    const int before = history->index();
-    time->setValue(.5);
-    Check(std::abs(scene.GetWorldTransform(mesh.GetId()).position.x - origin.x - 1) < .01,
-          "FBX clip scrubbing did not update node transforms");
-    Check(history->index() == before + 1, "FBX time scrub was not recorded as one undo edit");
-    speed->setValue(.5);
-    LuxUI::MetaObject::invokeMethod(speed, "editingFinished");
-    loop->setChecked(false);
-    for (const auto id : scene.GetComponentEntityIds<LuxEngine::ModelAnimationComponent>()) {
-        const auto& animation = scene.GetComponent<LuxEngine::ModelAnimationComponent>(id);
-        Check(animation.time == .5 && animation.speed == .5 && !animation.loop,
-              "FBX instance nodes did not receive consistent clip playback settings");
+    try {
+        LuxUI::CoreApplication::setOrganizationName(LUX_UI_TEXT("LuxFbxViewportTests"));
+        LuxUI::CoreApplication::setApplicationName(LUX_UI_TEXT("FbxViewport"));
+        LuxUI::TemporaryDir files;
+        Check(files.isValid(), "test directory is unavailable");
+        LuxUI::Settings::setDefaultFormat(LuxUI::Settings::IniFormat);
+        LuxUI::Settings::setPath(LuxUI::Settings::IniFormat, LuxUI::Settings::UserScope,
+                                 files.path());
+        LuxUI::Settings().clear();
+        const auto directory = LuxEditor::PathFromUtf8(files.path().toUtf8().toStdString());
+        const auto path = directory / "animated.fbx";
+        WriteFixture(path);
+        std::string error;
+        auto model = LuxEngine::ModelAsset::LoadFbx(LuxEditor::PathUtf8(path), error);
+        Check(model && model->animations.size() == 1 && model->submeshes.size() == 1,
+              "FBX viewport fixture did not load");
+        LuxEditor::EditorWindow window;
+        LuxEditor::ModelImportResult imported;
+        window.ExecuteRecordedEdit(LUX_UI_TEXT("Import fixture"), [&] {
+            Check(LuxEditor::ImportModelAsset(window.GetDocument().GetScene(), *model, directory,
+                                              imported, error),
+                  "FBX fixture import failed");
+            window.GetDocument().Select(imported.root);
+        });
+        auto& scene = window.GetDocument().GetScene();
+        const auto meshes = scene.GetComponentEntityIds<LuxEngine::MeshRendererComponent>();
+        Check(meshes.size() == 1, "imported submesh is missing");
+        LuxEngine::Entity mesh{meshes.front(), &scene};
+        LuxEngine::Vec3 minimum, maximum;
+        Check(LuxEditor::ModelViewportBounds(mesh, minimum, maximum) &&
+                  std::abs(minimum.x) < .001 && std::abs(maximum.x - 1) < .001,
+              "FBX bounds flattened node transforms or ignored the selected submesh");
+        const auto origin = scene.GetWorldTransform(mesh.GetId()).position;
+        Check(LuxEditor::IntersectModelViewport({origin + LuxEngine::Vec3{.2f, .2f, 2}, {0, 0, -1}},
+                                                mesh)
+                  .has_value(),
+              "FBX triangle picking missed the visible surface");
+        Check(!LuxEditor::IntersectModelViewport(
+                  {origin + LuxEngine::Vec3{.8f, .8f, 2}, {0, 0, -1}}, mesh),
+              "FBX picking selected empty space inside the mesh bounding box");
+        auto pose = std::make_shared<LuxEngine::ModelPose>();
+        pose->submeshes.push_back(model->submeshes.front().vertices);
+        for (auto& vertex : pose->submeshes.front())
+            vertex.position.x += 2;
+        auto& animated = mesh.GetComponent<LuxEngine::ModelAnimationComponent>();
+        animated.mixedPose = pose;
+        Check(LuxEditor::ModelViewportBounds(mesh, minimum, maximum) &&
+                  std::abs(minimum.x - 2) < .001 && std::abs(maximum.x - 3) < .001,
+              "blended pose bounds did not follow rendered vertices");
+        Check(LuxEditor::IntersectModelViewport({origin + LuxEngine::Vec3{2.2, .2, 2}, {0, 0, -1}},
+                                                mesh)
+                      .has_value() &&
+                  !LuxEditor::IntersectModelViewport(
+                      {origin + LuxEngine::Vec3{.2, .2, 2}, {0, 0, -1}}, mesh),
+              "blended pose picking did not follow rendered vertices");
+        animated.mixedPose.reset();
+        window.show();
+        app.processEvents();
+        auto* open = window.findChild<LuxUI::Action*>(LUX_UI_TEXT("openAnimationWorkspace"));
+        Check(open, "animation workspace command is missing");
+        open->trigger();
+        auto* documents = window.findChild<LuxUI::TabWidget*>(LUX_UI_TEXT("animationDocuments"));
+        Check(documents, "Animation documents are unavailable");
+        documents->setCurrentIndex(1);
+        app.processEvents();
+        auto* mode = window.findChild<LuxUI::ComboBox*>(LUX_UI_TEXT("animationSourceMode"));
+        auto* clip = window.findChild<LuxUI::ComboBox*>(LUX_UI_TEXT("modelAnimationClip"));
+        auto* time = window.findChild<LuxUI::DoubleSpinBox*>(LUX_UI_TEXT("modelAnimationTime"));
+        auto* speed = window.findChild<LuxUI::DoubleSpinBox*>(LUX_UI_TEXT("modelAnimationSpeed"));
+        auto* loop = window.findChild<LuxUI::CheckBox*>(LUX_UI_TEXT("modelAnimationLoop"));
+        auto* history = window.findChild<LuxUI::UndoStack*>();
+        Check(mode && mode->currentIndex() == 1 && clip && clip->count() == 2 && time && speed &&
+                  loop && history,
+              "FBX clip controls were not separated into the animation workspace");
+        Check(
+            window.findChild<LuxUI::Widget*>(LUX_UI_TEXT("modelAnimationWorkspace"))->isVisible() &&
+                !window.findChild<LuxUI::Widget*>(LUX_UI_TEXT("animationSequence"))->isVisible(),
+            "transform tracks are still mixed with FBX clip controls");
+        const int before = history->index();
+        time->setValue(.5);
+        Check(std::abs(scene.GetWorldTransform(mesh.GetId()).position.x - origin.x - 1) < .01,
+              "FBX clip scrubbing did not update node transforms");
+        Check(history->index() == before + 1, "FBX time scrub was not recorded as one undo edit");
+        speed->setValue(.5);
+        LuxUI::MetaObject::invokeMethod(speed, "editingFinished");
+        loop->setChecked(false);
+        for (const auto id : scene.GetComponentEntityIds<LuxEngine::ModelAnimationComponent>()) {
+            const auto& animation = scene.GetComponent<LuxEngine::ModelAnimationComponent>(id);
+            Check(animation.time == .5 && animation.speed == .5 && !animation.loop,
+                  "FBX instance nodes did not receive consistent clip playback settings");
+        }
+        clip->setCurrentIndex(0);
+        Check(scene.GetComponent<LuxEngine::ModelAnimationComponent>(imported.root).clip == -1 &&
+                  std::abs(scene.GetWorldTransform(mesh.GetId()).position.x - origin.x) < .01,
+              "bind pose selection did not restore the model's default transforms");
+        window.GetDocument().SetDirty(false);
+        window.close();
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "FBX viewport: " << error.what() << '\n';
+        return 1;
     }
-    clip->setCurrentIndex(0);
-    Check(scene.GetComponent<LuxEngine::ModelAnimationComponent>(imported.root).clip == -1 &&
-              std::abs(scene.GetWorldTransform(mesh.GetId()).position.x - origin.x) < .01,
-          "bind pose selection did not restore the model's default transforms");
-    window.GetDocument().SetDirty(false);
-    window.close();
-    return 0;
 }

@@ -2,10 +2,12 @@
 #include <LuxEditor/Viewport/EngineSceneRenderer.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxUI/Widgets.hpp>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 
 namespace {
 void Check(bool value, const char* message) {
@@ -55,6 +57,9 @@ int main(int argc, char** argv) {
             window.findChild<LuxUI::Action*>(LUX_UI_TEXT("openAnimationWorkspace"));
         Check(openWorkspace, "Animation menu action is unavailable");
         openWorkspace->trigger();
+        auto* documents = window.findChild<LuxUI::TabWidget*>(LUX_UI_TEXT("animationDocuments"));
+        Check(documents, "Animation documents are unavailable");
+        documents->setCurrentIndex(1);
         app.processEvents();
         auto* workspace = window.findChild<LuxUI::TabBar*>(LUX_UI_TEXT("workspaceTabs"));
         if (!dock->isVisible())
@@ -62,15 +67,24 @@ int main(int argc, char** argv) {
                       << " hidden=" << dock->isHidden() << " ancestorVisible=" << window.isVisible()
                       << " actionChecked=" << dock->toggleViewAction()->isChecked() << '\n';
         Check(dock->isVisible(), "Animation menu action did not open the workspace");
-        LuxUI::Action* moveCommand = nullptr;
-        for (auto* action : window.findChildren<LuxUI::Action*>())
-            if (action->shortcut() == LuxUI::KeySequence(LuxUI::Flags::Key_W))
-                moveCommand = action;
-        Check(moveCommand, "Editor move shortcut command is unavailable");
-        moveCommand->trigger();
+        auto* selectTool = window.findChild<LuxUI::ToolButton*>(LUX_UI_TEXT("animationTool0"));
         auto* moveTool = window.findChild<LuxUI::ToolButton*>(LUX_UI_TEXT("animationTool1"));
-        Check(moveTool && moveTool->isChecked(),
-              "Editor move command was not routed to animation tools");
+        Check(selectTool && moveTool, "Animation tools are unavailable");
+        moveTool->click();
+        Check(moveTool->isChecked(), "Animation move button did not select its tool");
+        selectTool->click();
+        window.activateWindow();
+        selectTool->setFocus();
+        app.processEvents();
+        LuxUI::KeyEvent moveKey(LuxUI::Event::KeyPress, LuxUI::Flags::Key_W,
+                                LuxUI::Flags::NoModifier);
+        LuxUI::Application::sendEvent(selectTool, &moveKey);
+        const auto shortcutDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (!moveTool->isChecked() && std::chrono::steady_clock::now() < shortcutDeadline) {
+            app.processEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        Check(moveTool->isChecked(), "Animation move shortcut did not select its tool");
         auto* timeline = window.findChild<LuxUI::Slider*>(LUX_UI_TEXT("animationTimeline"));
         auto* keys = window.findChild<LuxUI::ListWidget*>(LUX_UI_TEXT("animationKeys"));
         auto* keyTime = window.findChild<LuxUI::DoubleSpinBox*>(LUX_UI_TEXT("animationKeyTime"));

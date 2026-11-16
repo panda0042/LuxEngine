@@ -610,7 +610,19 @@ void ScriptWorkspace::BuildScripts() {
     process_->setWorkingDirectory(TextPath(root_));
     process_->setProcessEnvironment(Utf8BuildEnvironment());
     process_->setProcessChannelMode(LuxUI::Process::MergedChannels);
-    process_->setProgram(LUX_UI_TEXT("dotnet"));
+    auto program = LUX_UI_TEXT("dotnet");
+    const auto dotnetRoot = qEnvironmentVariable("DOTNET_ROOT");
+    if (!dotnetRoot.isEmpty()) {
+        const auto host = PathFromUtf8(dotnetRoot.toUtf8().toStdString()) /
+#ifdef _WIN32
+                          "dotnet.exe";
+#else
+                          "dotnet";
+#endif
+        if (std::filesystem::is_regular_file(host))
+            program = TextPath(host);
+    }
+    process_->setProgram(program);
     LuxUI::StringList arguments{LUX_UI_TEXT("build"),
                                 TextPath(project),
                                 LUX_UI_TEXT("--configuration"),

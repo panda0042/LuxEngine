@@ -35,6 +35,7 @@ struct Geometry {
     LuxEngine::Ref<LuxEngine::ModelAsset> model;
     const LuxEngine::ModelSubmesh* part = nullptr;
     LuxEngine::ModelPose pose;
+    LuxEngine::Ref<LuxEngine::ModelPose> mixedPose;
     const std::vector<LuxEngine::ModelVertex>* vertices = nullptr;
 };
 
@@ -48,7 +49,13 @@ bool Resolve(LuxEngine::Entity entity, Geometry& result) {
     result.part = &result.model->submeshes[static_cast<size_t>(mesh->modelSubmesh)];
     result.vertices = &result.part->vertices;
     const auto* animation = entity.TryGetComponent<LuxEngine::ModelAnimationComponent>();
-    if (result.part->skinned || result.part->morphTargets || (animation && animation->clip >= 0)) {
+    if (animation && animation->mixedPose) {
+        result.mixedPose = animation->mixedPose;
+        if (static_cast<size_t>(mesh->modelSubmesh) >= result.mixedPose->submeshes.size())
+            return false;
+        result.vertices = &result.mixedPose->submeshes[static_cast<size_t>(mesh->modelSubmesh)];
+    } else if (result.part->skinned || result.part->morphTargets ||
+               (animation && animation->clip >= 0)) {
         std::string error;
         if (!result.model->Evaluate(animation ? animation->time : 0,
                                     animation ? animation->clip : -1, result.pose, error) ||
