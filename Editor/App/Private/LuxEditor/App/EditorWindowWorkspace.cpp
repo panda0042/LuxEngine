@@ -1,3 +1,4 @@
+#include <LuxEditor/Animation/AnimationAssetEditor.hpp>
 #include <LuxEditor/App/EditorWindow.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
 #include <LuxEditor/Scripting/ScriptWorkspace.hpp>
@@ -56,6 +57,11 @@ void EditorWindow::BuildWorkspaceChrome() {
     workspaceBar->addWidget(commands);
 
     // Animation is a document workspace, not a small console tab competing with the viewport.
+    if (auto* tabs = findChild<LuxUI::TabWidget*>(LUX_UI_TEXT("animationDocuments"))) {
+        connect(tabs, &LuxUI::TabWidget::currentChanged, this, [this] { UpdateChrome(); });
+        if (auto* asset = dynamic_cast<AnimationAssetEditor*>(tabs->widget(0)))
+            asset->StateChanged = [this] { UpdateChrome(); };
+    }
     removeDockWidget(animationDock_);
     animationDock_->setFeatures(LuxUI::DockWidget::NoDockWidgetFeatures);
     animationDock_->setTitleBarWidget(new LuxUI::Widget(animationDock_));
@@ -208,6 +214,9 @@ void EditorWindow::SetWorkspace(Workspace workspace) {
         if (auto* toolbar = findChild<LuxUI::ToolBar*>(LUX_UI_TEXT("lux-main-toolbar")))
             toolbar->show();
     }
+    if (auto* saveAs = findChild<LuxUI::Action*>(LUX_UI_TEXT("saveSceneAs")))
+        saveAs->setEnabled(workspace != Workspace::Script);
+    UpdateChrome();
 }
 
 void EditorWindow::OpenScriptFile(const std::filesystem::path& path, int line, int column) {

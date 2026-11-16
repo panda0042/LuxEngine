@@ -34,6 +34,11 @@ public:
     std::function<void(double)> seek;
     std::function<void()> changed;
 
+    void CancelGesture() {
+        dragging = false;
+        tangent = 0;
+    }
+
     CurveCanvas(LuxUI::Widget* parent, AnimationAssetDocument& value)
         : LuxUI::Widget(parent), document(value) {
         setFocusPolicy(LuxUI::Flags::StrongFocus);
@@ -147,7 +152,7 @@ private:
         const auto* source = Track();
         tangent = 0;
         if (source) {
-            if (curves && selected.size() == 1) {
+            if (curves && selected.size() == 1 && *selected.begin() < source->keys.size()) {
                 const auto& key = source->keys[*selected.begin()];
                 const double span = std::min(.25, document.State().clip.duration * .1);
                 for (int direction : {-1, 1}) {
@@ -201,7 +206,16 @@ private:
             }
             return;
         }
+        if (!Track()) {
+            CancelGesture();
+            return;
+        }
         auto& keys = document.BeginEdit().clip.tracks[track].keys;
+        std::erase_if(selected, [&](size_t index) { return index >= keys.size(); });
+        if (selected.empty()) {
+            CancelGesture();
+            return;
+        }
         if (tangent && selected.size() == 1) {
             auto& key = keys[*selected.begin()];
             const double seconds = (event->position().x() - X(key.time)) / zoom;
@@ -284,6 +298,8 @@ private:
             text.precision(17);
             text << "LuxAnimationKeys1\n";
             for (auto index : selected) {
+                if (index >= source->keys.size())
+                    continue;
                 const auto& key = source->keys[index];
                 text << key.time << ' ' << int(key.interpolation);
                 for (auto value : {key.value, key.inTangent, key.outTangent})
@@ -360,6 +376,11 @@ public:
     AnimationAssetDocument& document;
     size_t layer = 0, selected = 0;
     std::function<void()> changed;
+
+    void CancelGesture() {
+        drag.reset();
+        connection.reset();
+    }
 
     AnimatorCanvas(LuxUI::Widget* parent, AnimationAssetDocument& value)
         : LuxUI::Widget(parent), document(value) {
@@ -450,6 +471,11 @@ private:
     }
 
     void mouseMoveEvent(LuxUI::MouseEvent* event) override {
+        if (layer >= document.State().controller.layers.size() ||
+            (drag && *drag >= document.State().controller.layers[layer].states.size())) {
+            CancelGesture();
+            return;
+        }
         if (drag) {
             auto point = event->position() + offset;
             document.BeginEdit().controller.layers[layer].states[*drag].editorPosition = {
@@ -462,6 +488,11 @@ private:
         if (drag) {
             drag.reset();
             document.CommitEdit();
+        }
+        if (connection &&
+            (layer >= document.State().controller.layers.size() ||
+             *connection >= document.State().controller.layers[layer].states.size())) {
+            connection.reset();
         }
         if (connection) {
             auto to = Hit(event->position());
@@ -495,6 +526,10 @@ struct AnimationAssetEditor::Impl {
     LuxUI::Label* status = nullptr;
     LuxUI::ListWidget* tracks = nullptr;
     LuxUI::ListWidget* keys = nullptr;
+    LuxUI::ListWidget* events = nullptr;
+    std::weak_ptr<int> sourceLifetime;
+    EditorDocument::TabId sourceTab = 0;
+    std::optional<uint32> sourceSelected;
     LuxUI::TreeWidget* bones = nullptr;
     LuxUI::TabWidget* pages = nullptr;
     SceneViewport2D* view2D = nullptr;
@@ -542,10 +577,24 @@ struct AnimationAssetEditor::Impl {
         status->setText(Text(message));
     }
 
+    bool SourceChanged(bool compareContent = false) const {
+        if (sourceTab != source.GetActiveTabId() ||
+            sourceSelected != source.GetSelectedId(source.GetActiveTabId()) ||
+            sourceLifetime.lock() != source.GetScene().Lifetime().lock())
+            return true;
+        if (!compareContent)
+            return false;
+        std::string current;
+        return !source.GetScene().SerializeToString(current) || current != sourceSnapshot;
+    }
+
     void ResetPreview() {
         playback.playing = false;
         animator.reset();
         target = 0;
+        sourceTab = source.GetActiveTabId();
+        sourceSelected = source.GetSelectedId(source.GetActiveTabId());
+        sourceLifetime = source.GetScene().Lifetime();
         auto entity = source.GetSelected();
         if (!source.GetScene().SerializeToString(sourceSnapshot))
             return;
@@ -649,6 +698,26 @@ struct AnimationAssetEditor::Impl {
     void Refresh() {
         refreshing = true;
         const auto& state = document.State();
+        if (curve->track < 0 || size_t(curve->track) >= state.clip.tracks.size())
+            curve->track = state.clip.tracks.empty() ? -1 : 0;
+        if (curve->track >= 0)
+            std::erase_if(curve->selected, [&](size_t index) {
+                return index >= state.clip.tracks[size_t(curve->track)].keys.size();
+            });
+        else
+            curve->selected.clear();
+        if (graph->layer >= state.controller.layers.size())
+            graph->layer = 0;
+        if (graph->layer < state.controller.layers.size() &&
+            graph->selected >= state.controller.layers[graph->layer].states.size())
+            graph->selected = 0;
+        if (events) {
+            events->clear();
+            for (const auto& event : state.clip.events)
+                events->addItem(LuxUI::String::number(event.time, 'f', 3) + LUX_UI_TEXT("  ") +
+                                Text(event.name));
+        }
+        keys->clear();
         tracks->clear();
         if (!state.isController) {
             for (const auto& track : state.clip.tracks)
@@ -751,6 +820,8 @@ struct AnimationAssetEditor::Impl {
         graph->update();
         curve->update();
         refreshing = false;
+        if (owner.StateChanged)
+            owner.StateChanged();
     }
 
     void Changed() {
@@ -825,8 +896,8 @@ struct AnimationAssetEditor::Impl {
         }
     }
 
-    void Save() {
-        auto path = document.Path();
+    void Save(bool saveAs = false) {
+        auto path = saveAs ? std::string{} : document.Path();
         if (path.empty())
             path = Utf8(LuxUI::FileDialog::getSaveFileName(
                 &owner, LUX_UI_TEXT("애니메이션 저장"), {},
@@ -939,14 +1010,8 @@ AnimationAssetEditor::AnimationAssetEditor(
     });
     p.Button(toolbar, "저장", [&p] { p.Save(); });
     p.Button(toolbar, "씬에 연결", [&p] { p.Assign(); });
-    p.Button(toolbar, "실행 취소", [&p] {
-        if (p.document.Undo())
-            p.Changed();
-    });
-    p.Button(toolbar, "다시 실행", [&p] {
-        if (p.document.Redo())
-            p.Changed();
-    });
+    p.Button(toolbar, "실행 취소", [this] { UndoEdit(); });
+    p.Button(toolbar, "다시 실행", [this] { RedoEdit(); });
     p.Button(toolbar, "재생 / 일시정지", [this] {
          Play(!impl_->playback.playing);
      })->setObjectName(LUX_UI_TEXT("assetAnimationPlay"));
@@ -1167,6 +1232,7 @@ AnimationAssetEditor::AnimationAssetEditor(
     eventForm->addRow(LUX_UI_TEXT("이벤트 이름"), p.eventName);
     eventForm->addRow(LUX_UI_TEXT("전달 값"), p.eventPayload);
     auto* events = new LuxUI::ListWidget(eventPage);
+    p.events = events;
     eventLayout->addWidget(events, 1);
     p.Button(eventLayout, "현재 시간에 이벤트 추가", [&p, events] {
         if (p.eventName->text().isEmpty())
@@ -1177,10 +1243,6 @@ AnimationAssetEditor::AnimationAssetEditor(
             std::stable_sort(state.clip.events.begin(), state.clip.events.end(),
                              [](const auto& a, const auto& b) { return a.time < b.time; });
         });
-        events->clear();
-        for (const auto& event : p.document.State().clip.events)
-            events->addItem(LuxUI::String::number(event.time, 'f', 3) + LUX_UI_TEXT("  ") +
-                            Text(event.name));
         p.Changed();
     });
     p.Button(eventLayout, "선택 이벤트 삭제", [&p, events] {
@@ -1189,7 +1251,6 @@ AnimationAssetEditor::AnimationAssetEditor(
             return;
         p.document.Edit(
             [&](auto& state) { state.clip.events.erase(state.clip.events.begin() + row); });
-        delete events->takeItem(row);
         p.Changed();
     });
     right->addTab(eventPage, LUX_UI_TEXT("이벤트"));
@@ -1209,7 +1270,8 @@ AnimationAssetEditor::AnimationAssetEditor(
     auto* additive = new LuxUI::CheckBox(LUX_UI_TEXT("가산 레이어"), controllerPage);
     controllerLayout->addWidget(additive);
     p.Button(controllerLayout, "레이어 추가", [&p, layerName] {
-        if (!p.document.State().isController)
+        if (!p.document.State().isController ||
+            p.graph->layer >= p.document.State().controller.layers.size())
             return;
         p.document.Edit([&](auto& state) {
             AnimatorLayer layer;
@@ -1271,7 +1333,8 @@ AnimationAssetEditor::AnimationAssetEditor(
         p.Changed();
     });
     p.Button(controllerLayout, "선택 상태 설정 / 시작 상태", [&p, stateClip, stateSpeed] {
-        if (!p.document.State().isController)
+        if (!p.document.State().isController ||
+            p.graph->layer >= p.document.State().controller.layers.size())
             return;
         p.document.Edit([&](auto& state) {
             auto& layer = state.controller.layers[p.graph->layer];
@@ -1444,7 +1507,8 @@ AnimationAssetEditor::AnimationAssetEditor(
         p.Changed();
     });
     p.Button(controllerLayout, "선택 상태 삭제", [&p] {
-        if (!p.document.State().isController)
+        if (!p.document.State().isController ||
+            p.graph->layer >= p.document.State().controller.layers.size())
             return;
         p.document.Edit([&](auto& state) {
             auto& layer = state.controller.layers[p.graph->layer];
@@ -1462,7 +1526,8 @@ AnimationAssetEditor::AnimationAssetEditor(
         p.Changed();
     });
     p.Button(controllerLayout, "선택 상태를 시작 상태로 지정", [&p] {
-        if (!p.document.State().isController)
+        if (!p.document.State().isController ||
+            p.graph->layer >= p.document.State().controller.layers.size())
             return;
         p.document.Edit([&](auto& state) {
             auto& layer = state.controller.layers[p.graph->layer];
@@ -1472,7 +1537,8 @@ AnimationAssetEditor::AnimationAssetEditor(
         p.Changed();
     });
     p.Button(controllerLayout, "Blend Tree 초기화", [&p] {
-        if (!p.document.State().isController)
+        if (!p.document.State().isController ||
+            p.graph->layer >= p.document.State().controller.layers.size())
             return;
         p.document.Edit([&](auto& state) {
             auto& layer = state.controller.layers[p.graph->layer];
@@ -1596,6 +1662,10 @@ AnimationAssetEditor::AnimationAssetEditor(
     connect(p.timer, &LuxUI::Timer::timeout, this, [&p] {
         if (!p.playback.playing || !p.owner.isVisible())
             return;
+        if (p.SourceChanged()) {
+            p.ResetPreview();
+            return;
+        }
         const double dt = std::min(.25, p.clock.restart() / 1000.);
         p.playback.speed = p.speed->value();
         AnimationFrame frame;
@@ -1684,8 +1754,7 @@ void AnimationAssetEditor::Seek(double seconds) {
     if (!std::isfinite(seconds))
         return;
     const bool playing = p.playback.playing;
-    if (!p.target || !p.preview.GetScene().IsAlive(p.target) ||
-        (p.source.GetSelected() && p.source.GetSelected().GetId() != p.target))
+    if (!p.target || !p.preview.GetScene().IsAlive(p.target) || p.SourceChanged(true))
         p.ResetPreview();
     p.playback.playing = playing;
     p.playback.cursor = p.document.State().isController
@@ -1726,7 +1795,7 @@ void AnimationAssetEditor::Seek(double seconds) {
 }
 
 void AnimationAssetEditor::Play(bool playing) {
-    if (playing && !impl_->target)
+    if (playing && (!impl_->target || impl_->SourceChanged(true)))
         impl_->ResetPreview();
     impl_->playback.playing = playing;
     impl_->clock.restart();
@@ -1741,6 +1810,28 @@ double AnimationAssetEditor::Time() const {
 bool AnimationAssetEditor::PreviewSourceUnchanged() const {
     std::string value;
     return impl_->source.GetScene().SerializeToString(value) && value == impl_->sourceSnapshot;
+}
+
+void AnimationAssetEditor::SaveCurrent(bool saveAs) {
+    impl_->Save(saveAs);
+}
+
+void AnimationAssetEditor::UndoEdit() {
+    impl_->curve->CancelGesture();
+    impl_->graph->CancelGesture();
+    if (impl_->document.Undo()) {
+        impl_->curve->selected.clear();
+        impl_->Changed();
+    }
+}
+
+void AnimationAssetEditor::RedoEdit() {
+    impl_->curve->CancelGesture();
+    impl_->graph->CancelGesture();
+    if (impl_->document.Redo()) {
+        impl_->curve->selected.clear();
+        impl_->Changed();
+    }
 }
 
 bool AnimationAssetEditor::ConfirmDiscard() {
@@ -1776,12 +1867,10 @@ bool AnimationAssetEditor::event(LuxUI::Event* event) {
 
 void AnimationAssetEditor::keyPressEvent(LuxUI::KeyEvent* event) {
     if (event->matches(LuxUI::KeySequence::Undo)) {
-        if (impl_->document.Undo())
-            impl_->Changed();
+        UndoEdit();
         event->accept();
     } else if (event->matches(LuxUI::KeySequence::Redo)) {
-        if (impl_->document.Redo())
-            impl_->Changed();
+        RedoEdit();
         event->accept();
     } else if (event->matches(LuxUI::KeySequence::Save)) {
         impl_->Save();

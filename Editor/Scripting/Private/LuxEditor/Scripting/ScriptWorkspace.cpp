@@ -25,7 +25,8 @@ bool ReadSource(const std::filesystem::path& path, LuxUI::ByteArray& bytes, LuxU
         return false;
     }
     bytes = file.readAll();
-    LuxUI::StringDecoder decoder(LuxUI::StringConverter::Utf8);
+    LuxUI::StringDecoder decoder(LuxUI::StringConverter::Utf8,
+                                 LuxUI::StringConverter::Flag::Stateless);
     text = decoder.decode(bytes);
     if (file.error() != LuxUI::File::NoError || decoder.hasError() || text.contains(u'\0')) {
         error = "UTF-8 텍스트 파일을 읽지 못했습니다.";
