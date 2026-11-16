@@ -1,6 +1,6 @@
 lux_engine_module(Scripting
     PUBLIC_DEPENDENCIES LuxModuleCore LuxModuleECS
-    PRIVATE_DEPENDENCIES LuxModuleScene LuxModulePlatform SDL3::SDL3
+    PRIVATE_DEPENDENCIES LuxModuleScene LuxModulePlatform SDL3::SDL3 nlohmann_json::nlohmann_json
     HEADERS
         Public/LuxEngine/Scripting/ScriptRuntime.hpp
         Private/ScriptAbi.hpp
