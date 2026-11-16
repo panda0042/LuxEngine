@@ -418,43 +418,43 @@ Qt 6로 전환했고, Source 2 Hammer를 참고해 도구 레일·중앙 작업 
 ## 13. 애니메이션 에디터 (P1–P3)
 
 - [x] 애니메이션 클립 생성 (변환 클립)
-- [ ] 프레임 기반 애니메이션
-- [ ] 스프라이트 시트 애니메이션
-- [x] 타임라인 에디터 (단일 변환 클립)
+- [x] 프레임 기반 애니메이션
+- [x] 스프라이트 시트 애니메이션
+- [x] 타임라인 에디터 (독립 트랙·도프 시트·곡선)
 - [x] 프레임 추가 및 삭제
-- [ ] 프레임 순서 변경
-- [ ] 프레임별 지속시간
-- [ ] FPS 설정
+- [x] 프레임 순서 변경
+- [x] 프레임별 지속시간
+- [x] FPS 설정
 - [x] 반복(Loop)
-- [ ] Ping-Pong
-- [ ] 역방향 재생
-- [x] 애니메이션 미리보기 (장면 시뮬레이션)
+- [x] Ping-Pong
+- [x] 역방향 재생
+- [x] 애니메이션 미리보기 (격리된 복제 씬)
 - [ ] Onion Skin
-- [ ] 프레임 이벤트
-- [ ] Animation Event
+- [x] 프레임 이벤트
+- [x] Animation Event
 - [x] Transform 키프레임
-- [ ] 색상 키프레임
-- [ ] 투명도 키프레임
-- [ ] 컴포넌트 속성 키프레임
-- [ ] 보간 방식
-- [ ] Ease In/Out
+- [x] 색상 키프레임
+- [x] 투명도 키프레임
+- [x] 컴포넌트 속성 키프레임
+- [x] 보간 방식
+- [x] Ease In/Out
 - [ ] Bezier Curve
-- [ ] Curve Editor
-- [ ] 애니메이션 트랙
-- [ ] 애니메이션 레이어
-- [ ] Animation State Machine
-- [ ] State Transition
-- [ ] Transition Condition
-- [ ] Animation Parameter
-- [ ] Animation Blend
-- [ ] Blend Tree
-- [ ] 애니메이션 마스킹
+- [x] Curve Editor
+- [x] 애니메이션 트랙
+- [x] 애니메이션 레이어
+- [x] Animation State Machine
+- [x] State Transition
+- [x] Transition Condition
+- [x] Animation Parameter
+- [x] Animation Blend
+- [x] Blend Tree
+- [x] 애니메이션 마스킹
 - [ ] 2D Bone
 - [ ] Skeleton2D
-- [ ] Bone Hierarchy
+- [x] Bone Hierarchy (FBX 보기·트랙 바인딩)
 - [ ] IK
-- [ ] Skinning
-- [ ] Mesh Deformation
+- [x] Skinning (FBX)
+- [x] Mesh Deformation (FBX 스킨·모프)
 - [ ] Bone Constraints
 - [ ] 애니메이션 리타게팅
 - [ ] 애니메이션 시퀀스 내보내기
@@ -1198,15 +1198,15 @@ Qt 6로 전환했고, Source 2 Hammer를 참고해 도구 레일·중앙 작업 
 ## 42. 3D 애니메이션·리깅 (P1–P3)
 
 - [ ] glTF 애니메이션 클립 가져오기 (P1)
-- [ ] 스켈레톤·본 계층 보기 (P1)
-- [ ] 스키닝 메시 미리보기 (P1)
-- [ ] 클립 재생·정지·속도·반복 (P1)
-- [ ] 본 변환과 루트 모션 확인 (P1)
-- [ ] 애니메이션 상태 머신 (P2)
-- [ ] 클립 블렌딩·레이어·마스크 (P2)
+- [x] 스켈레톤·본 계층 보기 (P1)
+- [x] 스키닝 메시 미리보기 (P1)
+- [x] 클립 재생·정지·속도·반복 (P1)
+- [x] 본 변환과 루트 모션 확인 (P1)
+- [x] 애니메이션 상태 머신 (P2)
+- [x] 클립 블렌딩·레이어·마스크 (P2)
 - [ ] IK 대상과 본 제약 (P2)
-- [ ] 모프 타깃·표정 미리보기 (P2)
-- [ ] 애니메이션 이벤트 타임라인 (P2)
+- [x] 모프 타깃·표정 미리보기 (P2)
+- [x] 애니메이션 이벤트 타임라인 (P2)
 - [ ] 리타게팅과 스켈레톤 호환 검사 (P3)
 - [ ] 3D 커브 에디터·시퀀서 (P3)
 
@@ -1321,3 +1321,5 @@ Qt 6로 전환했고, Source 2 Hammer를 참고해 도구 레일·중앙 작업 
 - 애니메이션 작업공간의 `FBX 클립` 모드에서 클립·시간·속도·반복·재생을 제어한다. 본·모프는 CPU에서 평가하며 리타게팅·블렌드 트리는 남은 작업이다.
 - Jolt는 2D XY 제약과 3D 박스 바디에 연결했다. 다른 형상·조인트·캐릭터 컨트롤러까지 완료한 것은 아니다.
 - 상세 API와 검증 범위는 `LuxUI.md`, `JoltPhysics.md`, `FbxModels.md`, `ViewportEditing.md`, `Modeling.md`에 기록했다.
+
+애니메이션 에셋·Animator의 현재 제작/실행 범위는 [AnimationWorkspace.md](AnimationWorkspace.md), 64비트 좌표와 ABI 변경은 [WorldCoordinates.md](WorldCoordinates.md)에 기록했다. IK·리타게팅·리깅 제작과 가중 Bezier는 완료 항목에 포함하지 않는다.

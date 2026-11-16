@@ -228,3 +228,20 @@ lux_copy_runtime(LuxMaterialSidedTests)
 add_test(NAME Engine_material_sided COMMAND LuxMaterialSidedTests)
 set_tests_properties(Engine_material_sided PROPERTIES LABELS "gpu;materials;fbx" TIMEOUT 90
     SKIP_RETURN_CODE 77 ENVIRONMENT "SDL_AUDIO_DRIVER=dummy;LUX_VULKAN_VALIDATION=sync")
+
+add_executable(LuxAnimationSystemTests AnimationSystemTest.cpp)
+target_link_libraries(LuxAnimationSystemTests PRIVATE LuxEngine::Engine)
+lux_copy_runtime(LuxAnimationSystemTests)
+add_test(NAME Engine_animation_system COMMAND LuxAnimationSystemTests)
+set_tests_properties(Engine_animation_system PROPERTIES LABELS "headless;animation;world64" TIMEOUT 30)
+
+target_compile_definitions(LuxAnimationSystemTests PRIVATE LUX_FBX_ANIMATED_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/Fixtures/AnimatedTriangle.fbx")
+
+add_executable(LuxWorld64RenderTests World64RenderTest.cpp)
+target_link_libraries(LuxWorld64RenderTests PRIVATE LuxEngine::Engine)
+lux_copy_runtime(LuxWorld64RenderTests)
+add_test(NAME Engine_world64_render COMMAND LuxWorld64RenderTests)
+set_tests_properties(Engine_world64_render PROPERTIES LABELS "gpu;world64" TIMEOUT 60 SKIP_RETURN_CODE 77
+    ENVIRONMENT "SDL_AUDIO_DRIVER=dummy" WORKING_DIRECTORY "$<TARGET_FILE_DIR:LuxWorld64RenderTests>")
+
+target_compile_definitions(LuxWorld64RenderTests PRIVATE LUX_FBX_ANIMATED_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/Fixtures/AnimatedTriangle.fbx")
