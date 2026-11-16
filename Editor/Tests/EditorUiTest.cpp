@@ -512,8 +512,8 @@ int RunHeadlessEditorUiTests(LuxUI::Application& app, LuxUI::TemporaryDir& setti
     Check(window.findChild<LuxUI::DockWidget*>(LUX_UI_TEXT("AnimationWorkspace")) &&
               window.findChild<LuxUI::DockWidget*>(LUX_UI_TEXT("performanceProfilerDock")),
           "animation and profiler workspaces are available");
-    auto* tabs = window.findChild<LuxUI::TabWidget*>();
-    Check(tabs && tabs->count() == 2, "2D and 3D workspaces exist");
+    auto* tabs = window.findChild<LuxUI::TabWidget*>(LUX_UI_TEXT("sceneGameViews"));
+    Check(tabs && tabs->count() == 3, "Scene 3D, Scene 2D and Game workspaces exist");
     const LuxUI::ByteArray state = window.saveState(1);
     Check(!state.isEmpty() && window.restoreState(state, 1), "dock layout roundtrip");
 

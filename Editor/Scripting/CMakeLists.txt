@@ -52,6 +52,6 @@ if(LUX_BUILD_TESTS)
             "$<TARGET_FILE:LuxScriptDebugTarget>" "${_lux_debug_scripts}/Scripts.dll"
             "${CMAKE_SOURCE_DIR}/Engine/Tests/Scripting/Scripts.cs")
         set_tests_properties(Editor_script_tools PROPERTIES LABELS "headless;editor;scripting;integration"
-            TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LUX_CSHARP_LS=${LUX_TEST_CSHARP_LS};LUX_NETCOREDBG=${LUX_TEST_NETCOREDBG}")
+            TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LUX_CSHARP_LS=${LUX_TEST_CSHARP_LS};LUX_NETCOREDBG=${LUX_TEST_NETCOREDBG};DOTNET_ROOT=${LUX_DOTNET_ROOT};DOTNET_ROOT_X64=${LUX_DOTNET_ROOT}")
     endif()
 endif()

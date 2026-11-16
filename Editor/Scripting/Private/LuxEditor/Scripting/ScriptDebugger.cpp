@@ -172,22 +172,25 @@ void ScriptDebugger::SendBreakpoints(const LuxUI::String& path, std::function<vo
     LuxUI::JsonArray values;
     for (const auto& point : points)
         values.append(LuxUI::JsonObject{{"line", point.line}, {"condition", point.condition}});
-    Request(
-        "setBreakpoints", {{"source", LuxUI::JsonObject{{"path", path}}}, {"breakpoints", values}},
-        [this, path, points, done](const auto& body) mutable {
-            const auto responses = body.value("breakpoints").toArray();
-            for (size_t i = 0; i < points.size(); ++i)
-                points[i].verified = i < size_t(responses.size()) &&
-                                     responses[int(i)].toObject().value("verified").toBool();
-            for (size_t i = 0; i < points.size() && i < size_t(responses.size()); ++i)
-                if (responses[int(i)].toObject().contains("id"))
-                    breakpointIds_[responses[int(i)].toObject().value("id").toInt()] = {path, i};
-            breakpoints_[path] = points;
-            if (verified)
-                verified(path, points);
-            if (done)
-                done();
-        });
+    const auto sourcePath =
+        LuxUI::Dir::toNativeSeparators(LuxUI::FileInfo(path).absoluteFilePath());
+    Request("setBreakpoints",
+            {{"source", LuxUI::JsonObject{{"path", sourcePath}}}, {"breakpoints", values}},
+            [this, path, points, done](const auto& body) mutable {
+                const auto responses = body.value("breakpoints").toArray();
+                for (size_t i = 0; i < points.size(); ++i)
+                    points[i].verified = i < size_t(responses.size()) &&
+                                         responses[int(i)].toObject().value("verified").toBool();
+                for (size_t i = 0; i < points.size() && i < size_t(responses.size()); ++i)
+                    if (responses[int(i)].toObject().contains("id"))
+                        breakpointIds_[responses[int(i)].toObject().value("id").toInt()] = {path,
+                                                                                            i};
+                breakpoints_[path] = points;
+                if (verified)
+                    verified(path, points);
+                if (done)
+                    done();
+            });
 }
 
 void ScriptDebugger::Control(const char* command) {

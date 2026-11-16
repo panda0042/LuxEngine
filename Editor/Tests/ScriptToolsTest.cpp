@@ -128,7 +128,13 @@ int main(int argc, char** argv) {
         debugger.SetBreakpoints(LuxUI::String::fromLocal8Bit(argv[3]),
                                 {{breakpointLine, LUX_UI_TEXT("Counter == 2"), false}});
         Check(debugger.Attach(target.processId(), directory.path()), "Debugger did not start");
-        Wait(app, [&] { return debugger.Paused(); }, "Native host breakpoint was not hit");
+        try {
+            Wait(app, [&] { return debugger.Paused(); }, "Native host breakpoint was not hit");
+        } catch (const std::exception& error) {
+            output += target.readAllStandardOutput();
+            throw std::runtime_error(std::string(error.what()) + ": " + debugError.toStdString() +
+                                     " / " + output.right(4096).toStdString());
+        }
         Check(verified && stops == 1, "Breakpoint was not verified by the real debugger");
         bool framesReady = false;
         LuxUI::JsonArray frames;
