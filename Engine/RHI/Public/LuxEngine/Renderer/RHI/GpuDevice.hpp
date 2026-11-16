@@ -14,11 +14,28 @@ namespace Rhi {
 class RenderBackend;
 }
 
+// GPU-local transfer values. World/scene math uses double; renderers rebase before packing.
+struct LUX_API GpuVec2 {
+    float x = 0, y = 0;
+    GpuVec2();
+    GpuVec2(double x, double y);
+    GpuVec2(Vec2 value);
+    operator Vec2() const;
+};
+
+struct LUX_API GpuVec3 {
+    float x = 0, y = 0, z = 0;
+    GpuVec3();
+    GpuVec3(double x, double y, double z);
+    GpuVec3(Vec3 value);
+    operator Vec3() const;
+};
+
 struct RenderVertex {
-    Vec3 position;
+    GpuVec3 position;
     Vec4 color;
-    Vec2 uv;
-    Vec3 normal{};
+    GpuVec2 uv;
+    GpuVec3 normal{};
 };
 
 enum class GpuValidation { Auto, Off, On, Synchronization };

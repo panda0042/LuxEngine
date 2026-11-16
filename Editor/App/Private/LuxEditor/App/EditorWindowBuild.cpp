@@ -2,6 +2,7 @@
 #include <LuxEditor/Build/BuildOutput.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
 #include <LuxEditor/Scene/SceneDependencies.hpp>
+#include <LuxEditor/Scripting/ScriptWorkspace.hpp>
 #include <LuxUI/Widgets.hpp>
 
 namespace LuxEditor {
@@ -60,11 +61,11 @@ void EditorWindow::StartBuild(BuildConfiguration configuration, bool clean,
         ShowError(LUX_UI_TEXT("빌드"), LUX_UI_TEXT("열려 있는 프로젝트가 없습니다."));
         return;
     }
-    if (buildProcess_) {
-        Log(LUX_UI_TEXT("이미 빌드가 진행 중입니다."), true);
+    if (buildProcess_ || scriptWorkspace_->IsBuilding() || previewActive_) {
+        Log(LUX_UI_TEXT("실행 또는 다른 빌드가 진행 중입니다."), true);
         return;
     }
-    if (!SaveAllScenes(true) || !project_)
+    if (!scriptWorkspace_->SaveAll() || !SaveAllScenes(true) || !project_)
         return;
 
     // The SDK path set in the editor wins over the environment variable.
@@ -176,8 +177,19 @@ void EditorWindow::HandleBuildOutput(const LuxUI::ByteArray& chunk) {
             buildProgress_->setRange(0, 100);
             buildProgress_->setValue(*percent);
         }
-        if (const auto diagnostic = ParseBuildLine(text);
-            diagnostic && diagnostic->severity != DiagnosticSeverity::Note &&
+        const auto diagnostic = ParseBuildLine(text);
+        if (diagnostic && PathFromUtf8(diagnostic->file).extension() == ".cs")
+            scriptWorkspace_->AddDiagnostic(*diagnostic, buildPlan_ ? buildPlan_->projectDirectory
+                                                                    : std::filesystem::path{});
+        if (developmentConsole_)
+            developmentConsole_->Append(
+                diagnostic && diagnostic->severity == DiagnosticSeverity::Error
+                    ? LuxUI::Severity::Error
+                : diagnostic && diagnostic->severity == DiagnosticSeverity::Warning
+                    ? LuxUI::Severity::Warning
+                    : LuxUI::Severity::Info,
+                "빌드", text);
+        if (diagnostic && diagnostic->severity != DiagnosticSeverity::Note &&
             buildDiagnostics_.size() < MaxStoredDiagnostics)
             buildDiagnostics_.push_back(*diagnostic);
         consoleOutput_->appendPlainText(line);

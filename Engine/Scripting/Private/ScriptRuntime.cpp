@@ -7,17 +7,19 @@
 #include <atomic>
 #include <cmath>
 #include <coreclr_delegates.h>
+#include <cstring>
 #include <hostfxr.h>
 #include <map>
 #include <mutex>
 #include <nethost.h>
+#include <nlohmann/json.hpp>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
 
 namespace LuxEngine {
 namespace {
-static_assert(sizeof(TransformComponent) == 9 * sizeof(float));
+static_assert(sizeof(TransformComponent) == 9 * sizeof(double));
 static_assert(std::is_standard_layout_v<TransformComponent>);
 
 struct WorldState {
@@ -76,6 +78,81 @@ int LUX_SCRIPT_CALL SetTransform(uint64 id, uint32 entity, const TransformCompon
 
 int LUX_SCRIPT_CALL IsKeyPressed(int key) {
     return Input::IsKeyPressed(key) ? 1 : 0;
+}
+
+double LUX_SCRIPT_CALL AnimationCommand(uint64 id, uint32 entity, int operation, const char* text,
+                                        int length, double value) {
+    try {
+        auto world = FindWorld(id);
+        if (!world || length < 0 || length > 1024 || (!text && length) || !std::isfinite(value))
+            return 0;
+        auto* component = world->scene->TryGetComponent<AnimatorComponent>(entity);
+        if (!component)
+            return 0;
+        if (!component->player) {
+            std::string error;
+            auto controller = AnimatorController::Load(
+                world->scene->ResolveAssetPath(component->controllerPath), error);
+            auto player = CreateRef<AnimatorPlayer>();
+            if (!controller || !player->SetController(controller, error))
+                return 0;
+            component->player = player;
+            component->loadedPath = world->scene->ResolveAssetPath(component->controllerPath);
+            for (const auto& p : component->parameters)
+                player->SetParameter(p.name, p.value);
+        }
+        const std::string name(text ? text : "", static_cast<size_t>(length));
+        switch (operation) {
+        case 0:
+            component->playing = true;
+            return component->player->Play(name, value) ? 1 : 0;
+        case 1:
+            return component->player->SetParameter(name, value) ? 1 : 0;
+        case 2:
+            return component->player->Trigger(name) ? 1 : 0;
+        case 3:
+            return component->player->GetParameter(name);
+        case 4:
+            component->playing = false;
+            return 1;
+        case 5:
+            component->playing = true;
+            return 1;
+        case 6:
+            return component->player->SetSpeed(value) ? 1 : 0;
+        case 7:
+            return component->player->GetSpeed();
+        default:
+            return 0;
+        }
+    } catch (...) {
+        return 0;
+    }
+}
+
+int LUX_SCRIPT_CALL AnimationEventNext(uint64 id, uint32 entity, char* destination, int capacity) {
+    try {
+        auto world = FindWorld(id);
+        if (!world)
+            return 0;
+        std::vector<AnimationEvent>* events = nullptr;
+        if (auto* component = world->scene->TryGetComponent<AnimatorComponent>(entity))
+            events = &component->pendingEvents;
+        else if (auto* component = world->scene->TryGetComponent<AnimationComponent>(entity))
+            events = &component->pendingEvents;
+        if (!events || events->empty())
+            return 0;
+        const auto& event = events->front();
+        const auto json = nlohmann::json{{"name", event.name}, {"payload", event.payload}}.dump();
+        const auto size = static_cast<int>(json.size());
+        if (!destination || capacity < size)
+            return size;
+        std::memcpy(destination, json.data(), json.size());
+        events->erase(events->begin());
+        return size;
+    } catch (...) {
+        return 0;
+    }
 }
 
 std::basic_string<char_t> HostPath(const std::filesystem::path& path) {
@@ -200,9 +277,15 @@ struct DotnetHost {
             error = "C# 스크립트 코어 진입점을 찾을 수 없습니다.";
             return false;
         }
-        const Managed::NativeApi native = {
-            2, sizeof(Managed::NativeApi), IsAlive, GetTransform, SetTransform, IsKeyPressed};
-        if (!getApi(&native, &api) || api.version != 2 || api.size != sizeof(api)) {
+        const Managed::NativeApi native = {4,
+                                           sizeof(Managed::NativeApi),
+                                           IsAlive,
+                                           GetTransform,
+                                           SetTransform,
+                                           IsKeyPressed,
+                                           AnimationCommand,
+                                           AnimationEventNext};
+        if (!getApi(&native, &api) || api.version != 4 || api.size != sizeof(api)) {
             api = {};
             error = "C# 스크립트 ABI가 엔진과 일치하지 않습니다.";
             return false;

@@ -28,12 +28,19 @@ Json Value(const ScriptFieldValue& value) {
         value);
 }
 
-float Number(const Json& value) {
+double Number(const Json& value) {
     if (!value.is_number())
         throw std::invalid_argument("Script field must be numeric");
     const double number = value.get<double>();
-    if (!std::isfinite(number) || std::abs(number) > std::numeric_limits<float>::max())
+    if (!std::isfinite(number) || std::abs(number) > std::numeric_limits<double>::max())
         throw std::invalid_argument("Script field must be finite");
+    return number;
+}
+
+float Number32(const Json& value) {
+    const double number = Number(value);
+    if (std::abs(number) > std::numeric_limits<float>::max())
+        throw std::invalid_argument("Script float field exceeds its range");
     return static_cast<float>(number);
 }
 
@@ -55,7 +62,7 @@ ScriptFieldValue Read(const Json& field) {
             break;
         return value.get<int32>();
     case 2:
-        return Number(value);
+        return Number32(value);
     case 3:
         if (!value.is_string() || value.get_ref<const std::string&>().size() > 16384 ||
             value.get_ref<const std::string&>().find('\0') != std::string::npos)

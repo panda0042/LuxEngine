@@ -11,7 +11,7 @@ struct AnimationTimelineActions {
     std::function<int()> selectedKey;
     std::function<int()> framesPerSecond;
     std::function<void(int)> selectKey;
-    std::function<void(int, float)> moveKey;
+    std::function<void(int, double)> moveKey;
     std::function<void()> removeKey;
     std::function<void()> addKey;
     std::function<void(double)> seekTime;
@@ -37,9 +37,9 @@ protected:
     bool event(LuxUI::Event* event) override;
 
 private:
-    float Duration() const;
-    float TimeAt(double x) const;
-    double PositionAt(float time) const;
+    double Duration() const;
+    double TimeAt(double x) const;
+    double PositionAt(double time) const;
     int KeyAt(const LuxUI::PointF& point) const;
     void Scrub(double x);
 
@@ -47,7 +47,7 @@ private:
     double zoom_ = 1;
     double scroll_ = 0;
     int draggedKey_ = -1;
-    float draggedTime_ = 0;
+    double draggedTime_ = 0;
     bool curveMode_ = false;
     bool expanded_ = true;
 };

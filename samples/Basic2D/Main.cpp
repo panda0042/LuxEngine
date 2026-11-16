@@ -30,9 +30,10 @@ private:
     void Step(float dt) override {
         const auto move = LuxSamples::Movement();
         auto& transform = player_.GetComponent<le::TransformComponent>();
-        transform.position.x =
-            std::clamp(transform.position.x + move.x * dt * 4, -HalfWidth() + 1, HalfWidth() - 1);
-        transform.position.y = std::clamp(transform.position.y + move.y * dt * 4, -4.5f, 3.5f);
+        transform.position.x = std::clamp<double>(transform.position.x + move.x * dt * 4,
+                                                  -HalfWidth() + 1, HalfWidth() - 1);
+        transform.position.y =
+            std::clamp<double>(transform.position.y + move.y * dt * 4, -4.5f, 3.5f);
         transform.rotation.z = move.x * .12f;
     }
 

@@ -1476,7 +1476,7 @@ void TilemapScroll(Session& s, uint32 W, uint32 H) {
 }
 
 Vec3 TransformPoint(const Mat4& m, const Vec3& v) {
-    const float* e = m.elements;
+    const double* e = m.elements;
     return Vec3(e[0] * v.x + e[4] * v.y + e[8] * v.z + e[12],
                 e[1] * v.x + e[5] * v.y + e[9] * v.z + e[13],
                 e[2] * v.x + e[6] * v.y + e[10] * v.z + e[14]);

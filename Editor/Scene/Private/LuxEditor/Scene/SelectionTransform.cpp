@@ -64,21 +64,21 @@ bool Inverse(const Mat4& matrix, Mat4& result) {
         return false;
     const double scale = 1 / determinant;
     auto* out = result.elements;
-    out[0] = static_cast<float>((e * i - f * h) * scale);
-    out[4] = static_cast<float>((c * h - b * i) * scale);
-    out[8] = static_cast<float>((b * f - c * e) * scale);
-    out[1] = static_cast<float>((f * g - d * i) * scale);
-    out[5] = static_cast<float>((a * i - c * g) * scale);
-    out[9] = static_cast<float>((c * d - a * f) * scale);
-    out[2] = static_cast<float>((d * h - e * g) * scale);
-    out[6] = static_cast<float>((b * g - a * h) * scale);
-    out[10] = static_cast<float>((a * e - b * d) * scale);
+    out[0] = static_cast<double>((e * i - f * h) * scale);
+    out[4] = static_cast<double>((c * h - b * i) * scale);
+    out[8] = static_cast<double>((b * f - c * e) * scale);
+    out[1] = static_cast<double>((f * g - d * i) * scale);
+    out[5] = static_cast<double>((a * i - c * g) * scale);
+    out[9] = static_cast<double>((c * d - a * f) * scale);
+    out[2] = static_cast<double>((d * h - e * g) * scale);
+    out[6] = static_cast<double>((b * g - a * h) * scale);
+    out[10] = static_cast<double>((a * e - b * d) * scale);
     const auto position = TransformPoint(result, {m[12], m[13], m[14]});
     out[12] = -position.x;
     out[13] = -position.y;
     out[14] = -position.z;
     return std::all_of(std::begin(result.elements), std::end(result.elements),
-                       [](float value) { return std::isfinite(value); });
+                       [](double value) { return std::isfinite(value); });
 }
 
 bool Decompose(const Mat4& matrix, TransformComponent& value) {
@@ -97,7 +97,7 @@ bool Decompose(const Mat4& matrix, TransformComponent& value) {
     // TRS cannot encode shear. Never silently change an authored transform to approximate it.
     if (std::abs(x.Dot(y)) > 1e-4f || std::abs(x.Dot(z)) > 1e-4f || std::abs(y.Dot(z)) > 1e-4f)
         return false;
-    value.rotation.y = std::asin(std::clamp(-x.z, -1.0f, 1.0f));
+    value.rotation.y = std::asin(std::clamp<double>(-x.z, -1.0f, 1.0f));
     if (std::abs(std::cos(value.rotation.y)) > 1e-5f) {
         value.rotation.x = std::atan2(y.z, z.z);
         value.rotation.z = std::atan2(x.y, x.x);
@@ -108,7 +108,7 @@ bool Decompose(const Mat4& matrix, TransformComponent& value) {
     return Finite(value);
 }
 
-bool ScaleRatio(float initial, float target, float& ratio) {
+bool ScaleRatio(double initial, double target, double& ratio) {
     if (initial == target) {
         ratio = 1;
         return true;
@@ -187,8 +187,8 @@ LuxEngine::Vec3 GetSelectionPivot(const EditorDocument& document) {
     }
     if (!count)
         return {};
-    return {static_cast<float>(x / count), static_cast<float>(y / count),
-            static_cast<float>(z / count)};
+    return {static_cast<double>(x / count), static_cast<double>(y / count),
+            static_cast<double>(z / count)};
 }
 
 bool SelectionTransformSession::Begin(EditorDocument& document) {
@@ -228,10 +228,10 @@ bool SelectionTransformSession::Begin(EditorDocument& document) {
         for (const auto& entry : next) {
             if (!Finite(entry.local) || !Finite(entry.world) ||
                 !std::all_of(std::begin(entry.matrix.elements), std::end(entry.matrix.elements),
-                             [](float value) { return std::isfinite(value); }) ||
+                             [](double value) { return std::isfinite(value); }) ||
                 !std::all_of(std::begin(entry.parentMatrix.elements),
                              std::end(entry.parentMatrix.elements),
-                             [](float value) { return std::isfinite(value); }))
+                             [](double value) { return std::isfinite(value); }))
                 return false;
         }
         scene_ = &scene;

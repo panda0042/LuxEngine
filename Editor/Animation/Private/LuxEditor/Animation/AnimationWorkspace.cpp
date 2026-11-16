@@ -1,5 +1,7 @@
+#include <LuxEditor/Animation/AnimationAssetEditor.hpp>
 #include <LuxEditor/Animation/AnimationTimeline.hpp>
 #include <LuxEditor/App/EditorWindow.hpp>
+#include <LuxEditor/Project/PathEncoding.hpp>
 #include <LuxEditor/Scene/SceneHistory.hpp>
 #include <LuxEditor/Ui/IconFactory.hpp>
 #include <LuxEditor/Viewport/EngineSceneRenderer.hpp>
@@ -322,8 +324,9 @@ void EditorWindow::BuildAnimationPanel() {
         {[this] { return document_.GetSelected(); }, [this] { return keyframeList_->currentRow(); },
          [this] { return animationFps_ ? animationFps_->value() : 30; },
          [this](int row) { keyframeList_->setCurrentRow(row); },
-         [this](int row, float time) { MoveAnimationKey(row, time); }, [this] { RemoveKeyframe(); },
-         [this] { AddKeyframe(); }, [this](double time) { SeekAnimationTime(time); },
+         [this](int row, double time) { MoveAnimationKey(row, time); },
+         [this] { RemoveKeyframe(); }, [this] { AddKeyframe(); },
+         [this](double time) { SeekAnimationTime(time); },
          [this] {
              if (auto* play =
                      animationPanel_->findChild<LuxUI::PushButton*>(LUX_UI_TEXT("animationPlay")))
@@ -495,6 +498,14 @@ void EditorWindow::BuildAnimationPanel() {
             [this](int value) { ScrubAnimation(value); });
     connect(animationTimeline_, &LuxUI::Slider::sliderReleased, this,
             [this] { EndTimelineEdit(); });
+    auto* assetTabs = new LuxUI::TabWidget(animationDock_);
+    auto* assetEditor = new AnimationAssetEditor(
+        assetTabs, document_, [this](const LuxUI::String& name, const std::function<void()>& edit) {
+            ExecuteRecordedEdit(name, edit);
+        });
+    assetTabs->addTab(assetEditor, LUX_UI_TEXT("애니메이션 에셋"));
+    assetTabs->addTab(animationPanel_, LUX_UI_TEXT("기존 씬 클립"));
+    animationPanel_ = assetTabs;
     animationDock_->setWidget(animationPanel_);
     addDockWidget(LuxUI::Flags::BottomDockWidgetArea, animationDock_);
     animationDock_->hide();
@@ -616,13 +627,13 @@ void EditorWindow::RefreshAnimationWorkspace() {
     refreshingInspector_ = refreshing;
 }
 
-void EditorWindow::MoveAnimationKey(int index, float time) {
+void EditorWindow::MoveAnimationKey(int index, double time) {
     auto entity = document_.GetSelected();
     auto* animation = entity ? entity.TryGetComponent<LuxEngine::AnimationComponent>() : nullptr;
     if (previewActive_ || !animation || !std::isfinite(time) || index < 0 ||
         static_cast<size_t>(index) >= animation->clip.keyframes.size())
         return;
-    time = std::clamp(time, 0.0f, animation->clip.duration);
+    time = std::clamp<double>(time, 0.0f, animation->clip.duration);
     for (size_t other = 0; other < animation->clip.keyframes.size(); ++other)
         if (static_cast<int>(other) != index &&
             std::abs(animation->clip.keyframes[other].time - time) < 1e-6f) {
@@ -654,7 +665,7 @@ void EditorWindow::OnAnimationKeyChanged(const LuxUI::Widget* field) {
     StopAnimationPlayback();
     RecordEdit(LUX_UI_TEXT("애니메이션 키 편집"), [this, field, row] {
         if (field == animationKeyTime_) {
-            MoveAnimationKey(row, static_cast<float>(animationKeyTime_->value()));
+            MoveAnimationKey(row, static_cast<double>(animationKeyTime_->value()));
             return;
         }
         auto& animation = document_.GetSelected().GetComponent<LuxEngine::AnimationComponent>();
@@ -663,8 +674,8 @@ void EditorWindow::OnAnimationKeyChanged(const LuxUI::Widget* field) {
             for (int axis = 0; axis < 3; ++axis) {
                 if (field != animationKeyValues_[group][axis])
                     continue;
-                const float value = static_cast<float>(animationKeyValues_[group][axis]->value() *
-                                                       (group == 1 ? std::acos(-1.0) / 180 : 1));
+                const double value = static_cast<double>(animationKeyValues_[group][axis]->value() *
+                                                         (group == 1 ? std::acos(-1.0) / 180 : 1));
                 auto& vector = group == 0 ? key.position : group == 1 ? key.rotation : key.scale;
                 if (axis == 0)
                     vector.x = value;
@@ -707,7 +718,7 @@ void EditorWindow::OnAnimationChanged(const LuxUI::Widget* field) {
             else if (field == animationLoop_)
                 clip.loop = animationLoop_->isChecked();
             else if (field == animationDuration_) {
-                clip.duration = static_cast<float>(animationDuration_->value());
+                clip.duration = static_cast<double>(animationDuration_->value());
                 if (!clip.keyframes.empty())
                     clip.duration = std::max(clip.duration, clip.keyframes.back().time);
             }
@@ -728,7 +739,7 @@ void EditorWindow::AddKeyframe() {
         LuxEngine::Entity entity = document_.GetSelected();
         auto& animation = entity.GetComponent<LuxEngine::AnimationComponent>();
         const auto& transform = entity.GetComponent<LuxEngine::TransformComponent>();
-        const float time = animation.currentTime;
+        const double time = animation.currentTime;
         animation.clip.AddKeyframe({time, transform.position, transform.rotation, transform.scale});
         const auto inserted =
             std::find_if(animation.clip.keyframes.begin(), animation.clip.keyframes.end(),
@@ -776,7 +787,7 @@ void EditorWindow::SeekAnimationTime(double time) {
     if (!std::isfinite(time))
         return;
     animation.currentTime =
-        static_cast<float>(std::clamp(time, 0.0, static_cast<double>(animation.clip.duration)));
+        static_cast<double>(std::clamp(time, 0.0, static_cast<double>(animation.clip.duration)));
     const int value = animation.clip.duration > 0
                           ? static_cast<int>(1000 * animation.currentTime / animation.clip.duration)
                           : 0;
@@ -816,4 +827,10 @@ void EditorWindow::EndTimelineEdit() {
     timelineBefore_.clear();
 }
 
+void EditorWindow::OpenAnimationAsset(const std::filesystem::path& path) {
+    auto* editor = dynamic_cast<AnimationAssetEditor*>(
+        findChild<LuxUI::Widget*>(LUX_UI_TEXT("animationAssetEditor")));
+    if (editor && editor->ConfirmDiscard() && editor->OpenAsset(PathUtf8(path)))
+        SetWorkspace(true);
+}
 } // namespace LuxEditor

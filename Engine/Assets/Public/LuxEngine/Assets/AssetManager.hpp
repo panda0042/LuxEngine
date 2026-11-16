@@ -12,7 +12,7 @@ namespace LuxEngine {
 class GpuDevice;
 
 struct RawMeshData {
-    std::vector<float> vertices;
+    std::vector<double> vertices;
     std::vector<uint32> indices;
     std::vector<float> normals;
     std::vector<float> texCoords;

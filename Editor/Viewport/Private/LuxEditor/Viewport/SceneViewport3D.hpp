@@ -39,9 +39,9 @@ public:
 
     void FocusSelection();
     LuxEngine::PerspectiveCamera GetViewCamera() const;
-    bool SetViewCamera(const LuxEngine::PerspectiveCamera& camera, float fovDegrees, float nearClip,
-                       float farClip);
-    void GetViewProjection(float& fovDegrees, float& nearClip, float& farClip) const;
+    bool SetViewCamera(const LuxEngine::PerspectiveCamera& camera, double fovDegrees,
+                       double nearClip, double farClip);
+    void GetViewProjection(double& fovDegrees, double& nearClip, double& farClip) const;
     bool SetMoveSpeed(double unitsPerSecond);
     double GetMoveSpeed() const;
     double GetEffectiveMoveSpeed() const;
@@ -99,9 +99,9 @@ private:
     LuxEngine::Vec3 focus_{0, 0, 0};
     double yaw_ = .65, pitch_ = -.48, distance_ = 22;
     double roll_ = 0;
-    float viewFovDegrees_ = 60;
-    float viewNearClip_ = 0;
-    float viewFarClip_ = 0;
+    double viewFovDegrees_ = 60;
+    double viewNearClip_ = 0;
+    double viewFarClip_ = 0;
     double moveSpeed_ = 0;
     std::function<void(double)> onMoveSpeedChanged_;
     std::function<void(const LuxUI::String&)> onNavigationMessage_;

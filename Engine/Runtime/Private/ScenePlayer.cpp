@@ -14,7 +14,7 @@
 
 namespace LuxEngine {
 namespace {
-bool ParseNumber(const std::string& text, float& value) {
+bool ParseNumber(const std::string& text, double& value) {
     if (text.empty() || text.front() == '+')
         return false;
     std::istringstream input(text);
@@ -42,8 +42,8 @@ Vec3 Unit(Vec3 value, Vec3 fallback) {
                                      static_cast<double>(value.z));
     if (!std::isfinite(length) || length < 1e-12)
         return fallback;
-    return {static_cast<float>(value.x / length), static_cast<float>(value.y / length),
-            static_cast<float>(value.z / length)};
+    return {static_cast<double>(value.x / length), static_cast<double>(value.y / length),
+            static_cast<double>(value.z / length)};
 }
 
 Vec3 CameraUp(Vec3 forward, Vec3 preferred) {
@@ -60,7 +60,7 @@ Vec3 CameraUp(Vec3 forward, Vec3 preferred) {
 ScenePlayerCameraView ResolveScenePlayerCamera(Scene& scene, const ScenePlayerView& fallback) {
     ScenePlayerCameraView result;
     result.position = {fallback.centerX, fallback.centerY + 3,
-                       std::max(5.0f, fallback.halfHeight * 2)};
+                       std::max<double>(5.0f, fallback.halfHeight * 2)};
     result.target = {fallback.centerX, fallback.centerY, 0};
     if (!Finite(result.position) || !Finite(result.target))
         result = {};
@@ -84,11 +84,11 @@ ScenePlayerCameraView ResolveScenePlayerCamera(Scene& scene, const ScenePlayerVi
         const Vec3 forward = Unit({-m[8], -m[9], -m[10]}, {0, 0, -1});
         const Vec3 up = CameraUp(forward, {m[4], m[5], m[6]});
         // At very large coordinates, adding a unit direction can round back to the eye itself.
-        const float distance =
-            std::max({1.0f, std::abs(position.x) * .00001f, std::abs(position.y) * .00001f,
-                      std::abs(position.z) * .00001f});
+        const double distance =
+            std::max<double>({1.0f, std::abs(position.x) * .00001f, std::abs(position.y) * .00001f,
+                              std::abs(position.z) * .00001f});
         const Vec3 target = position + forward * distance;
-        const float separation = (target - position).Dot(target - position);
+        const double separation = (target - position).Dot(target - position);
         if (!Finite(target) || !std::isfinite(separation) || separation <= 0)
             continue;
         result = {position, target, up, camera.fov, camera.nearClip, camera.farClip};
@@ -167,27 +167,27 @@ std::optional<ScenePlayerOptions> ParseScenePlayerArguments(const std::vector<st
 }
 
 ScenePlayerView FitSceneView(Scene& scene) {
-    float minX = std::numeric_limits<float>::max(), minY = minX;
-    float maxX = std::numeric_limits<float>::lowest(), maxY = maxX;
+    double minX = std::numeric_limits<double>::max(), minY = minX;
+    double maxX = std::numeric_limits<double>::lowest(), maxY = maxX;
     for (Entity entity : scene.GetEntities()) {
         if (!entity.HasComponent<TransformComponent>())
             continue;
         const auto matrix = scene.GetWorldMatrix(entity.GetId());
-        float localX0 = -.5f, localX1 = .5f, localY0 = -.5f, localY1 = .5f;
+        double localX0 = -.5f, localX1 = .5f, localY0 = -.5f, localY1 = .5f;
         if (entity.HasComponent<TilemapComponent>()) {
             const auto& map = entity.GetComponent<TilemapComponent>();
             localX0 = localY0 = 0;
             localX1 = map.width * map.tileSize;
             localY1 = map.height * map.tileSize;
         }
-        float x0 = std::numeric_limits<float>::max(), y0 = x0;
-        float x1 = std::numeric_limits<float>::lowest(), y1 = x1;
-        for (const float x : {localX0, localX1})
-            for (const float y : {localY0, localY1})
-                for (const float z : {-.5f, .5f}) {
+        double x0 = std::numeric_limits<double>::max(), y0 = x0;
+        double x1 = std::numeric_limits<double>::lowest(), y1 = x1;
+        for (const double x : {localX0, localX1})
+            for (const double y : {localY0, localY1})
+                for (const double z : {-.5f, .5f}) {
                     const auto* m = matrix.elements;
-                    const float worldX = m[0] * x + m[4] * y + m[8] * z + m[12];
-                    const float worldY = m[1] * x + m[5] * y + m[9] * z + m[13];
+                    const double worldX = m[0] * x + m[4] * y + m[8] * z + m[12];
+                    const double worldY = m[1] * x + m[5] * y + m[9] * z + m[13];
                     x0 = std::min(x0, worldX);
                     x1 = std::max(x1, worldX);
                     y0 = std::min(y0, worldY);
@@ -207,7 +207,7 @@ ScenePlayerView FitSceneView(Scene& scene) {
     view.centerY = (minY + maxY) * 0.5f;
     // Fit both axes for a 16:9 window with a small margin.
     view.halfHeight =
-        std::max({(maxY - minY) * 0.5f, (maxX - minX) * 0.5f * 9.0f / 16.0f, 1.0f}) * 1.1f;
+        std::max<double>({(maxY - minY) * 0.5f, (maxX - minX) * 0.5f * 9.0f / 16.0f, 1.0f}) * 1.1f;
     return view;
 }
 
@@ -285,9 +285,9 @@ void ScenePlayer::OnInit() {
 
 void ScenePlayer::UpdateCamera() {
     uint32 width = 0, height = 0;
-    float aspect = 16.0f / 9.0f;
+    double aspect = 16.0f / 9.0f;
     if (GetWindow().GetFramebufferSize(width, height) && width > 0 && height > 0)
-        aspect = static_cast<float>(width) / static_cast<float>(height);
+        aspect = static_cast<double>(width) / static_cast<double>(height);
     auto view = view_;
     if (!options_.view) {
         for (auto entity : scene_->GetEntities()) {
@@ -299,7 +299,7 @@ void ScenePlayer::UpdateCamera() {
             }
         }
     }
-    const float halfWidth = view.halfHeight * aspect;
+    const double halfWidth = view.halfHeight * aspect;
     camera_.SetProjection(view.centerX - halfWidth, view.centerX + halfWidth,
                           view.centerY - view.halfHeight, view.centerY + view.halfHeight);
 
@@ -320,9 +320,9 @@ void ScenePlayer::OnUpdate(double dt) {
         view_ = options_.view ? *options_.view : FitSceneView(*scene_);
     if (player_ && !player_.HasComponent<ScriptComponent>() &&
         player_.HasComponent<TransformComponent>()) {
-        const float horizontal = (Input::IsActionDown("Right") ? 1.0f : 0.0f) -
-                                 (Input::IsActionDown("Left") ? 1.0f : 0.0f);
-        const float vertical =
+        const double horizontal = (Input::IsActionDown("Right") ? 1.0f : 0.0f) -
+                                  (Input::IsActionDown("Left") ? 1.0f : 0.0f);
+        const double vertical =
             (Input::IsActionDown("Up") ? 1.0f : 0.0f) - (Input::IsActionDown("Down") ? 1.0f : 0.0f);
         if (player_.HasComponent<Rigidbody2DComponent>()) {
             auto& body = player_.GetComponent<Rigidbody2DComponent>();
@@ -331,10 +331,10 @@ void ScenePlayer::OnUpdate(double dt) {
                 body.velocity.y = 7.0f;
         } else {
             auto transform = scene_->GetWorldTransform(player_.GetId());
-            const float length = std::sqrt(horizontal * horizontal + vertical * vertical);
+            const double length = std::sqrt(horizontal * horizontal + vertical * vertical);
             if (length > 0.0f) {
-                transform.position.x += horizontal / length * 4.0f * static_cast<float>(dt);
-                transform.position.y += vertical / length * 4.0f * static_cast<float>(dt);
+                transform.position.x += horizontal / length * 4.0f * static_cast<double>(dt);
+                transform.position.y += vertical / length * 4.0f * static_cast<double>(dt);
                 scene_->SetWorldTransform(player_.GetId(), transform);
             }
         }

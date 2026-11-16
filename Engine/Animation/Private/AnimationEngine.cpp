@@ -5,7 +5,7 @@
 
 namespace LuxEngine {
 
-TransformComponent AnimationClip::Sample(float time) const {
+TransformComponent AnimationClip::Sample(double time, bool wrapTime) const {
     TransformComponent result;
     if (keyframes.empty())
         return result;
@@ -19,21 +19,12 @@ TransformComponent AnimationClip::Sample(float time) const {
     if (!std::isfinite(time))
         time = 0.0f;
 
-    float clampedTime = time;
-    if (duration > 0.0f) {
-        if (loop) {
-            clampedTime = std::fmod(time, duration);
-            if (clampedTime < 0.0f)
-                clampedTime += duration;
-        } else {
-            clampedTime = std::clamp(time, 0.0f, duration);
-        }
-    }
+    double clampedTime = AnimationTime(time, duration, wrapTime ? GetWrap() : AnimationWrap::Once);
 
     if (!std::isfinite(clampedTime))
         clampedTime = 0.0f;
     auto it = std::lower_bound(keyframes.begin(), keyframes.end(), clampedTime,
-                               [](const Keyframe& k, float t) { return k.time < t; });
+                               [](const Keyframe& k, double t) { return k.time < t; });
     if (it == keyframes.end()) {
         result.position = keyframes.back().position;
         result.rotation = keyframes.back().rotation;
@@ -50,13 +41,16 @@ TransformComponent AnimationClip::Sample(float time) const {
     const auto& kf0 = *(it - 1);
     const auto& kf1 = *it;
 
-    const float segmentDuration = kf1.time - kf0.time;
-    const float rawFactor =
+    const double segmentDuration = kf1.time - kf0.time;
+    const double rawFactor =
         (segmentDuration > 0.0001f) ? (clampedTime - kf0.time) / segmentDuration : 0.0f;
-    const float factor = std::clamp(rawFactor, 0.0f, 1.0f);
+    const double factor = std::clamp(rawFactor, 0.0, 1.0);
 
     result.position = kf0.position + (kf1.position - kf0.position) * factor;
-    result.rotation = kf0.rotation + (kf1.rotation - kf0.rotation) * factor;
+    const auto rotation = BlendAnimationValue(
+        AnimationProperty::Rotation, {kf0.rotation.x, kf0.rotation.y, kf0.rotation.z, 0},
+        {kf1.rotation.x, kf1.rotation.y, kf1.rotation.z, 0}, factor);
+    result.rotation = {rotation[0], rotation[1], rotation[2]};
     result.scale = kf0.scale + (kf1.scale - kf0.scale) * factor;
     return result;
 }
@@ -69,7 +63,7 @@ void AnimationEngine::Shutdown() {
     Log::Info("AnimationEngine shutdown.");
 }
 
-void AnimationEngine::UpdateClip(const AnimationClip& clip, float& currentTime, float dt,
+void AnimationEngine::UpdateClip(const AnimationClip& clip, double& currentTime, double dt,
                                  TransformComponent& outTransform) {
     if (!std::isfinite(currentTime))
         currentTime = 0.0f;
@@ -87,7 +81,7 @@ void AnimationClip::AddKeyframe(const Keyframe& kf) {
     if (!std::isfinite(kf.time) || kf.time < 0.0f)
         throw std::invalid_argument("Invalid keyframe time");
     auto it = std::lower_bound(keyframes.begin(), keyframes.end(), kf.time,
-                               [](const Keyframe& k, float time) { return k.time < time; });
+                               [](const Keyframe& k, double time) { return k.time < time; });
     if (it != keyframes.end() && it->time == kf.time)
         *it = kf;
     else

@@ -1,5 +1,6 @@
 #include <LuxEditor/App/EditorWindow.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
+#include <LuxEditor/Scripting/ScriptWorkspace.hpp>
 #include <LuxEditor/Ui/IconFactory.hpp>
 #include <LuxEditor/Viewport/SceneViewport2D.hpp>
 #include <LuxEditor/Viewport/SceneViewport3D.hpp>
@@ -24,13 +25,35 @@ void EditorWindow::BuildWorkspaceChrome() {
     workspaceTabs_->setObjectName(LUX_UI_TEXT("workspaceTabs"));
     workspaceTabs_->addTab(MakeEditorIcon(EditorIcon::Mesh), LUX_UI_TEXT("레벨 에디터"));
     workspaceTabs_->addTab(MakeEditorIcon(EditorIcon::Play), LUX_UI_TEXT("애니메이션"));
+    workspaceTabs_->addTab(MakeEditorIcon(EditorIcon::Console), LUX_UI_TEXT("스크립트"));
     workspaceTabs_->setExpanding(false);
     workspaceBar->addWidget(workspaceTabs_);
     auto* mainToolbar = findChild<LuxUI::ToolBar*>(LUX_UI_TEXT("lux-main-toolbar"));
     insertToolBar(mainToolbar, workspaceBar);
     insertToolBarBreak(mainToolbar);
     connect(workspaceTabs_, &LuxUI::TabBar::currentChanged, this,
-            [this](int index) { SetWorkspace(index == 1); });
+            [this](int index) { SetWorkspace(static_cast<Workspace>(index)); });
+    auto* stretch = new LuxUI::Widget(workspaceBar);
+    stretch->setSizePolicy(LuxUI::SizePolicy::Expanding, LuxUI::SizePolicy::Preferred);
+    workspaceBar->addWidget(stretch);
+    // One persistent play strip is shared by level, animation and script documents.
+    for (auto* action :
+         {previewStartAction_, previewPauseAction_, previewStepAction_, previewStopAction_}) {
+        mainToolbar->removeAction(action);
+        workspaceBar->addAction(action);
+    }
+    if (auto* play = workspaceBar->widgetForAction(previewStartAction_))
+        play->setObjectName(LUX_UI_TEXT("playButton"));
+    workspaceBar->addSeparator();
+    projectLabel_ = new LuxUI::Label(LUX_UI_TEXT("프로젝트 없음"), workspaceBar);
+    projectLabel_->setMinimumWidth(0);
+    projectLabel_->setMaximumWidth(220);
+    workspaceBar->addWidget(projectLabel_);
+    auto* commands = new LuxUI::ToolButton(workspaceBar);
+    commands->setIcon(MakeEditorIcon(EditorIcon::Search));
+    commands->setToolTip(LUX_UI_TEXT("명령 검색 (Ctrl+P)"));
+    connect(commands, &LuxUI::ToolButton::clicked, this, [this] { OpenCommandPalette(); });
+    workspaceBar->addWidget(commands);
 
     // Animation is a document workspace, not a small console tab competing with the viewport.
     removeDockWidget(animationDock_);
@@ -38,6 +61,8 @@ void EditorWindow::BuildWorkspaceChrome() {
     animationDock_->setTitleBarWidget(new LuxUI::Widget(animationDock_));
     workspaceStack_->addWidget(animationDock_);
     animationDock_->hide();
+    scriptWorkspace_ = new ScriptWorkspace(workspaceStack_);
+    workspaceStack_->addWidget(scriptWorkspace_);
 
     auto* detailsLayout = qobject_cast<LuxUI::VBoxLayout*>(inspectorBody_->layout());
     const auto groups = inspectorBody_->findChildren<LuxUI::GroupBox*>(
@@ -129,34 +154,69 @@ void EditorWindow::BuildWorkspaceChrome() {
 }
 
 void EditorWindow::SetWorkspace(bool animation) {
-    if (!workspaceStack_ || !animationDock_)
+    SetWorkspace(animation ? Workspace::Animation : Workspace::Level);
+}
+
+void EditorWindow::SetWorkspace(Workspace workspace) {
+    if (!workspaceStack_ || !animationDock_ || !scriptWorkspace_)
         return;
+    const int target = static_cast<int>(workspace);
     const LuxUI::SignalBlocker blocker(workspaceTabs_);
-    workspaceTabs_->setCurrentIndex(animation ? 1 : 0);
-    if ((workspaceStack_->currentIndex() == 1) == animation)
+    workspaceTabs_->setCurrentIndex(target);
+    const int previous = workspaceStack_->currentIndex();
+    if (previous == target)
         return;
+    const bool level = workspace == Workspace::Level;
+    for (auto* action : toolActions_)
+        action->setEnabled(level);
+    for (const auto* id :
+         {"addEntity", "addMeshEntity", "addTilemap", "deleteEntity", "saveSceneAs"})
+        if (auto* action = findChild<LuxUI::Action*>(LuxUI::String::fromLatin1(id)))
+            action->setEnabled(level);
+    if (undoAction_)
+        undoAction_->setEnabled(level ? undo_->canUndo() : workspace == Workspace::Script);
+    if (redoAction_)
+        redoAction_->setEnabled(level ? undo_->canRedo() : workspace == Workspace::Script);
     CancelViewportEdit();
     canvas_->CancelInteraction();
     canvas3D_->CancelInteraction();
-    if (animation) {
+    StopAnimationPlayback();
+    if (previous == 0)
+        levelLayout_ = saveState(6);
+    if (workspace != Workspace::Level) {
         if (modelingDock_)
             modelingDock_->hide();
-        levelLayout_ = saveState(5);
         if (auto* toolbar = findChild<LuxUI::ToolBar*>(LUX_UI_TEXT("lux-main-toolbar")))
             toolbar->hide();
         for (auto* dock : docks_)
             dock->hide();
-        workspaceStack_->setCurrentWidget(animationDock_);
-        animationDock_->show();
+        if (profilerDock_)
+            profilerDock_->hide();
+        workspaceStack_->setCurrentIndex(target);
+        if (workspace == Workspace::Animation)
+            animationDock_->show();
+        else {
+            scriptWorkspace_->SetProjectRoot(project_ ? project_->GetFile().parent_path()
+                                                      : std::filesystem::path{});
+            scriptWorkspace_->SetExecutionActive(previewActive_ || buildProcess_);
+        }
     } else {
-        StopAnimationPlayback();
         workspaceStack_->setCurrentIndex(0);
         if (!levelLayout_.isEmpty())
-            restoreState(levelLayout_, 5);
+            restoreState(levelLayout_, 6);
         levelLayout_.clear();
         if (auto* toolbar = findChild<LuxUI::ToolBar*>(LUX_UI_TEXT("lux-main-toolbar")))
             toolbar->show();
     }
+}
+
+void EditorWindow::OpenScriptFile(const std::filesystem::path& path, int line, int column) {
+    std::string error;
+    if (!scriptWorkspace_->OpenFile(path, error, line, column)) {
+        ShowError(LUX_UI_TEXT("스크립트 열기"), LuxUI::String::fromUtf8(error));
+        return;
+    }
+    SetWorkspace(Workspace::Script);
 }
 
 void EditorWindow::ToggleDrawer(size_t index) {

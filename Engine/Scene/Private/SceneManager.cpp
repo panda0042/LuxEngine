@@ -169,21 +169,28 @@ void RemapReference(SceneReferenceComponent& reference, const IdMap& mapping) {
 SceneSettings InheritedSettings(const SceneSettings& current, const SceneSettings& previous,
                                 const SceneSettings& source) {
     auto result = current;
-    float* fields[]{&result.clearColor.x, &result.clearColor.y, &result.clearColor.z,
-                    &result.clearColor.w, &result.exposure,     &result.gravity.x,
-                    &result.gravity.y,    &result.gravity3D.x,  &result.gravity3D.y,
-                    &result.gravity3D.z,  &result.fixedStep};
-    const float before[]{previous.clearColor.x, previous.clearColor.y, previous.clearColor.z,
-                         previous.clearColor.w, previous.exposure,     previous.gravity.x,
-                         previous.gravity.y,    previous.gravity3D.x,  previous.gravity3D.y,
-                         previous.gravity3D.z,  previous.fixedStep};
-    const float after[]{source.clearColor.x, source.clearColor.y, source.clearColor.z,
-                        source.clearColor.w, source.exposure,     source.gravity.x,
-                        source.gravity.y,    source.gravity3D.x,  source.gravity3D.y,
-                        source.gravity3D.z,  source.fixedStep};
-    for (size_t index = 0; index < std::size(fields); ++index)
-        if (*fields[index] == before[index])
-            *fields[index] = after[index];
+    if (result.clearColor.x == previous.clearColor.x)
+        result.clearColor.x = source.clearColor.x;
+    if (result.clearColor.y == previous.clearColor.y)
+        result.clearColor.y = source.clearColor.y;
+    if (result.clearColor.z == previous.clearColor.z)
+        result.clearColor.z = source.clearColor.z;
+    if (result.clearColor.w == previous.clearColor.w)
+        result.clearColor.w = source.clearColor.w;
+    if (result.exposure == previous.exposure)
+        result.exposure = source.exposure;
+    if (result.gravity.x == previous.gravity.x)
+        result.gravity.x = source.gravity.x;
+    if (result.gravity.y == previous.gravity.y)
+        result.gravity.y = source.gravity.y;
+    if (result.gravity3D.x == previous.gravity3D.x)
+        result.gravity3D.x = source.gravity3D.x;
+    if (result.gravity3D.y == previous.gravity3D.y)
+        result.gravity3D.y = source.gravity3D.y;
+    if (result.gravity3D.z == previous.gravity3D.z)
+        result.gravity3D.z = source.gravity3D.z;
+    if (result.fixedStep == previous.fixedStep)
+        result.fixedStep = source.fixedStep;
     if (result.overrideGravity == previous.overrideGravity)
         result.overrideGravity = source.overrideGravity;
     if (result.physicsSubsteps == previous.physicsSubsteps)
@@ -250,6 +257,28 @@ void RewritePaths(Scene& scene, const fs::path& owner, const fs::path* destinati
             throw std::runtime_error("Invalid rebased environment path");
     }
     for (auto entity : scene.GetEntities()) {
+        auto rebaseAnimationAsset = [&](std::string& resource) {
+            if (resource.empty())
+                return;
+            const auto absolute = Canonical(Path(resource), owner);
+            const auto relative =
+                destination ? absolute.lexically_relative(destination->parent_path()) : fs::path{};
+            resource = Utf8(destination && !relative.empty() ? relative : absolute);
+        };
+        if (auto* animation = entity.TryGetComponent<AnimationComponent>()) {
+            rebaseAnimationAsset(animation->assetPath);
+            rebaseAnimationAsset(animation->clip.modelPath);
+            rebaseAnimationAsset(animation->clip.spriteSheet);
+            animation->loadedPath.clear();
+            animation->asset.reset();
+        }
+        if (auto* animation = entity.TryGetComponent<AnimatorComponent>()) {
+            rebaseAnimationAsset(animation->controllerPath);
+            animation->loadedPath.clear();
+            animation->player.reset();
+        }
+        if (auto* sprite = entity.TryGetComponent<SpriteRendererComponent>())
+            rebaseAnimationAsset(sprite->texturePath);
         if (auto* animation = entity.TryGetComponent<ModelAnimationComponent>()) {
             const auto absolute = Canonical(Path(animation->modelPath), owner);
             const auto relative =

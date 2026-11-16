@@ -2,6 +2,9 @@
 // clang-format off
 #include <Jolt/Jolt.h>
 // clang-format on
+#ifndef JPH_DOUBLE_PRECISION
+#error "LuxEngine requires Jolt built with DOUBLE_PRECISION=ON"
+#endif
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/TempAllocator.h>
@@ -78,7 +81,7 @@ bool Same(Vec3 a, Vec3 b) {
 }
 
 JPH::Vec3 Vector(Vec3 v) {
-    return {v.x, v.y, v.z};
+    return {static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)};
 }
 
 Vec3 Vector(JPH::Vec3Arg v) {
@@ -163,8 +166,8 @@ struct PhysicsWorld::Impl final : JPH::ContactListener {
         event.entityB = static_cast<uint32>(b.GetUserData());
         event.normal = Vector(manifold.mWorldSpaceNormal);
         const auto point = manifold.GetWorldSpaceContactPointOn1(0);
-        event.point = {static_cast<float>(point.GetX()), static_cast<float>(point.GetY()),
-                       static_cast<float>(point.GetZ())};
+        event.point = {static_cast<double>(point.GetX()), static_cast<double>(point.GetY()),
+                       static_cast<double>(point.GetZ())};
         event.isTrigger = a.IsSensor() || b.IsSensor();
         contacts.push_back(event);
         if (added)
@@ -195,7 +198,7 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input) {
     bool valid = true;
     for (auto description : input) {
         const auto id = description.entity;
-        if (!id || active.contains(id) || !Valid(description.position) ||
+        if (!id || active.contains(id) || !Valid(description.position, 1e15) ||
             !Valid(description.rotation) || !Valid(description.velocity) ||
             !Valid(description.size, 10000) || !Valid(description.offset) ||
             description.size.x < .02f || description.size.y < .02f || description.size.z < .02f ||
@@ -299,8 +302,8 @@ void PhysicsWorld::Step(double dt, Vec3 gravity) {
     const auto& bodies = impl_->system.GetBodyInterface();
     for (auto& [id, entry] : impl_->entries) {
         const auto p = bodies.GetPosition(entry.body);
-        entry.state = {{static_cast<float>(p.GetX()), static_cast<float>(p.GetY()),
-                        static_cast<float>(p.GetZ())},
+        entry.state = {{static_cast<double>(p.GetX()), static_cast<double>(p.GetY()),
+                        static_cast<double>(p.GetZ())},
                        Vector(bodies.GetRotation(entry.body).GetEulerAngles()),
                        Vector(bodies.GetLinearVelocity(entry.body)),
                        false};

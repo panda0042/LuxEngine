@@ -2,6 +2,7 @@
 #include <LuxEngine/Scene/Scene.hpp>
 #include <LuxEngine/Scripting/ScriptRuntime.hpp>
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -137,6 +138,44 @@ int main(int argc, char** argv) {
         Check(!SerializeScriptFields({{"bad", std::numeric_limits<float>::infinity()}},
                                      invalidOutput),
               "Non-finite authored value was accepted");
+        {
+            const auto root = std::filesystem::temp_directory_path() / "lux-animation-script-tests";
+            std::filesystem::create_directories(root);
+            std::string error;
+            AnimationClip clip;
+            clip.events = {{.1, "step", "right"}};
+            const auto clipPath = (root / "move.luxanim").string();
+            Check(clip.Save(clipPath, error), error.c_str());
+            AnimatorController controller;
+            controller.parameters = {{"speed", AnimationParameterType::Float, 0},
+                                     {"jump", AnimationParameterType::Trigger, 0}};
+            AnimatorLayer layer;
+            layer.entry = "Idle";
+            layer.states = {{"Idle", clipPath, 1}, {"Run", clipPath, 1}};
+            layer.transitions = {{"Idle", "Run", 0, -1, {{"jump", AnimationComparison::Set, 0}}}};
+            controller.layers = {layer};
+            const auto controllerPath = (root / "move.luxanimator").string();
+            Check(controller.Save(controllerPath, error), error.c_str());
+            Scene animated;
+            auto character = animated.CreateEntity("C# animation");
+            character.GetComponent<TransformComponent>().position.x = 1e12 + .125;
+            character.AddComponent<AnimatorComponent>().controllerPath = controllerPath;
+            character.AddComponent<ScriptComponent>() = {"ScriptTests.AnimationDriver", true};
+            CheckRuntime(runtime.Initialize(animated, config), runtime);
+            CheckRuntime(runtime.Update(0), runtime);
+            Check(character.GetComponent<TransformComponent>().position.x == 1e12 + .25,
+                  "Managed double transform roundtrip");
+            animated.OnUpdate(.2);
+            CheckRuntime(runtime.Update(0), runtime);
+            const auto& animator = character.GetComponent<AnimatorComponent>();
+            Check(animator.player && animator.player->GetState() == "Run" &&
+                      animator.player->GetParameter("speed") == 2,
+                  "Managed Animator controls state and parameters");
+            Check(character.GetComponent<TransformComponent>().scale.z == 2,
+                  "Managed animation event callback");
+            runtime.Shutdown();
+            std::filesystem::remove_all(root);
+        }
         config.assemblyPath += ".missing";
         Check(!runtime.Initialize(scene, config), "Missing assembly was accepted");
         std::cout

@@ -10,6 +10,7 @@ lux_engine_module(Assets
         Private/BasicModelLibrary.cpp
         Private/FbxImporter.cpp
         Private/ModelAsset.cpp
+        Private/ModelPoseMixer.cpp
         Private/FbxModelImporter.cpp
 )
 target_include_directories(LuxModuleAssets SYSTEM PRIVATE "${stb_SOURCE_DIR}")

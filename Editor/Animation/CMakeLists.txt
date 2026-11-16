@@ -1,4 +1,6 @@
 target_sources(LuxEditorUi PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/Private/LuxEditor/Animation/AnimationAssetDocument.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Private/LuxEditor/Animation/AnimationAssetEditor.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Private/LuxEditor/Animation/AnimationTimeline.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Private/LuxEditor/Animation/AnimationWorkspace.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Private/LuxEditor/Animation/ModelAnimationWorkspace.cpp"
@@ -23,4 +25,13 @@ if(LUX_BUILD_TESTS)
     add_test(NAME Editor_animation_timeline COMMAND LuxAnimationTimelineTests)
     set_tests_properties(Editor_animation_timeline PROPERTIES
         LABELS "headless;editor;animation" TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+if(LUX_BUILD_TESTS)
+    add_executable(LuxAnimationAssetEditorTests "${CMAKE_CURRENT_SOURCE_DIR}/../Tests/AnimationAssetEditorTest.cpp")
+    target_link_libraries(LuxAnimationAssetEditorTests PRIVATE LuxEditorUi)
+    target_include_directories(LuxAnimationAssetEditorTests PRIVATE ${LUX_EDITOR_PRIVATE_INCLUDE_DIRS})
+    add_test(NAME Editor_animation_assets COMMAND LuxAnimationAssetEditorTests)
+    set_tests_properties(Editor_animation_assets PROPERTIES LABELS "headless;editor;animation" TIMEOUT 30
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LUX_EDITOR_SOFTWARE_VIEWPORT=1")
 endif()

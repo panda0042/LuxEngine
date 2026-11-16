@@ -144,8 +144,8 @@ bool GameViewport::event(LuxUI::Event* event) {
 void GameViewport::mousePressEvent(LuxUI::MouseEvent* event) {
     setFocus(LuxUI::Flags::MouseFocusReason);
     if (GetScene() && inputEnabled_ && !paused_) {
-        LuxEngine::Input::SetExternalMousePosition(static_cast<float>(event->position().x()),
-                                                   static_cast<float>(event->position().y()));
+        LuxEngine::Input::SetExternalMousePosition(static_cast<double>(event->position().x()),
+                                                   static_cast<double>(event->position().y()));
         if (const auto button = MouseButton(event->button()))
             LuxEngine::Input::SetExternalMouseButton(*button, true);
     }
@@ -162,8 +162,8 @@ void GameViewport::mouseReleaseEvent(LuxUI::MouseEvent* event) {
 
 void GameViewport::mouseMoveEvent(LuxUI::MouseEvent* event) {
     if (GetScene() && inputEnabled_ && !paused_ && hasFocus())
-        LuxEngine::Input::SetExternalMousePosition(static_cast<float>(event->position().x()),
-                                                   static_cast<float>(event->position().y()));
+        LuxEngine::Input::SetExternalMousePosition(static_cast<double>(event->position().x()),
+                                                   static_cast<double>(event->position().y()));
     event->accept();
 }
 
@@ -204,7 +204,7 @@ void GameViewport::PaintSoftware(LuxUI::Painter& painter, LuxEngine::Scene& scen
         struct Face {
             LuxUI::PolygonF points;
             LuxUI::Color color;
-            float depth;
+            double depth;
         };
 
         std::vector<Face> faces;
