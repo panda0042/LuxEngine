@@ -1,6 +1,7 @@
 #include <LuxEditor/Project/EditorProject.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
 #include <LuxEditor/Scene/SceneDependencies.hpp>
+#include <LuxEngine/Animation/Animator.hpp>
 #include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/Environment/EnvironmentMap.hpp>
@@ -143,6 +144,65 @@ private:
         return *models_.emplace(file, std::move(model)).first->second;
     }
 
+    void ValidateImage(const std::string& resource, const fs::path& owner) {
+        if (resource.empty())
+            return;
+        const auto file = ResolveModel(resource, owner);
+        if (textureFiles_.insert(file).second) {
+            Charge(fs::file_size(file));
+            int width = 0, height = 0;
+            std::vector<LuxEngine::uint8> pixels;
+            if (!LuxEngine::AssetManager::DecodeTextureCpu(GenericPathUtf8(file), width, height,
+                                                           pixels))
+                throw std::runtime_error("이미지 자산을 읽지 못했습니다: " + resource);
+        }
+    }
+
+    void ValidateClipData(const LuxEngine::AnimationClip& clip, const fs::path& owner) {
+        ValidateImage(clip.spriteSheet, owner);
+        if (!clip.modelPath.empty()) {
+            const auto& model = LoadModel(ResolveModel(clip.modelPath, owner));
+            if (clip.modelClip < -1 ||
+                (clip.modelClip >= 0 && size_t(clip.modelClip) >= model.animations.size()))
+                throw std::runtime_error("애니메이션의 FBX 클립 번호가 올바르지 않습니다.");
+        }
+    }
+
+    void ValidateClip(const std::string& resource, const fs::path& owner) {
+        if (resource.empty())
+            return;
+        const auto file = ResolveModel(resource, owner);
+        if (!clips_.insert(file).second)
+            return;
+        Read(file);
+        std::string error;
+        auto clip = LuxEngine::AnimationClip::Load(GenericPathUtf8(file), error);
+        if (!clip)
+            throw std::runtime_error("애니메이션 클립을 읽지 못했습니다: " + error);
+        ValidateClipData(*clip, file);
+    }
+
+    void ValidateController(const std::string& resource, const fs::path& owner) {
+        if (resource.empty())
+            return;
+        const auto file = ResolveModel(resource, owner);
+        if (!controllers_.insert(file).second)
+            return;
+        Read(file);
+        std::string error;
+        auto controller = LuxEngine::AnimatorController::Load(GenericPathUtf8(file), error);
+        if (!controller)
+            throw std::runtime_error("Animator를 읽지 못했습니다: " + error);
+        for (const auto& layer : controller->layers)
+            for (const auto& state : layer.states) {
+                ValidateClip(state.clip, file);
+                for (const auto& point : state.blendTree)
+                    ValidateClip(point.clip, file);
+            }
+    }
+
+    std::set<fs::path> clips_, controllers_;
+
     void Inspect(LuxEngine::Scene& scene, const fs::path& owner, size_t depth) {
         CheckDepth(depth);
         const auto& environment = scene.GetSettings().render3D.environmentPath;
@@ -164,6 +224,14 @@ private:
             }
         }
         for (const auto& entity : scene.GetEntities()) {
+            if (const auto* sprite = entity.TryGetComponent<LuxEngine::SpriteRendererComponent>())
+                ValidateImage(sprite->texturePath, owner);
+            if (const auto* animation = entity.TryGetComponent<LuxEngine::AnimationComponent>()) {
+                ValidateClip(animation->assetPath, owner);
+                ValidateClipData(animation->clip, owner);
+            }
+            if (const auto* animator = entity.TryGetComponent<LuxEngine::AnimatorComponent>())
+                ValidateController(animator->controllerPath, owner);
             if (const auto* mesh = entity.TryGetComponent<LuxEngine::MeshRendererComponent>();
                 mesh && !mesh->meshPath.empty()) {
                 const auto file = ResolveModel(mesh->meshPath, owner);

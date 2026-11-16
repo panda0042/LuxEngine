@@ -5,13 +5,6 @@
 
 namespace LuxEditor {
 void EditorWindow::ApplyTheme() {
-    auto* fusion = findChild<LuxUI::Style*>(LUX_UI_TEXT("editorFusionStyle"));
-    if (!fusion) {
-        fusion = LuxUI::StyleFactory::create(LUX_UI_TEXT("Fusion"));
-        fusion->setObjectName(LUX_UI_TEXT("editorFusionStyle"));
-        fusion->setParent(this);
-    }
-    setStyle(fusion);
     LuxUI::Font font = LuxUI::Application::font();
     font.setPointSizeF(9.0 * uiScale_);
     setFont(font);

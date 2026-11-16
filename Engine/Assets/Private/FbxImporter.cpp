@@ -172,10 +172,10 @@ bool AppendNode(const ufbx_node& node, RawMeshData& result, bool& allUvs, std::s
                                {static_cast<double>(position.x), static_cast<double>(position.y),
                                 static_cast<double>(position.z)});
         result.normals.insert(result.normals.end(),
-                              {static_cast<double>(normal.x), static_cast<double>(normal.y),
-                               static_cast<double>(normal.z)});
+                              {static_cast<float>(normal.x), static_cast<float>(normal.y),
+                               static_cast<float>(normal.z)});
         result.texCoords.insert(result.texCoords.end(),
-                                {static_cast<double>(uv.x), static_cast<double>(textureV)});
+                                {static_cast<float>(uv.x), static_cast<float>(textureV)});
         vertices.emplace(corner, target);
         return true;
     };

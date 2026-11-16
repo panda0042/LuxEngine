@@ -389,13 +389,15 @@ void EditorWindow::PollSceneLoads() {
                 SwitchSceneDocument(existing);
             continue;
         }
-        StopPreview();
-        EndTimelineEdit();
-        CancelViewportEdit();
+        const bool foreground = document_.GetActiveTabId() == request.origin &&
+                                !LuxUI::Application::activeModalWidget();
+        if (foreground) {
+            StopPreview();
+            EndTimelineEdit();
+            CancelViewportEdit();
+        }
         sceneProjects_[document_.GetActiveTabId()] = project_;
         const auto previous = document_.GetActiveTabId();
-        const bool foreground =
-            previous == request.origin && !LuxUI::Application::activeModalWidget();
         const auto id = document_.AdoptTab(PathUtf8(request.path), std::move(result.scene), false,
                                            std::move(warning));
         if (!id) {

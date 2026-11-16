@@ -133,6 +133,19 @@ public static unsafe class NativeBridge {
                 Path.GetFullPath(Encoding.UTF8.GetString(new ReadOnlySpan<byte>(path, length)));
             loader = new ScriptAssembly(assemblyPath);
             Assembly assembly = loader.LoadFromAssemblyPath(assemblyPath);
+            // Only a separately launched debug player opts in; editor PIE must never block its UI.
+            if (Environment.GetEnvironmentVariable("LUX_SCRIPT_DEBUG_WAIT") == "1" &&
+                !System.Diagnostics.Debugger.IsAttached) {
+                Console.WriteLine("LUX_SCRIPT_DEBUG_READY");
+                Console.Out.Flush();
+                var timeout = System.Diagnostics.Stopwatch.StartNew();
+                while (!System.Diagnostics.Debugger.IsAttached) {
+                    if (timeout.Elapsed > TimeSpan.FromSeconds(30))
+                        throw new TimeoutException(
+                            "The script debugger did not attach within 30 seconds.");
+                    System.Threading.Thread.Sleep(20);
+                }
+            }
             ulong id = ++nextId;
             worlds.Add(id,
                        new World { NativeId = nativeWorld, Loader = loader, Assembly = assembly });

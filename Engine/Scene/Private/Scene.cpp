@@ -1097,6 +1097,7 @@ bool Scene::DeserializeStream(std::istream& in) {
                     in.setstate(std::ios::failbit);
             });
             load.operator()<CameraComponent>([&](auto& c) {
+                c.farClip = 1000.0;
                 in >> c.isPrimary >> c.isPerspective >> c.fov >> c.orthoSize;
                 if (!Finite(c.fov) || c.fov <= 0.0f || c.fov >= 180.0f || !Finite(c.orthoSize) ||
                     c.orthoSize <= 0.0f)

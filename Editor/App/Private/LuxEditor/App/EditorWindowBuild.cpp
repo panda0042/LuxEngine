@@ -61,7 +61,8 @@ void EditorWindow::StartBuild(BuildConfiguration configuration, bool clean,
         ShowError(LUX_UI_TEXT("빌드"), LUX_UI_TEXT("열려 있는 프로젝트가 없습니다."));
         return;
     }
-    if (buildProcess_ || scriptWorkspace_->IsBuilding() || previewActive_) {
+    if (buildProcess_ || scriptWorkspace_->IsBuilding() || scriptWorkspace_->IsDebugging() ||
+        previewActive_) {
         Log(LUX_UI_TEXT("실행 또는 다른 빌드가 진행 중입니다."), true);
         return;
     }

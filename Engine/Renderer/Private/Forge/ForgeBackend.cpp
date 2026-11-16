@@ -8,6 +8,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -606,8 +607,10 @@ public:
         lighting.camera = {};
         backend_->SetLighting(lighting);
         Copy4(scene.camera, {0, 0, 0, exposure});
-        Copy4(scene.environment, {settings.environmentColor.x, settings.environmentColor.y,
-                                  settings.environmentColor.z, settings.environmentIntensity});
+        Copy4(scene.environment,
+              {static_cast<float>(settings.environmentColor.x),
+               static_cast<float>(settings.environmentColor.y),
+               static_cast<float>(settings.environmentColor.z), settings.environmentIntensity});
         scene.options[0] = settings.environmentRotation * std::numbers::pi_v<float> / 180;
         scene.options[1] = settings.imageBasedLighting && active ? 1.f : 0.f;
         scene.options[2] = settings.toneMapping ? 1.f : 0.f;

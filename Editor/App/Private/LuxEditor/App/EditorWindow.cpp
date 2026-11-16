@@ -152,6 +152,7 @@ EditorWindow::~EditorWindow() {
     sceneStreamingTimer_.stop();
     StopPreview();
     StopSceneWindow();
+    scriptWorkspace_->StopDebugger();
     CancelBuild();
     pendingSceneLoads_.clear();
     undo_->clear();
@@ -169,6 +170,13 @@ EditorWindow::~EditorWindow() {
         removeDockWidget(dock);
         delete dock;
     }
+}
+
+AnimationAssetEditor* EditorWindow::ActiveAnimationAssetEditor() const {
+    if (!workspaceStack_ || workspaceStack_->currentIndex() != 1)
+        return nullptr;
+    auto* tabs = findChild<LuxUI::TabWidget*>(LUX_UI_TEXT("animationDocuments"));
+    return tabs ? dynamic_cast<AnimationAssetEditor*>(tabs->currentWidget()) : nullptr;
 }
 
 void EditorWindow::BuildMenus() {
@@ -224,13 +232,20 @@ void EditorWindow::BuildMenus() {
                 OpenProjectScene(PathFromUtf8(Utf8(file)));
         });
     add(file, LUX_UI_TEXT("저장"), LUX_UI_TEXT("saveScene"), LuxUI::KeySequence::Save, [this] {
-        if (workspaceStack_->currentIndex() == 2)
+        if (auto* asset = ActiveAnimationAssetEditor())
+            asset->SaveCurrent();
+        else if (workspaceStack_->currentIndex() == 2)
             scriptWorkspace_->SaveAll();
         else
             SaveScene(false);
     });
     add(file, LUX_UI_TEXT("다른 이름으로 저장..."), LUX_UI_TEXT("saveSceneAs"),
-        LuxUI::KeySequence::SaveAs, [this] { SaveScene(true); });
+        LuxUI::KeySequence::SaveAs, [this] {
+            if (auto* asset = ActiveAnimationAssetEditor())
+                asset->SaveCurrent(true);
+            else
+                SaveScene(true);
+        });
     file->addSeparator();
     add(file, LUX_UI_TEXT("끝내기"), LUX_UI_TEXT("quit"), LuxUI::KeySequence::Quit,
         [this] { close(); });
@@ -238,7 +253,9 @@ void EditorWindow::BuildMenus() {
     LuxUI::Menu* edit = menuBar()->addMenu(LUX_UI_TEXT("편집"));
     undoAction_ = add(edit, LUX_UI_TEXT("실행 취소"), LUX_UI_TEXT("undoEdit"),
                       LuxUI::KeySequence::Undo, [this] {
-                          if (workspaceStack_->currentIndex() == 2) {
+                          if (auto* asset = ActiveAnimationAssetEditor())
+                              asset->UndoEdit();
+                          else if (workspaceStack_->currentIndex() == 2) {
                               if (auto* editor = scriptWorkspace_->CurrentEditor())
                                   editor->undo();
                           } else if (!viewportEditBefore_.isEmpty())
@@ -248,7 +265,9 @@ void EditorWindow::BuildMenus() {
                       });
     redoAction_ = add(edit, LUX_UI_TEXT("다시 실행"), LUX_UI_TEXT("redoEdit"),
                       LuxUI::KeySequence::Redo, [this] {
-                          if (workspaceStack_->currentIndex() == 2) {
+                          if (auto* asset = ActiveAnimationAssetEditor())
+                              asset->RedoEdit();
+                          else if (workspaceStack_->currentIndex() == 2) {
                               if (auto* editor = scriptWorkspace_->CurrentEditor())
                                   editor->redo();
                           } else if (!viewportEditBefore_.isEmpty())
@@ -868,8 +887,11 @@ void EditorWindow::RefreshInspector() {
     selectionLabel_->setToolTip(
         LUX_UI_TEXT("표시 값은 활성 오브젝트 기준입니다. Transform 필드를 변경하면 선택된 "
                     "오브젝트에 함께 적용합니다."));
-    animationPanel_->setEnabled(
-        selected && selected.HasComponent<LuxEngine::TransformComponent>() && !previewActive_);
+    // Only the legacy scene clip requires an authoring selection. Asset editing is independent.
+    if (auto* legacy =
+            animationPanel_->findChild<LuxUI::Widget*>(LUX_UI_TEXT("animationWorkspace")))
+        legacy->setEnabled(selected && selected.HasComponent<LuxEngine::TransformComponent>() &&
+                           !previewActive_);
     animationTarget_->setText(selected ? LUX_UI_TEXT("대상 · 엔티티 #%1").arg(selected.GetId())
                                        : LUX_UI_TEXT("대상 없음"));
     inspectorBody_->setVisible(static_cast<bool>(selected));
@@ -1035,11 +1057,15 @@ void EditorWindow::UpdateChrome() {
         gameCanvas_->RefreshScene();
     RefreshModelingWorkspace();
     if (undoAction_)
-        undoAction_->setEnabled(workspaceStack_->currentIndex() == 2 ||
-                                !viewportEditBefore_.isEmpty() || undo_->canUndo());
+        undoAction_->setEnabled(ActiveAnimationAssetEditor()
+                                    ? ActiveAnimationAssetEditor()->Document().CanUndo()
+                                    : workspaceStack_->currentIndex() == 2 ||
+                                          !viewportEditBefore_.isEmpty() || undo_->canUndo());
     if (redoAction_)
-        redoAction_->setEnabled(workspaceStack_->currentIndex() == 2 ||
-                                !viewportEditBefore_.isEmpty() || undo_->canRedo());
+        redoAction_->setEnabled(ActiveAnimationAssetEditor()
+                                    ? ActiveAnimationAssetEditor()->Document().CanRedo()
+                                    : workspaceStack_->currentIndex() == 2 ||
+                                          !viewportEditBefore_.isEmpty() || undo_->canRedo());
     const LuxUI::String name = document_.GetPath().empty()
                                    ? LUX_UI_TEXT("새 장면")
                                    : LuxUI::FileInfo(Q(document_.GetPath())).fileName();
@@ -1336,7 +1362,7 @@ void EditorWindow::OnPhysicsChanged(const LuxUI::Widget* field) {
 }
 
 void EditorWindow::StartPreview() {
-    if (scriptWorkspace_->IsBuilding() || buildProcess_) {
+    if (scriptWorkspace_->IsBuilding() || scriptWorkspace_->IsDebugging() || buildProcess_) {
         Log(LUX_UI_TEXT("빌드가 끝난 뒤 실행해 주세요."), true);
         return;
     }
@@ -1608,7 +1634,17 @@ void EditorWindow::CopyEntity() {
     LuxEngine::Entity selected = document_.GetSelected();
     if (!selected)
         return;
-    if (selected.HasComponent<LuxEngine::ScriptComponent>() ||
+    const auto* sprite = selected.TryGetComponent<LuxEngine::SpriteRendererComponent>();
+    const auto* camera = selected.TryGetComponent<LuxEngine::CameraComponent>();
+    const auto* animation = selected.TryGetComponent<LuxEngine::AnimationComponent>();
+    if ((sprite && (!sprite->texturePath.empty() || sprite->frame || sprite->columns != 1 ||
+                    sprite->rows != 1)) ||
+        (camera && (camera->nearClip != .1f || camera->farClip != 1000000.0)) ||
+        (animation && (!animation->assetPath.empty() || !animation->clip.modelPath.empty() ||
+                       !animation->clip.spriteSheet.empty() || animation->rootMotion)) ||
+        selected.HasComponent<LuxEngine::AnimatorComponent>() ||
+        selected.HasComponent<LuxEngine::ModelAnimationComponent>() ||
+        selected.HasComponent<LuxEngine::ScriptComponent>() ||
         document_.GetScene().GetParent(selected.GetId()) ||
         !document_.GetScene().GetChildren(selected.GetId()).empty() ||
         selected.HasComponent<LuxEngine::SceneReferenceComponent>() ||
@@ -1624,6 +1660,23 @@ void EditorWindow::CopyEntity() {
                       &mesh->material.roughnessTexture, &mesh->material.occlusionTexture})
                     if (!resource->empty())
                         *resource = document_.GetScene().ResolveAssetPath(*resource);
+        for (auto entity : subtree.GetEntities()) {
+            auto resolve = [&](std::string& path) {
+                if (!path.empty())
+                    path = document_.GetScene().ResolveAssetPath(path);
+            };
+            if (auto* value = entity.TryGetComponent<LuxEngine::SpriteRendererComponent>())
+                resolve(value->texturePath);
+            if (auto* value = entity.TryGetComponent<LuxEngine::AnimatorComponent>())
+                resolve(value->controllerPath);
+            if (auto* value = entity.TryGetComponent<LuxEngine::ModelAnimationComponent>())
+                resolve(value->modelPath);
+            if (auto* value = entity.TryGetComponent<LuxEngine::AnimationComponent>()) {
+                resolve(value->assetPath);
+                resolve(value->clip.modelPath);
+                resolve(value->clip.spriteSheet);
+            }
+        }
         std::string serialized;
         if (!ids.contains(selected.GetId()) || !subtree.SerializeToString(serialized)) {
             Log(LUX_UI_TEXT("계층을 복사하지 못했습니다."), true);

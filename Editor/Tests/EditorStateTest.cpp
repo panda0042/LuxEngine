@@ -475,14 +475,18 @@ void TestRestoreOpenedProject(LuxUI::Application& app) {
     answer.stop();
     const auto entities = document.GetScene().GetEntities();
     LuxEngine::Scene disk, secondary;
-    Check(discardPrompts == 1 && restorePrompts == 1 && errors == 0 &&
-              document.ListTabs().size() == 1 && !document.IsDirty() && entities.size() == 1 &&
+    Check(discardPrompts == 1 && restorePrompts == 1 && errors == 0,
+          ("backup restore dialog counts: discard=" + std::to_string(discardPrompts) +
+           ", restore=" + std::to_string(restorePrompts) + ", errors=" + std::to_string(errors))
+              .c_str());
+    Check(document.ListTabs().size() == 1 && !document.IsDirty() && entities.size() == 1 &&
               entities.front().GetComponent<LuxEngine::TagComponent>().tag == "Start from backup" &&
-              PathFromUtf8(document.GetPath()) == fixture.project.GetSceneFile() &&
-              disk.Deserialize(PathUtf8(fixture.project.GetSceneFile())) &&
+              PathFromUtf8(document.GetPath()) == fixture.project.GetSceneFile(),
+          "backup restore replaces the live scene after confirmed discard");
+    Check(disk.Deserialize(PathUtf8(fixture.project.GetSceneFile())) &&
               disk.GetEntityCount() == 1 && secondary.Deserialize(PathUtf8(fixture.secondary)) &&
               secondary.GetEntityCount() == 1,
-          "restoring a backup updates both the live start scene and disk after confirmed discard");
+          "backup restore replaces both start and secondary scenes on disk");
     auto* history = window->findChild<LuxUI::UndoStack*>();
     Check(history && history->count() == 0 &&
               window->findChild<LuxUI::Action*>("projectSettings")->isEnabled(),

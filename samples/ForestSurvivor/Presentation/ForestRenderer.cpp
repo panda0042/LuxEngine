@@ -32,9 +32,9 @@ struct Region {
 };
 
 struct Rect {
-    float x = 0, y = 0, width = 0, height = 0;
+    double x = 0, y = 0, width = 0, height = 0;
 
-    bool Contains(float px, float py) const {
+    bool Contains(double px, double py) const {
         return px >= x && py >= y && px < x + width && py < y + height;
     }
 };
@@ -311,11 +311,11 @@ struct ForestRenderer::State {
 
     void NineSlice(int tile, Rect rect, Color tint = White) {
         const auto source = ui.Tile(tile, 13, 32);
-        const float border = std::min({12.0f, rect.width * .25f, rect.height * .25f});
-        const std::array<float, 4> x{rect.x, rect.x + border, rect.x + rect.width - border,
-                                     rect.x + rect.width};
-        const std::array<float, 4> y{rect.y, rect.y + border, rect.y + rect.height - border,
-                                     rect.y + rect.height};
+        const double border = std::min({12.0, rect.width * .25, rect.height * .25});
+        const std::array<double, 4> x{rect.x, rect.x + border, rect.x + rect.width - border,
+                                      rect.x + rect.width};
+        const std::array<double, 4> y{rect.y, rect.y + border, rect.y + rect.height - border,
+                                      rect.y + rect.height};
         const float du = (source.u1 - source.u0) * .25f, dv = (source.v1 - source.v0) * .25f;
         const std::array<float, 4> u{source.u0, source.u0 + du, source.u1 - du, source.u1};
         const std::array<float, 4> v{source.v0, source.v0 + dv, source.v1 - dv, source.v1};
@@ -337,7 +337,8 @@ struct ForestRenderer::State {
         const float offset = hover && pressed ? 3 : 0;
         const Color tint = hover ? Color{1.10f, 1.10f, 1.07f, 1} : White;
         NineSlice(primary ? 0 : 15, {rect.x, rect.y + offset, rect.width, rect.height}, tint);
-        const float labelSize = std::min(30.0f, (rect.width - 24) / font.Width(label, 1));
+        const float labelSize =
+            static_cast<float>(std::min(30.0, (rect.width - 24) / font.Width(label, 1)));
         textLayoutFits = textLayoutFits && labelSize >= 18;
         Center(label, rect.x + rect.width * .5f, rect.y + offset + (rect.height - labelSize) * .5f,
                labelSize, Ink);

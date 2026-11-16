@@ -31,6 +31,7 @@ class GameViewport;
 class DebugPanel;
 class SceneEditCommand;
 class ScriptWorkspace;
+class AnimationAssetEditor;
 struct ModelingMesh;
 struct ModelingSelection;
 
@@ -77,6 +78,7 @@ private:
     void BuildAssetBrowserCommands();
     void ImportAssetsDialog();
     void CreateAssetFolder();
+    AnimationAssetEditor* ActiveAnimationAssetEditor() const;
     void BuildMenus();
     void BuildSceneMenus();
     void RefreshSceneTabs();
@@ -203,6 +205,7 @@ private:
     void TickPreview();
     // Saves the current scene and runs it in a separate LuxPlayer window.
     void RunSceneInWindow();
+    void StartScriptDebug();
     void StopSceneWindow();
     // Builds the open project with CMake (Debug/Release), optionally running or packaging it.
     enum class BuildFollowUp { None, Run, Package };

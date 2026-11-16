@@ -27,13 +27,13 @@ LuxUI::GroupBox* Group(EditorWindow& window, const char* title) {
 }
 
 void CheckTransform(const TransformComponent& actual, const TransformComponent& expected) {
-    const std::array<float, 9> a{actual.position.x, actual.position.y, actual.position.z,
-                                 actual.rotation.x, actual.rotation.y, actual.rotation.z,
-                                 actual.scale.x,    actual.scale.y,    actual.scale.z};
-    const std::array<float, 9> b{expected.position.x, expected.position.y, expected.position.z,
-                                 expected.rotation.x, expected.rotation.y, expected.rotation.z,
-                                 expected.scale.x,    expected.scale.y,    expected.scale.z};
-    Check(a == b, "editing one Transform axis preserves every untouched float exactly");
+    const std::array<double, 9> a{actual.position.x, actual.position.y, actual.position.z,
+                                  actual.rotation.x, actual.rotation.y, actual.rotation.z,
+                                  actual.scale.x,    actual.scale.y,    actual.scale.z};
+    const std::array<double, 9> b{expected.position.x, expected.position.y, expected.position.z,
+                                  expected.rotation.x, expected.rotation.y, expected.rotation.z,
+                                  expected.scale.x,    expected.scale.y,    expected.scale.z};
+    Check(a == b, "editing one Transform axis preserves every untouched coordinate exactly");
 }
 
 void TestFields(LuxUI::Application& app, const LuxUI::String& directory) {

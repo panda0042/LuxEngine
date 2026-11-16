@@ -24,13 +24,16 @@ public:
     bool Undo();
     bool Redo();
     bool Dirty() const;
+    bool CanUndo() const;
+    bool CanRedo() const;
     const std::string& Path() const;
 
 private:
     AnimationAssetState state_;
     std::vector<AnimationAssetState> undo_, redo_;
     std::unique_ptr<AnimationAssetState> before_;
-    std::string path_;
+    std::string path_, disk_;
+    bool hasDisk_ = false;
     size_t revision_ = 0, savedRevision_ = 0, nextRevision_ = 1;
     std::vector<size_t> undoRevisions_, redoRevisions_;
 };

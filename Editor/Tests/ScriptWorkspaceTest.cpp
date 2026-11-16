@@ -31,8 +31,13 @@ int main(int argc, char** argv) {
     try {
         LuxUI::TemporaryDir temporary;
         Check(temporary.isValid(), "Temporary directory unavailable");
-        const auto root =
-            LuxEditor::PathFromUtf8(temporary.path().toUtf8().toStdString()) / "한글 Project";
+        LuxUI::CoreApplication::setOrganizationName(LUX_UI_TEXT("LuxScriptWorkspaceTests"));
+        LuxUI::CoreApplication::setApplicationName(LUX_UI_TEXT("Workspace"));
+        LuxUI::Settings::setDefaultFormat(LuxUI::Settings::IniFormat);
+        LuxUI::Settings::setPath(LuxUI::Settings::IniFormat, LuxUI::Settings::UserScope,
+                                 temporary.path());
+        const auto root = LuxEditor::PathFromUtf8(temporary.path().toUtf8().toStdString()) /
+                          LuxEditor::PathFromUtf8("한글 Project");
         std::string error;
         const auto project = LuxEditor::EditorProject::Create(
             root, "ScriptWorkspace", LuxEditor::ProjectTemplate::Empty, error);
@@ -80,6 +85,29 @@ int main(int argc, char** argv) {
         Check(!workspace.CreateScript("class", error), "Reserved C# keyword was accepted");
         Check(!workspace.CreateScript("../Escape", error), "Invalid class name was accepted");
         editor = workspace.CurrentEditor();
+        editor->SetCleanText(LUX_UI_TEXT("class Test {\n void Method() {\n  Con\n }\n}\n"));
+        editor->GoTo(3, 6);
+        Check(editor->ApplyEdits({{3, 3, 3, 6, LUX_UI_TEXT("Console")},
+                                  {1, 1, 1, 1, LUX_UI_TEXT("using System;\n")}}),
+              "Completion edits were rejected");
+        Check(editor->CurrentLine() == 4 && editor->CurrentWord() == LUX_UI_TEXT("Console"),
+              "Completion moved the caret to an added using directive");
+        editor->undo();
+        Check(!editor->toPlainText().contains(LUX_UI_TEXT("using System")) &&
+                  editor->toPlainText().contains(LUX_UI_TEXT("Con\n")),
+              "Completion was not a single undo step");
+        editor->ToggleBreakpoint(3);
+        editor->GoTo(1, 1);
+        editor->insertPlainText(LUX_UI_TEXT("// inserted line\n"));
+        Check(editor->Breakpoints().size() == 1 && editor->Breakpoints()[0].line == 4,
+              "Breakpoint did not follow source edits");
+        editor->ToggleBreakpoint(4);
+        Check(workspace.ReloadFile(1, error, true), error.c_str());
+        editor->ToggleBreakpoint(6);
+        Check(workspace.ReloadFile(1, error, true), error.c_str());
+        Check(editor->Breakpoints().size() == 1 && editor->Breakpoints()[0].line == 6,
+              "Reload moved a saved breakpoint to the first line");
+        editor->ToggleBreakpoint(6);
         bool findRequested = false, saveRequested = false;
         LuxUI::Object::connect(editor, &LuxUI::CodeEditor::FindRequested,
                                [&] { findRequested = true; });
