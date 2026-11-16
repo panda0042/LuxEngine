@@ -19,6 +19,7 @@
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QCoreApplication>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -129,6 +130,7 @@
 #define LUX_UI_TEXT(text) QStringLiteral(text)
 
 namespace LuxUI {
+using DesktopServices = QDesktopServices;
 using Layout = QLayout;
 using BoxLayout = QBoxLayout;
 namespace Flags = Qt;
