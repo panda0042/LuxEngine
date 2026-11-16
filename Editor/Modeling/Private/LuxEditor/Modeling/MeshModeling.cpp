@@ -76,9 +76,10 @@ Vector Normalize(Vector value) {
 
 Vec3 FloatVector(Vector value) {
     Require(std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z) &&
-                std::abs(value.x) <= 1e9 && std::abs(value.y) <= 1e9 && std::abs(value.z) <= 1e9,
+                std::abs(value.x) <= 1e15 && std::abs(value.y) <= 1e15 && std::abs(value.z) <= 1e15,
             "모델 정점이 유효한 좌표 범위를 벗어났습니다.");
-    return {static_cast<float>(value.x), static_cast<float>(value.y), static_cast<float>(value.z)};
+    return {static_cast<double>(value.x), static_cast<double>(value.y),
+            static_cast<double>(value.z)};
 }
 
 Vector FaceNormal(const ModelingMesh& mesh, uint32 triangle) {
@@ -257,14 +258,14 @@ void RemoveUnusedVertices(ModelingMesh& mesh) {
 }
 
 ModelingMesh Cube() {
-    constexpr std::array<std::array<float, 3>, 8> corners{{{{-.5f, -.5f, -.5f}},
-                                                           {{.5f, -.5f, -.5f}},
-                                                           {{.5f, .5f, -.5f}},
-                                                           {{-.5f, .5f, -.5f}},
-                                                           {{-.5f, -.5f, .5f}},
-                                                           {{.5f, -.5f, .5f}},
-                                                           {{.5f, .5f, .5f}},
-                                                           {{-.5f, .5f, .5f}}}};
+    constexpr std::array<std::array<double, 3>, 8> corners{{{{-.5f, -.5f, -.5f}},
+                                                            {{.5f, -.5f, -.5f}},
+                                                            {{.5f, .5f, -.5f}},
+                                                            {{-.5f, .5f, -.5f}},
+                                                            {{-.5f, -.5f, .5f}},
+                                                            {{.5f, -.5f, .5f}},
+                                                            {{.5f, .5f, .5f}},
+                                                            {{-.5f, .5f, .5f}}}};
     constexpr std::array<uint32, 36> indices{{0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7,
                                               0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
                                               0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2}};
@@ -303,7 +304,7 @@ std::string Obj(const ModelingMesh& mesh) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
     out << "# LuxEditor generated immutable mesh\no LuxGeneratedMesh\n";
-    out << std::setprecision(std::numeric_limits<float>::max_digits10);
+    out << std::setprecision(std::numeric_limits<double>::max_digits10);
     const auto bounded = [&] {
         Require(static_cast<size_t>(out.tellp()) <= MaxFileBytes,
                 "생성한 OBJ 파일이 64 MiB를 초과했습니다.");
@@ -539,7 +540,7 @@ bool TransformModelingVertices(ModelingMesh& mesh, std::span<const uint32> verte
     }
 }
 
-bool ExtrudeModelingFaces(ModelingMesh& mesh, std::span<const uint32> triangles, float distance,
+bool ExtrudeModelingFaces(ModelingMesh& mesh, std::span<const uint32> triangles, double distance,
                           std::string& error) {
     error.clear();
     try {
@@ -627,14 +628,15 @@ bool ExtrudeModelingFaces(ModelingMesh& mesh, std::span<const uint32> triangles,
             const auto a = Point(mesh.vertices[edge.a].position);
             const auto b = Point(mesh.vertices[edge.b].position);
             const auto sideNormal = FloatVector(Normalize(Cross(Subtract(b, a), offset)));
-            const float length = static_cast<float>(std::sqrt(Dot(Subtract(b, a), Subtract(b, a))));
+            const double length =
+                static_cast<double>(std::sqrt(Dot(Subtract(b, a), Subtract(b, a))));
             Vec2 uvA, uvB, uvOffset;
             if (mesh.hasTexCoords) {
                 uvA = mesh.vertices[edge.a].texCoords;
                 uvB = mesh.vertices[edge.b].texCoords;
                 // Extend the edge's existing UV density onto the side. A palette atlas often
                 // uses a single UV for an entire face: its side must sample that same color.
-                const float scale = std::abs(distance) / length;
+                const double scale = std::abs(distance) / length;
                 uvOffset = {-(uvB.y - uvA.y) * scale, (uvB.x - uvA.x) * scale};
             }
             const auto first = static_cast<uint32>(result.vertices.size());
@@ -707,10 +709,11 @@ bool RelativeModelingTransform(const Mat4& targetWorld, const Mat4& sourceWorld,
             Scale(Cross({m[8], m[9], m[10]}, {m[0], m[1], m[2]}), 1.0 / determinant),
             Scale(Cross({m[0], m[1], m[2]}, {m[4], m[5], m[6]}), 1.0 / determinant)};
         for (size_t row = 0; row < 3; ++row) {
-            inverse.elements[row] = static_cast<float>(rows[row].x);
-            inverse.elements[4 + row] = static_cast<float>(rows[row].y);
-            inverse.elements[8 + row] = static_cast<float>(rows[row].z);
-            inverse.elements[12 + row] = static_cast<float>(-Dot(rows[row], {m[12], m[13], m[14]}));
+            inverse.elements[row] = static_cast<double>(rows[row].x);
+            inverse.elements[4 + row] = static_cast<double>(rows[row].y);
+            inverse.elements[8 + row] = static_cast<double>(rows[row].z);
+            inverse.elements[12 + row] =
+                static_cast<double>(-Dot(rows[row], {m[12], m[13], m[14]}));
         }
         const auto relative = inverse * sourceWorld;
         Affine(relative);

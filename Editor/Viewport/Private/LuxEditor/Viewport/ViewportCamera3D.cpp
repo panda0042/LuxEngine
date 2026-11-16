@@ -17,15 +17,15 @@ LuxEngine::PerspectiveCamera MakeViewportCamera3D(LuxUI::SizeF size, LuxEngine::
     if (!std::isfinite(focus.x) || !std::isfinite(focus.y) || !std::isfinite(focus.z))
         focus = {};
     const LuxEngine::Vec3 eye{
-        static_cast<float>(focus.x + distance * std::sin(yaw) * std::cos(pitch)),
-        static_cast<float>(focus.y - distance * std::sin(pitch)),
-        static_cast<float>(focus.z + distance * std::cos(yaw) * std::cos(pitch))};
+        static_cast<double>(focus.x + distance * std::sin(yaw) * std::cos(pitch)),
+        static_cast<double>(focus.y - distance * std::sin(pitch)),
+        static_cast<double>(focus.z + distance * std::cos(yaw) * std::cos(pitch))};
     const double aspect = size.height() > 0 ? size.width() / size.height() : 1;
     LuxEngine::PerspectiveCamera camera(
         LuxEngine::ToRadians(60),
-        static_cast<float>(std::isfinite(aspect) && aspect > .001 ? aspect : 1),
-        static_cast<float>(std::clamp(distance * .001, .001, 1000.0)),
-        static_cast<float>(std::max(1000.0, distance * 100.0)));
+        static_cast<double>(std::isfinite(aspect) && aspect > .001 ? aspect : 1),
+        static_cast<double>(std::clamp(distance * .001, .001, 1000.0)),
+        static_cast<double>(std::max(1000000.0, distance * 1000.0)));
     camera.SetPosition(eye);
     camera.SetTarget(focus);
     camera.SetUp(std::abs(std::cos(pitch)) < .0001 ? LuxEngine::Vec3{0, 0, -1}
@@ -115,16 +115,16 @@ std::optional<ViewportRay3D> MakeViewportRay3D(const LuxEngine::PerspectiveCamer
     const auto& v = camera.GetViewMatrix().elements;
     const double x = (2 * point.x() / size.width() - 1) / p[0];
     const double y = (1 - 2 * point.y() / size.height()) / p[5];
-    const LuxEngine::Vec3 direction{static_cast<float>(v[0] * x + v[1] * y - v[2]),
-                                    static_cast<float>(v[4] * x + v[5] * y - v[6]),
-                                    static_cast<float>(v[8] * x + v[9] * y - v[10])};
+    const LuxEngine::Vec3 direction{static_cast<double>(v[0] * x + v[1] * y - v[2]),
+                                    static_cast<double>(v[4] * x + v[5] * y - v[6]),
+                                    static_cast<double>(v[8] * x + v[9] * y - v[10])};
     return ViewportRay3D{camera.GetPosition(), direction.Normalized()};
 }
 
 std::optional<double> IntersectViewportBox(const ViewportRay3D& ray, const LuxEngine::Mat4& model) {
     const auto& m = model.elements;
     if (std::any_of(std::begin(m), std::end(m),
-                    [](float value) { return !std::isfinite(value); }) ||
+                    [](double value) { return !std::isfinite(value); }) ||
         std::abs(m[3]) > 1e-6f || std::abs(m[7]) > 1e-6f || std::abs(m[11]) > 1e-6f ||
         std::abs(m[15] - 1) > 1e-6f)
         return std::nullopt;

@@ -39,7 +39,7 @@ bool TransformModelingVertices(ModelingMesh& mesh, std::span<const LuxEngine::ui
                                const LuxEngine::Mat4& localDelta, std::string& error);
 
 bool ExtrudeModelingFaces(ModelingMesh& mesh, std::span<const LuxEngine::uint32> triangles,
-                          float distance, std::string& error);
+                          double distance, std::string& error);
 
 bool MergeModelingMeshes(std::span<const ModelingMeshSource> sources, ModelingMesh& result,
                          std::string& error);

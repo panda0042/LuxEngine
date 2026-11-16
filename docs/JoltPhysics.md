@@ -38,3 +38,7 @@ Unix CI는 Jolt의 `CPP_RTTI_ENABLED=ON`으로 빌드한다. UBSan의 가상 함
 `PhysicsEngine::Step2D/Step3D` 단일 바디 호환 함수는 제거했다. 기존 프레임워크 앱은 `Scene::OnUpdate` 또는 `PhysicsWorld`로 옮긴다. 기존 Rigidbody/BoxCollider 씬 필드는 유지한다. 월드 좌표는 여전히 `float`이다.
 
 현재 충돌체 어댑터는 박스를 지원한다. 구·캡슐·메시 충돌체·캐릭터 컨트롤러·조인트는 별도 확장 범위다. Jolt가 제공하는 모든 기능을 에디터에서 이미 노출했다는 뜻은 아니다.
+
+## 64비트 위치 설정
+
+Jolt는 `-DDOUBLE_PRECISION=ON`으로 빌드해야 한다. 새 설정은 `tools/ci/SetupUnixDependencies.sh`와 `tools/InstallDeps.ps1`에 포함했다. 기존 single-precision 설치와 ABI가 다르므로 재빌드하고 `Jolt_DIR` 또는 `LUX_JOLT_ROOT`를 지정한다. CMake는 라이브러리를 다운로드하지 않는다. 자세한 좌표·전송 경계는 [WorldCoordinates.md](WorldCoordinates.md)를 참조한다.

@@ -18,7 +18,7 @@ LuxEngine::TransformComponent ViewTransform(const LuxEngine::PerspectiveCamera& 
     const LuxEngine::Vec3 back{matrix[2], matrix[6], matrix[10]};
     LuxEngine::TransformComponent transform;
     transform.position = camera.GetPosition();
-    transform.rotation.y = std::asin(std::clamp(-right.z, -1.f, 1.f));
+    transform.rotation.y = std::asin(std::clamp<double>(-right.z, -1.f, 1.f));
     if (std::abs(std::cos(transform.rotation.y)) > 1e-5f) {
         transform.rotation.x = std::atan2(up.z, back.z);
         transform.rotation.z = std::atan2(right.y, right.x);
@@ -30,7 +30,7 @@ LuxEngine::TransformComponent ViewTransform(const LuxEngine::PerspectiveCamera& 
 }
 
 LuxEngine::PerspectiveCamera EntityCamera(LuxEngine::Scene& scene, LuxEngine::uint32 id,
-                                          float aspect) {
+                                          double aspect) {
     const auto& settings = scene.GetComponent<LuxEngine::CameraComponent>(id);
     const auto matrix = scene.GetWorldMatrix(id);
     const auto* m = matrix.elements;
@@ -46,9 +46,9 @@ LuxEngine::PerspectiveCamera EntityCamera(LuxEngine::Scene& scene, LuxEngine::ui
     if (right.Dot(right) < 1e-12f)
         throw std::runtime_error("카메라의 전방과 위쪽 축이 겹쳐 시점을 구성할 수 없습니다.");
     up = right.Normalized().Cross(forward).Normalized();
-    const float distance =
-        std::max({1.f, std::abs(position.x) * .00001f, std::abs(position.y) * .00001f,
-                  std::abs(position.z) * .00001f});
+    const double distance =
+        std::max<double>({1.f, std::abs(position.x) * .00001f, std::abs(position.y) * .00001f,
+                          std::abs(position.z) * .00001f});
     LuxEngine::PerspectiveCamera camera(LuxEngine::ToRadians(settings.fov), aspect,
                                         settings.nearClip, settings.farClip);
     camera.SetPosition(position);
@@ -233,13 +233,13 @@ void EditorWindow::OnCameraChanged(const LuxUI::Widget* field) {
     else if (field == cameraProjection_)
         value.isPerspective = cameraProjection_->currentIndex() == 1;
     else if (field == cameraFov_)
-        value.fov = static_cast<float>(cameraFov_->value());
+        value.fov = static_cast<double>(cameraFov_->value());
     else if (field == cameraOrthoSize_)
-        value.orthoSize = static_cast<float>(cameraOrthoSize_->value());
+        value.orthoSize = static_cast<double>(cameraOrthoSize_->value());
     else if (field == cameraNearClip_)
-        value.nearClip = static_cast<float>(cameraNearClip_->value());
+        value.nearClip = static_cast<double>(cameraNearClip_->value());
     else if (field == cameraFarClip_)
-        value.farClip = static_cast<float>(cameraFarClip_->value());
+        value.farClip = static_cast<double>(cameraFarClip_->value());
     if (enabled && (!std::isfinite(value.nearClip) || value.nearClip <= 0 ||
                     !std::isfinite(value.farClip) || value.farClip <= value.nearClip)) {
         ShowError(LUX_UI_TEXT("카메라 설정"),
@@ -287,10 +287,10 @@ void EditorWindow::AlignCameraToSceneView() {
         } else {
             double x, y, halfHeight;
             canvas_->GetView(x, y, halfHeight);
-            transform.position.x = static_cast<float>(x);
-            transform.position.y = static_cast<float>(y);
+            transform.position.x = static_cast<double>(x);
+            transform.position.y = static_cast<double>(y);
             transform.rotation = {};
-            settings.orthoSize = static_cast<float>(halfHeight);
+            settings.orthoSize = static_cast<double>(halfHeight);
         }
         if (!scene.SetWorldTransform(id, transform))
             throw std::runtime_error(
@@ -310,7 +310,7 @@ void EditorWindow::ViewThroughSelectedCamera() {
         if (settings.isPerspective) {
             viewportTabs_->setCurrentIndex(0);
             const auto view = EntityCamera(document_.GetScene(), entity.GetId(),
-                                           static_cast<float>(std::max(1, canvas3D_->width())) /
+                                           static_cast<double>(std::max(1, canvas3D_->width())) /
                                                std::max(1, canvas3D_->height()));
             if (!canvas3D_->SetViewCamera(view, settings.fov, settings.nearClip, settings.farClip))
                 throw std::runtime_error("카메라 시야각 또는 표시 거리가 올바르지 않습니다.");

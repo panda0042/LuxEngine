@@ -58,3 +58,5 @@ tools/dxc/
 !/Engine/ThirdParty/ufbx/
 **/obj/
 __pycache__/
+
+/.deps/

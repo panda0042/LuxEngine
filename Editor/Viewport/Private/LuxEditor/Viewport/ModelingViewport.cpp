@@ -30,21 +30,21 @@ bool Inverse(const Mat4& value, Mat4& inverse) {
     if (!std::isfinite(determinant) || std::abs(determinant) < 1e-20 || std::abs(m[3]) > 1e-6 ||
         std::abs(m[7]) > 1e-6 || std::abs(m[11]) > 1e-6 || std::abs(m[15] - 1) > 1e-6)
         return false;
-    inverse.elements[0] = float((e * i - f * h) / determinant);
-    inverse.elements[4] = float((c * h - b * i) / determinant);
-    inverse.elements[8] = float((b * f - c * e) / determinant);
-    inverse.elements[1] = float((f * g - d * i) / determinant);
-    inverse.elements[5] = float((a * i - c * g) / determinant);
-    inverse.elements[9] = float((c * d - a * f) / determinant);
-    inverse.elements[2] = float((d * h - e * g) / determinant);
-    inverse.elements[6] = float((b * g - a * h) / determinant);
-    inverse.elements[10] = float((a * e - b * d) / determinant);
+    inverse.elements[0] = double((e * i - f * h) / determinant);
+    inverse.elements[4] = double((c * h - b * i) / determinant);
+    inverse.elements[8] = double((b * f - c * e) / determinant);
+    inverse.elements[1] = double((f * g - d * i) / determinant);
+    inverse.elements[5] = double((a * i - c * g) / determinant);
+    inverse.elements[9] = double((c * d - a * f) / determinant);
+    inverse.elements[2] = double((d * h - e * g) / determinant);
+    inverse.elements[6] = double((b * g - a * h) / determinant);
+    inverse.elements[10] = double((a * e - b * d) / determinant);
     const auto translation = Point(inverse, {m[12], m[13], m[14]}) * -1;
     inverse.elements[12] = translation.x;
     inverse.elements[13] = translation.y;
     inverse.elements[14] = translation.z;
     return std::all_of(std::begin(inverse.elements), std::end(inverse.elements),
-                       [](float component) { return std::isfinite(component); });
+                       [](double component) { return std::isfinite(component); });
 }
 
 std::optional<double> Intersect(const ViewportRay3D& ray, Vec3 a, Vec3 b, Vec3 c) {
@@ -130,13 +130,13 @@ std::vector<uint32> ModelingFaceVertices(const ModelingMesh& mesh, std::span<con
     using Cell = std::array<std::int64_t, 3>;
     const auto cell = [](Vec3 point) -> std::optional<Cell> {
         if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z) ||
-            std::abs(point.x) > 1e9 || std::abs(point.y) > 1e9 || std::abs(point.z) > 1e9)
+            std::abs(point.x) > 1e15 || std::abs(point.y) > 1e15 || std::abs(point.z) > 1e15)
             return std::nullopt;
         return Cell{static_cast<std::int64_t>(std::floor(double(point.x) / tolerance)),
                     static_cast<std::int64_t>(std::floor(double(point.y) / tolerance)),
                     static_cast<std::int64_t>(std::floor(double(point.z) / tolerance))};
     };
-    std::set<std::array<float, 3>> unique;
+    std::set<std::array<double, 3>> unique;
     std::map<Cell, std::vector<Vec3>> positions;
     for (const auto id : selected) {
         const auto point = mesh.vertices[id].position;
@@ -177,7 +177,7 @@ std::vector<uint32> ModelingFaceVertices(const ModelingMesh& mesh, std::span<con
 Vec3 ModelingPivot(const ModelingMesh& mesh, const ModelingSelection& selection,
                    const Mat4& world) {
     Vec3 sum;
-    std::set<std::array<float, 3>> unique;
+    std::set<std::array<double, 3>> unique;
     for (const auto id : selection.vertices) {
         if (id >= mesh.vertices.size())
             continue;

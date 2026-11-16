@@ -15,9 +15,9 @@ namespace LuxEngine {
 
 // View rectangle given by the editor: centre and half height in world units.
 struct ScenePlayerView {
-    float centerX = 0.0f;
-    float centerY = 0.0f;
-    float halfHeight = 4.5f;
+    double centerX = 0.0f;
+    double centerY = 0.0f;
+    double halfHeight = 4.5f;
 };
 
 struct ScenePlayerOptions {
@@ -36,9 +36,9 @@ struct ScenePlayerCameraView {
     Vec3 position{0, 3, 9};
     Vec3 target{};
     Vec3 up{0, 1, 0};
-    float fovDegrees = 60;
-    float nearClip = .1f;
-    float farClip = 1000.f;
+    double fovDegrees = 60;
+    double nearClip = .1f;
+    double farClip = 1000.f;
 };
 
 // Primary perspective cameras follow their complete world transform: local -Z is forward and

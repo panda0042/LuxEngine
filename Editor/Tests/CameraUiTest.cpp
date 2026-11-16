@@ -115,8 +115,8 @@ int main(int argc, char** argv) {
               settings().fov == original.fov,
           "far clip edit changed untouched camera values");
 
-    PerspectiveCamera desired(ToRadians(72),
-                              static_cast<float>(scene3D->width()) / scene3D->height(), .2f, 200.f);
+    PerspectiveCamera desired(
+        ToRadians(72), static_cast<double>(scene3D->width()) / scene3D->height(), .2f, 200.f);
     desired.SetPosition({8, 6, 12});
     desired.SetTarget({-1, 2, 0});
     desired.SetUp({.2f, 1, .1f});
@@ -140,7 +140,7 @@ int main(int argc, char** argv) {
     const bool dirty = window.GetDocument().IsDirty();
     through->click();
     const auto restored = scene3D->GetViewCamera();
-    float fov, nearDistance, farDistance;
+    double fov, nearDistance, farDistance;
     scene3D->GetViewProjection(fov, nearDistance, farDistance);
     Check(Near(restored.GetPosition(), desired.GetPosition()) &&
               Near(Forward(restored), Forward(desired)) && Near(Up(restored), Up(desired)) &&

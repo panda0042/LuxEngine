@@ -77,13 +77,13 @@ void EditorWindow::BuildPhysics3DDetails(LuxUI::VBoxLayout* layout) {
             if (auto* collider = entity.TryGetComponent<LuxEngine::BoxCollider3DComponent>()) {
                 if (field == trigger3D_)
                     collider->isTrigger = trigger3D_->isChecked();
-                float* sizes[] = {&collider->size.x, &collider->size.y, &collider->size.z};
-                float* offsets[] = {&collider->offset.x, &collider->offset.y, &collider->offset.z};
+                double* sizes[] = {&collider->size.x, &collider->size.y, &collider->size.z};
+                double* offsets[] = {&collider->offset.x, &collider->offset.y, &collider->offset.z};
                 for (size_t i = 0; i < 3; ++i) {
                     if (field == collider3DSize_[i])
-                        *sizes[i] = static_cast<float>(collider3DSize_[i]->value());
+                        *sizes[i] = static_cast<double>(collider3DSize_[i]->value());
                     if (field == collider3DOffset_[i])
-                        *offsets[i] = static_cast<float>(collider3DOffset_[i]->value());
+                        *offsets[i] = static_cast<double>(collider3DOffset_[i]->value());
                 }
             }
             document_.MarkDirty();
@@ -126,7 +126,7 @@ void EditorWindow::RefreshPhysics3DDetails() {
     }
     const auto size = collider ? collider->size : LuxEngine::Vec3{1, 1, 1};
     const auto offset = collider ? collider->offset : LuxEngine::Vec3{};
-    const float sizes[] = {size.x, size.y, size.z}, offsets[] = {offset.x, offset.y, offset.z};
+    const double sizes[] = {size.x, size.y, size.z}, offsets[] = {offset.x, offset.y, offset.z};
     for (size_t i = 0; i < 3; ++i) {
         collider3DSize_[i]->setValue(sizes[i]);
         collider3DOffset_[i]->setValue(offsets[i]);

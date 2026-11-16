@@ -36,8 +36,8 @@ private:
 
     void Step(float dt) override {
         position_ += LuxSamples::Movement() * (dt * 3.5f);
-        position_.x = std::clamp(position_.x, -7.0f, 7.0f);
-        position_.y = std::clamp(position_.y, -2.4f, 1.4f);
+        position_.x = std::clamp<double>(position_.x, -7.0f, 7.0f);
+        position_.y = std::clamp<double>(position_.y, -2.4f, 1.4f);
         if (le::Input::WasActionPressed("rebind")) {
             le::Input::UnbindAction("fire", alternate_ ? le::LuxKey::Enter : le::LuxKey::Space);
             alternate_ = !alternate_;

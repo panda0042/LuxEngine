@@ -228,8 +228,8 @@ class PandaGarden final : public le::Application {
         bool dash = keys[SDL_SCANCODE_LSHIFT] && stamina_ > .06f && length > 0;
         stamina_ = std::clamp(stamina_ + (dash ? -.42f : .24f) * dt, 0.f, 1.f);
         player_ = player_ + direction * (dt * (dash ? 450.f : 270.f));
-        player_.x = std::clamp(player_.x, 64.f, 1216.f);
-        player_.y = std::clamp(player_.y, 56.f, 744.f);
+        player_.x = std::clamp<double>(player_.x, 64.f, 1216.f);
+        player_.y = std::clamp<double>(player_.y, 56.f, 744.f);
         if (direction.x != 0)
             facingLeft_ = direction.x < 0;
         for (auto& p : shoots_)
@@ -253,8 +253,8 @@ class PandaGarden final : public le::Application {
                 const float separation = std::hypot(away.x, away.y);
                 if (separation > .01f)
                     player_ = player_ + away * (45 / separation);
-                player_.x = std::clamp(player_.x, 64.f, 1216.f);
-                player_.y = std::clamp(player_.y, 56.f, 744.f);
+                player_.x = std::clamp<double>(player_.x, 64.f, 1216.f);
+                player_.y = std::clamp<double>(player_.y, 56.f, 744.f);
             }
         }
         for (auto& p : particles_) {

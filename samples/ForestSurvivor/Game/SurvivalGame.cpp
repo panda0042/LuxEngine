@@ -20,7 +20,8 @@ Vec2 Normalized(Vec2 value) {
 
 Vec2 ClampPosition(Vec2 position, float radius = .4f) {
     const float extent = SurvivalGame::ArenaHalfSize - radius;
-    return {std::clamp(position.x, -extent, extent), std::clamp(position.y, -extent, extent)};
+    return {std::clamp<double>(position.x, -extent, extent),
+            std::clamp<double>(position.y, -extent, extent)};
 }
 
 constexpr std::array<Upgrade, 9> Upgrades{{
