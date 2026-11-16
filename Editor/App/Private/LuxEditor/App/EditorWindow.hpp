@@ -30,6 +30,7 @@ class SceneViewport3D;
 class GameViewport;
 class DebugPanel;
 class SceneEditCommand;
+class ScriptWorkspace;
 struct ModelingMesh;
 struct ModelingSelection;
 
@@ -110,6 +111,11 @@ private:
     void BuildLayout();
     void BuildWorkspaceChrome();
     void SetWorkspace(bool animation);
+    enum class Workspace { Level, Animation, Script };
+    void SetWorkspace(Workspace workspace);
+    void OpenScriptFile(const std::filesystem::path& path, int line = 1, int column = 1);
+    void OpenSelectedScript();
+    void OpenAnimationAsset(const std::filesystem::path& path);
     void ToggleDrawer(size_t index);
     void RefreshAssetFolders();
     void FilterDetails(const LuxUI::String& text);
@@ -122,7 +128,7 @@ private:
     void RefreshAnimationWorkspace();
     void SetAnimationTool(EditorTool tool);
     void OnAnimationKeyChanged(const LuxUI::Widget* field);
-    void MoveAnimationKey(int index, float time);
+    void MoveAnimationKey(int index, double time);
     void ApplyTheme();
     void RestoreWorkspaceLayout();
     void SaveWorkspaceLayout();
@@ -276,6 +282,7 @@ private:
     std::map<EditorDocument::TabId, std::chrono::steady_clock::time_point> autosavedAt_;
     LuxUI::UndoStack* undo_ = nullptr;
     LuxUI::StackedWidget* workspaceStack_ = nullptr;
+    ScriptWorkspace* scriptWorkspace_ = nullptr;
     LuxUI::TabBar* workspaceTabs_ = nullptr;
     LuxUI::Label* sceneStatus_ = nullptr;
     LuxUI::TreeWidget* assetFolders_ = nullptr;

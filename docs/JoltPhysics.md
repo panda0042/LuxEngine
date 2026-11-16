@@ -14,7 +14,7 @@ cmake -S JoltPhysics/Build -B jolt-debug -G Ninja \
   -DTARGET_VIEWER=OFF -DTARGET_PERFORMANCE_TEST=OFF \
   -DJPH_USE_DX12=OFF -DJPH_USE_VK=OFF -DJPH_USE_MTL=OFF -DJPH_USE_CPU_COMPUTE=OFF \
   -DINTERPROCEDURAL_OPTIMIZATION=OFF -DOVERRIDE_CXX_FLAGS=OFF \
-  -DCPP_RTTI_ENABLED=ON \
+  -DCPP_RTTI_ENABLED=ON -DDOUBLE_PRECISION=ON \
   -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF -DPROFILER_IN_DEBUG_AND_RELEASE=OFF
 cmake --build jolt-debug --target install --parallel
 ```
@@ -35,7 +35,7 @@ Unix CI는 Jolt의 `CPP_RTTI_ENABLED=ON`으로 빌드한다. UBSan의 가상 함
 - 바닥은 사용자가 배치한 정적 충돌체다. Y=0에서 물체를 멈추는 숨겨진 바닥은 없다.
 - `Scene::GetCollisionEvents2D/3D`로 접촉 시작 이벤트를 읽는다. 3D 이벤트에는 월드 접점과 법선이 포함된다.
 
-`PhysicsEngine::Step2D/Step3D` 단일 바디 호환 함수는 제거했다. 기존 프레임워크 앱은 `Scene::OnUpdate` 또는 `PhysicsWorld`로 옮긴다. 기존 Rigidbody/BoxCollider 씬 필드는 유지한다. 월드 좌표는 여전히 `float`이다.
+`PhysicsEngine::Step2D/Step3D` 단일 바디 호환 함수는 제거했다. 기존 프레임워크 앱은 `Scene::OnUpdate` 또는 `PhysicsWorld`로 옮긴다. 기존 Rigidbody/BoxCollider 씬 필드는 유지한다. 월드 위치와 엔진의 Transform은 `double`이며 Jolt의 속도·형상 연산은 `float` 경계를 사용한다.
 
 ## 게임 코드에서의 사용
 
@@ -71,3 +71,7 @@ Scene은 `GetLastPhysicsError2D/3D()`로 최근 물리 스텝의 진단을 제�
 `Engine_physics_integration`은 질의·필터·실패 출력, 속도·충격량·접지, 2D/3D CCD와 키네마틱 트리거, 런타임 질량·형상 변경, 중복 ID·오류 복구, 최대 용량 교체·초과 처리를 검사한다.
 
 현재 충돌체 어댑터는 박스를 지원한다. 구·캡슐·메시 충돌체·캐릭터 컨트롤러·조인트, 전체 충돌 레이어·마스크와 휴면 최적화는 별도 확장 범위다. Jolt가 제공하는 모든 기능을 에디터에서 이미 노출했다는 뜻은 아니다.
+
+## 64비트 위치 설정
+
+Jolt는 `-DDOUBLE_PRECISION=ON`으로 빌드해야 한다. 새 설정은 `tools/ci/SetupUnixDependencies.sh`와 `tools/InstallDeps.ps1`에 포함했다. 기존 single-precision 설치와 ABI가 다르므로 재빌드하고 `Jolt_DIR` 또는 `LUX_JOLT_ROOT`를 지정한다. CMake는 라이브러리를 다운로드하지 않는다. 자세한 좌표·전송 경계는 [WorldCoordinates.md](WorldCoordinates.md)를 참조한다.

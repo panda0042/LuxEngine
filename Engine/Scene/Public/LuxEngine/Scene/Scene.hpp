@@ -1,5 +1,6 @@
 #pragma once
 #include <LuxEngine/Animation/AnimationEngine.hpp>
+#include <LuxEngine/Animation/Animator.hpp>
 #include <LuxEngine/Core/Core.hpp>
 #include <LuxEngine/ECS/ECS.hpp>
 #include <LuxEngine/Physics/PhysicsWorld.hpp>
@@ -77,6 +78,9 @@ public:
     void SetSourcePath(std::string path);
 
     void OnUpdate(double dt);
+    void UpdateAnimations(double dt, bool emitEvents = true);
+    void ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, double dt,
+                             bool rootMotion = false);
     void OnRender();
     void OnRender3D();
     std::string ResolveAssetPath(const std::string& path) const;

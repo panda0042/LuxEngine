@@ -1,8 +1,12 @@
 # Build dependencies are installed by the developer, never downloaded by CMake.
 find_package(Threads REQUIRED)
 find_package(SDL3 3.2 CONFIG REQUIRED)
-find_package(Jolt CONFIG REQUIRED HINTS "$ENV{LUX_JOLT_ROOT}" "$ENV{HOME}/.local")
+find_package(Jolt CONFIG REQUIRED HINTS "${CMAKE_SOURCE_DIR}/.deps/jolt64" "$ENV{LUX_JOLT_ROOT}" "$ENV{HOME}/.local")
 lux_configure_jolt_imports()
+get_target_property(_lux_jolt_definitions Jolt::Jolt INTERFACE_COMPILE_DEFINITIONS)
+if(NOT "${_lux_jolt_definitions}" MATCHES "JPH_DOUBLE_PRECISION")
+    message(FATAL_ERROR "LuxEngine uses 64-bit world coordinates. Rebuild Jolt with -DDOUBLE_PRECISION=ON and set Jolt_DIR or LUX_JOLT_ROOT to that installation. See docs/JoltPhysics.md.")
+endif()
 # Older configurations cached an empty value before downloading stb.
 # An empty cache entry prevents find_path from searching installed headers.
 if(DEFINED STB_IMAGE_INCLUDE_DIR AND STB_IMAGE_INCLUDE_DIR STREQUAL "")

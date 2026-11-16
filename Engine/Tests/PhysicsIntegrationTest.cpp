@@ -58,6 +58,33 @@ void Queries() {
           "removed bodies immediately disappear from ray queries");
 }
 
+void LargeWorldQueries() {
+    for (double base : {-1e12, 1e12}) {
+        PhysicsWorld world;
+        PhysicsBodyDescription body;
+        body.entity = 1;
+        body.position = {base + 3.125, base, base};
+        body.size = {2, 2, 2};
+        Check(world.Synchronize(std::array{body}), "distant bodies synchronize");
+        RaycastHit3D hit;
+        Check(world.Raycast({base, base, base}, {1, 0, 0}, 10, hit) && hit.entityId == 1 &&
+                  std::abs(hit.distance - 2.125) < .001 &&
+                  std::abs(hit.point.x - (base + 2.125)) < .001,
+              "distant ray queries preserve sub-unit world positions");
+        body.type = BodyType::Dynamic;
+        body.velocity = {3, 0, 0};
+        Check(world.Synchronize(std::array{body}), "distant dynamic body synchronizes");
+        world.Step(1.0 / 60, {});
+        const auto state = world.GetState(1);
+        Check(state && std::abs(state->position.x - (base + 3.175)) < .001,
+              "distant simulation preserves sub-unit displacement");
+        body.position.x = 2e15;
+        Check(!world.Synchronize(std::array{body}) && !world.GetState(1) &&
+                  !world.GetLastError().empty(),
+              "out-of-range world positions retain local diagnostics");
+    }
+}
+
 void Diagnostics() {
     PhysicsWorld world;
     PhysicsBodyDescription first, second;
@@ -290,6 +317,7 @@ void StableContactIdentity() {
 int main() {
     try {
         Queries();
+        LargeWorldQueries();
         Diagnostics();
         MotionAndEdits();
         GameplayControl();

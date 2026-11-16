@@ -19,8 +19,8 @@ struct CameraGizmoGeometry {
     LuxEngine::Vec3 forward;
     LuxEngine::Vec3 up;
     bool perspective = false;
-    float nearClip = 0;
-    float farClip = 0;
+    double nearClip = 0;
+    double farClip = 0;
     std::array<LuxEngine::Vec3, 4> nearCorners;
     std::array<LuxEngine::Vec3, 4> farCorners;
 };

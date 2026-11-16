@@ -91,7 +91,7 @@ private:
     LuxUI::PointF lastMouse_{};
     LuxUI::PointF dragOffset_{};
     LuxUI::PointF dragStartWorld_{};
-    std::array<float, 9> dragInitial_{};
+    std::array<double, 9> dragInitial_{};
     bool panning_ = false;
     bool dragging_ = false;
     bool tilePainting_ = false;

@@ -139,7 +139,7 @@ void ReadJsonValue(const Json& json, std::vector<Keyframe>& keys) {
     RequireValidScene(json.is_array() && json.size() <= 4096);
     keys.clear();
     keys.reserve(json.size());
-    float last = -1;
+    double last = -1;
     for (const auto& item : json) {
         Keyframe key;
         ReadJsonValue(item.at("time"), key.time);
@@ -242,6 +242,10 @@ bool Scene::SerializeToString(std::string& output) {
             if (const auto* component = TryGetComponent<SpriteRendererComponent>(id)) {
                 Json value = Json::object();
                 value["color"] = ToJson(component->color);
+                value["texture"] = component->texturePath;
+                value["frame"] = component->frame;
+                value["columns"] = component->columns;
+                value["rows"] = component->rows;
                 components["sprite"] = std::move(value);
             }
             if (const auto* component = TryGetComponent<MeshRendererComponent>(id)) {
@@ -334,7 +338,24 @@ bool Scene::SerializeToString(std::string& output) {
                 value["loop"] = ToJson(component->clip.loop);
                 value["playing"] = ToJson(component->playing);
                 value["keyframes"] = ToJson(component->clip.keyframes);
+                value["asset"] = component->assetPath;
+                value["speed"] = component->speed;
+                value["root_motion"] = component->rootMotion;
+                std::string clipData, error;
+                RequireValidScene(component->clip.SerializeToString(clipData, error));
+                value["clip_data"] = Json::parse(clipData);
                 components["animation"] = std::move(value);
+            }
+            if (const auto* component = TryGetComponent<AnimatorComponent>(id)) {
+                Json parameters = Json::array();
+                for (const auto& parameter : component->parameters)
+                    parameters.push_back({{"name", parameter.name},
+                                          {"type", int(parameter.type)},
+                                          {"value", parameter.value}});
+                components["animator"] = {{"controller", component->controllerPath},
+                                          {"playing", component->playing},
+                                          {"root_motion", component->rootMotion},
+                                          {"parameters", parameters}};
             }
             if (const auto* component = TryGetComponent<HierarchyComponent>(id)) {
                 Json value = Json::object();
@@ -448,6 +469,12 @@ bool Scene::DeserializeJson(const std::string& data) {
                     SpriteRendererComponent component;
                     RequireValidScene(value.is_object());
                     ReadJsonValue(value.at("color"), component.color);
+                    component.texturePath = value.value("texture", std::string{});
+                    component.frame = value.value("frame", 0u);
+                    component.columns = value.value("columns", 1u);
+                    component.rows = value.value("rows", 1u);
+                    RequireValidScene(component.columns > 0 && component.rows > 0 &&
+                                      component.columns <= 4096 && component.rows <= 4096);
                     entity.AddComponent<SpriteRendererComponent>(std::move(component));
                 } else if (name == "mesh") {
                     MeshRendererComponent component;
@@ -580,7 +607,31 @@ bool Scene::DeserializeJson(const std::string& data) {
                     ReadJsonValue(value.at("loop"), component.clip.loop);
                     ReadJsonValue(value.at("playing"), component.playing);
                     ReadJsonValue(value.at("keyframes"), component.clip.keyframes);
+                    component.assetPath = value.value("asset", std::string{});
+                    component.speed = value.value("speed", 1.0);
+                    component.rootMotion = value.value("root_motion", false);
+                    if (value.contains("clip_data")) {
+                        std::string error;
+                        auto clip = AnimationClip::DeserializeFromString(
+                            value.at("clip_data").dump(), error);
+                        RequireValidScene(bool(clip));
+                        component.clip = *clip;
+                    }
                     entity.AddComponent<AnimationComponent>(std::move(component));
+                } else if (name == "animator") {
+                    AnimatorComponent component;
+                    component.controllerPath = value.at("controller");
+                    component.playing = value.at("playing");
+                    component.rootMotion = value.at("root_motion");
+                    RequireValidScene(value.at("parameters").size() <= 256);
+                    for (const auto& p : value.at("parameters")) {
+                        const int type = p.at("type");
+                        const double number = p.at("value");
+                        RequireValidScene(type >= 0 && type <= 3 && std::isfinite(number));
+                        component.parameters.push_back(
+                            {p.at("name"), AnimationParameterType(type), number});
+                    }
+                    entity.AddComponent<AnimatorComponent>(std::move(component));
                 } else if (name == "hierarchy") {
                     HierarchyComponent component;
                     RequireValidScene(value.is_object());

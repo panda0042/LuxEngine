@@ -40,21 +40,21 @@ void AnimationTimeline::SetCurveMode(bool enabled) {
     update();
 }
 
-float AnimationTimeline::Duration() const {
+double AnimationTimeline::Duration() const {
     const auto entity = actions_.target();
     const auto* animation =
         entity ? entity.TryGetComponent<LuxEngine::AnimationComponent>() : nullptr;
-    return animation ? std::max(.001f, animation->clip.duration) : 1;
+    return animation ? std::max<double>(.001f, animation->clip.duration) : 1;
 }
 
-float AnimationTimeline::TimeAt(double x) const {
+double AnimationTimeline::TimeAt(double x) const {
     const double span = std::max(1, width() - HeaderWidth - 18);
     const double origin = scroll_ * (1.0 - 1.0 / zoom_);
-    return static_cast<float>(std::clamp(origin + (x - HeaderWidth) / (span * zoom_), 0.0, 1.0) *
-                              Duration());
+    return static_cast<double>(std::clamp(origin + (x - HeaderWidth) / (span * zoom_), 0.0, 1.0) *
+                               Duration());
 }
 
-double AnimationTimeline::PositionAt(float time) const {
+double AnimationTimeline::PositionAt(double time) const {
     const double span = std::max(1, width() - HeaderWidth - 18);
     const double origin = scroll_ * (1.0 - 1.0 / zoom_);
     return HeaderWidth + (time / Duration() - origin) * span * zoom_;
@@ -121,7 +121,7 @@ void AnimationTimeline::paintEvent(LuxUI::PaintEvent*) {
     painter.save();
     painter.setClipRect(LuxUI::Rect(HeaderWidth, 0, width() - HeaderWidth, height()));
     for (double time = first; time <= last + tickStep * .1; time += tickStep) {
-        const auto x = PositionAt(static_cast<float>(time));
+        const auto x = PositionAt(static_cast<double>(time));
         painter.setPen(divider);
         painter.drawLine(LuxUI::PointF(x, RulerHeight - 6), LuxUI::PointF(x, height()));
         painter.setPen(text);
@@ -137,7 +137,7 @@ void AnimationTimeline::paintEvent(LuxUI::PaintEvent*) {
         if (curveMode_ && !animation->clip.keyframes.empty()) {
             const LuxUI::Color colors[] = {LuxUI::Color(228, 103, 103), LuxUI::Color(108, 193, 127),
                                            LuxUI::Color(106, 156, 229)};
-            float low = 0, high = 1;
+            double low = 0, high = 1;
             for (const auto& key : animation->clip.keyframes) {
                 low = std::min({low, key.position.x, key.position.y, key.position.z});
                 high = std::max({high, key.position.x, key.position.y, key.position.z});
@@ -146,7 +146,7 @@ void AnimationTimeline::paintEvent(LuxUI::PaintEvent*) {
                 LuxUI::PainterPath curve;
                 bool firstPoint = true;
                 for (const auto& key : animation->clip.keyframes) {
-                    const float values[] = {key.position.x, key.position.y, key.position.z};
+                    const double values[] = {key.position.x, key.position.y, key.position.z};
                     const auto y = RulerHeight + 10 +
                                    (high - values[axis]) / (high - low) *
                                        std::max(1, height() - RulerHeight - 30);
@@ -161,7 +161,7 @@ void AnimationTimeline::paintEvent(LuxUI::PaintEvent*) {
                 painter.drawPath(curve);
                 for (size_t index = 0; index < animation->clip.keyframes.size(); ++index) {
                     const auto& key = animation->clip.keyframes[index];
-                    const float values[] = {key.position.x, key.position.y, key.position.z};
+                    const double values[] = {key.position.x, key.position.y, key.position.z};
                     const auto y = RulerHeight + 10 +
                                    (high - values[axis]) / (high - low) *
                                        std::max(1, height() - RulerHeight - 30);
@@ -188,7 +188,7 @@ void AnimationTimeline::paintEvent(LuxUI::PaintEvent*) {
         const double x = PositionAt(draggedTime_);
         painter.drawLine(LuxUI::PointF(x, RulerHeight), LuxUI::PointF(x, height()));
     }
-    const float current = animation ? animation->currentTime : 0;
+    const double current = animation ? animation->currentTime : 0;
     const double x = PositionAt(current);
     painter.setPen(LuxUI::Pen(accent, 1.5));
     painter.drawLine(LuxUI::PointF(x, 0), LuxUI::PointF(x, height()));
@@ -260,7 +260,7 @@ void AnimationTimeline::mouseMoveEvent(LuxUI::MouseEvent* event) {
     if (!isSliderDown())
         return;
     const int fps = std::max(1, actions_.framesPerSecond());
-    draggedTime_ = static_cast<float>(std::round(TimeAt(event->position().x()) * fps) / fps);
+    draggedTime_ = static_cast<double>(std::round(TimeAt(event->position().x()) * fps) / fps);
     Scrub(event->position().x());
     update();
     event->accept();

@@ -17,7 +17,7 @@ bool Finite(const TransformComponent& value) {
     return Finite(value.position) && Finite(value.rotation) && Finite(value.scale);
 }
 
-float Length(Vec3 value) {
+double Length(Vec3 value) {
     return std::sqrt(value.Dot(value));
 }
 
@@ -26,7 +26,7 @@ bool Decompose(const Mat4& matrix, TransformComponent& value, bool requireTrs) {
     value.position = {m[12], m[13], m[14]};
     Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
     value.scale = {Length(x), Length(y), Length(z)};
-    constexpr float epsilon = 1e-6f;
+    constexpr double epsilon = 1e-6f;
     if (value.scale.x < epsilon || value.scale.y < epsilon || value.scale.z < epsilon) {
         value.rotation = {};
         return !requireTrs && Finite(value);
@@ -41,7 +41,7 @@ bool Decompose(const Mat4& matrix, TransformComponent& value, bool requireTrs) {
     if (requireTrs &&
         (std::abs(x.Dot(y)) > 1e-4f || std::abs(x.Dot(z)) > 1e-4f || std::abs(y.Dot(z)) > 1e-4f))
         return false;
-    value.rotation.y = std::asin(std::clamp(-x.z, -1.0f, 1.0f));
+    value.rotation.y = std::asin(std::clamp<double>(-x.z, -1.0f, 1.0f));
     if (std::abs(std::cos(value.rotation.y)) > 1e-5f) {
         value.rotation.x = std::atan2(y.z, z.z);
         value.rotation.z = std::atan2(x.y, x.x);
@@ -61,26 +61,26 @@ bool InverseAffine(const Mat4& input, Mat4& result) {
         return false;
     const double scale = 1 / determinant;
     auto* out = result.elements;
-    out[0] = static_cast<float>((e * i - f * h) * scale);
-    out[4] = static_cast<float>((c * h - b * i) * scale);
-    out[8] = static_cast<float>((b * f - c * e) * scale);
-    out[1] = static_cast<float>((f * g - d * i) * scale);
-    out[5] = static_cast<float>((a * i - c * g) * scale);
-    out[9] = static_cast<float>((c * d - a * f) * scale);
-    out[2] = static_cast<float>((d * h - e * g) * scale);
-    out[6] = static_cast<float>((b * g - a * h) * scale);
-    out[10] = static_cast<float>((a * e - b * d) * scale);
+    out[0] = static_cast<double>((e * i - f * h) * scale);
+    out[4] = static_cast<double>((c * h - b * i) * scale);
+    out[8] = static_cast<double>((b * f - c * e) * scale);
+    out[1] = static_cast<double>((f * g - d * i) * scale);
+    out[5] = static_cast<double>((a * i - c * g) * scale);
+    out[9] = static_cast<double>((c * d - a * f) * scale);
+    out[2] = static_cast<double>((d * h - e * g) * scale);
+    out[6] = static_cast<double>((b * g - a * h) * scale);
+    out[10] = static_cast<double>((a * e - b * d) * scale);
     out[12] = -(out[0] * m[12] + out[4] * m[13] + out[8] * m[14]);
     out[13] = -(out[1] * m[12] + out[5] * m[13] + out[9] * m[14]);
     out[14] = -(out[2] * m[12] + out[6] * m[13] + out[10] * m[14]);
     return std::all_of(std::begin(result.elements), std::end(result.elements),
-                       [](float v) { return std::isfinite(v); });
+                       [](double v) { return std::isfinite(v); });
 }
 
 using AuthoredComponents =
     std::tuple<TagComponent, TransformComponent, SpriteRendererComponent, MeshRendererComponent,
                CameraComponent, Rigidbody2DComponent, BoxCollider2DComponent, Rigidbody3DComponent,
-               BoxCollider3DComponent, TilemapComponent, AnimationComponent,
+               BoxCollider3DComponent, TilemapComponent, AnimationComponent, AnimatorComponent,
                ModelAnimationComponent, ScriptComponent, SceneReferenceComponent>;
 
 template <typename Tuple, typename Callback, size_t... Indices>
@@ -95,7 +95,7 @@ template <typename Tuple, typename Callback> void ForEachType(Callback&& callbac
 } // namespace
 
 bool Scene::SetSettings(const SceneSettings& value) {
-    const auto bounded = [](float v, float limit) {
+    const auto bounded = [](double v, double limit) {
         return std::isfinite(v) && std::abs(v) <= limit;
     };
     if (!bounded(value.clearColor.x, 1) || value.clearColor.x < 0 ||

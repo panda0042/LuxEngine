@@ -121,7 +121,9 @@ void DeterministicPlacement() {
                   a.position.z == b.position.z && a.yaw == b.yaw && a.size == b.size &&
                   a.vegetation == b.vegetation,
               "Repeated construction produced a different scene");
-        for (const float value : {a.position.x, a.position.y, a.position.z, a.yaw, a.size})
+        for (const float value :
+             std::initializer_list<double>{a.position.x, a.position.y, a.position.z,
+                                           static_cast<double>(a.yaw), static_cast<double>(a.size)})
             Check(std::isfinite(value), "An instance contains non-finite placement data");
         Check(std::abs(a.position.x) < 18.0f && std::abs(a.position.z) <= 22.0f,
               "An instance escaped the terrain");

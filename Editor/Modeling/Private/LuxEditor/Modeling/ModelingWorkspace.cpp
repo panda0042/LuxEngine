@@ -114,7 +114,7 @@ std::string Label(Entity entity) {
 ModelingSelection RemapSelection(const ModelingSelection& selection, const ModelingMesh& source,
                                  const ModelingMesh& destination) {
     ModelingSelection result;
-    std::map<std::tuple<float, float, float>, std::vector<uint32>> positions;
+    std::map<std::tuple<double, double, double>, std::vector<uint32>> positions;
     for (uint32 id = 0; id < destination.vertices.size(); ++id) {
         const auto position = destination.vertices[id].position;
         positions[{position.x, position.y, position.z}].push_back(id);
@@ -385,7 +385,7 @@ void EditorWindow::ExtrudeModelingSelection() {
         return;
     auto selection = canvas3D_->GetModelingSelection();
     auto mesh = *modelingMesh_;
-    const auto distance = static_cast<float>(
+    const auto distance = static_cast<double>(
         modelingDock_->findChild<LuxUI::DoubleSpinBox*>(LUX_UI_TEXT("modelingExtrudeDistance"))
             ->value());
     std::string error;

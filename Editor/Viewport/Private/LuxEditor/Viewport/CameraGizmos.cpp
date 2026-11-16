@@ -15,7 +15,7 @@ using namespace LuxEngine;
 Vec3 Unit(Vec3 value, Vec3 fallback) {
     const double length = std::hypot(double(value.x), double(value.y), double(value.z));
     return std::isfinite(length) && length > 1e-30
-               ? Vec3{float(value.x / length), float(value.y / length), float(value.z / length)}
+               ? Vec3{double(value.x / length), double(value.y / length), double(value.z / length)}
                : fallback;
 }
 
@@ -36,9 +36,9 @@ std::optional<Vec3> Corner(Vec3 position, Vec3 forward, Vec3 right, Vec3 up, dou
     result[2] =
         double(position.z) + double(forward.z) * depth + double(right.z) * x + double(up.z) * y;
     for (const auto value : result)
-        if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max())
+        if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<double>::max())
             return std::nullopt;
-    return Vec3{float(result[0]), float(result[1]), float(result[2])};
+    return Vec3{double(result[0]), double(result[1]), double(result[2])};
 }
 
 bool ValidViewport(LuxUI::SizeF size) {
@@ -71,7 +71,7 @@ Vec3 Center(const std::array<Vec3, 4>& corners) {
 std::optional<CameraGizmoGeometry> BuildCameraGizmoGeometry(Scene& scene, uint32 entity,
                                                             double aspect) {
     if (!scene.IsAlive(entity) || !scene.HasComponent<TransformComponent>(entity) ||
-        !std::isfinite(aspect) || aspect <= 0 || aspect > std::numeric_limits<float>::max())
+        !std::isfinite(aspect) || aspect <= 0 || aspect > std::numeric_limits<double>::max())
         return std::nullopt;
     const auto* camera = scene.TryGetComponent<CameraComponent>(entity);
     if (!camera)
@@ -79,7 +79,7 @@ std::optional<CameraGizmoGeometry> BuildCameraGizmoGeometry(Scene& scene, uint32
     try {
         const auto world = scene.GetWorldMatrix(entity);
         if (std::any_of(std::begin(world.elements), std::end(world.elements),
-                        [](float value) { return !std::isfinite(value); }))
+                        [](double value) { return !std::isfinite(value); }))
             return std::nullopt;
         CameraGizmoGeometry geometry;
         geometry.position = {world.elements[12], world.elements[13], world.elements[14]};
@@ -89,9 +89,9 @@ std::optional<CameraGizmoGeometry> BuildCameraGizmoGeometry(Scene& scene, uint32
                 !std::isfinite(camera->nearClip) || !std::isfinite(camera->farClip) ||
                 camera->nearClip <= 0 || camera->farClip <= camera->nearClip)
                 return std::nullopt;
-            // Match runtime projection validation, including ranges whose float coefficients
+            // Match runtime projection validation, including ranges whose double coefficients
             // cannot represent distinct near/far planes despite individually finite values.
-            (void)Mat4::Perspective(ToRadians(camera->fov), float(aspect), camera->nearClip,
+            (void)Mat4::Perspective(ToRadians(camera->fov), double(aspect), camera->nearClip,
                                     camera->farClip);
             geometry.forward =
                 Unit({-world.elements[8], -world.elements[9], -world.elements[10]}, {0, 0, -1});
@@ -102,7 +102,7 @@ std::optional<CameraGizmoGeometry> BuildCameraGizmoGeometry(Scene& scene, uint32
         } else {
             if (!std::isfinite(camera->orthoSize) || camera->orthoSize <= 0)
                 return std::nullopt;
-            float angle = 0;
+            double angle = 0;
             try {
                 angle = scene.GetWorldTransform(entity).rotation.z;
             } catch (const std::logic_error&) {
@@ -203,7 +203,7 @@ void DrawCameraGizmos(LuxUI::Painter& painter, Scene& scene, const PerspectiveCa
         const auto forward = Unit(view.GetTarget() - view.GetPosition(), {0, 0, -1});
         const double depth = (geometry->position - view.GetPosition()).Dot(forward);
         const double projection = std::abs(double(view.GetProjectionMatrix().elements[5]));
-        const float length = float(std::clamp(
+        const double length = double(std::clamp(
             depth * 48 / std::max(.000001, projection) / viewport.height(), .01, 1000000.0));
         const auto tip = geometry->position + direction * length;
         const auto side = Unit(direction.Cross(view.GetPosition() - geometry->position), {1, 0, 0});

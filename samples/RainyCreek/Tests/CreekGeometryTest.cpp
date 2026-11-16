@@ -74,10 +74,10 @@ void Terrain() {
     Check(mesh.vertices.size() == 72u * 88u * 4u, "Terrain resolution changed unexpectedly");
     float minimumX = 0.0f, maximumX = 0.0f, minimumZ = 0.0f, maximumZ = 0.0f;
     for (const auto& vertex : mesh.vertices) {
-        minimumX = std::min(minimumX, vertex.position.x);
-        maximumX = std::max(maximumX, vertex.position.x);
-        minimumZ = std::min(minimumZ, vertex.position.z);
-        maximumZ = std::max(maximumZ, vertex.position.z);
+        minimumX = std::min<double>(minimumX, vertex.position.x);
+        maximumX = std::max<double>(maximumX, vertex.position.x);
+        minimumZ = std::min<double>(minimumZ, vertex.position.z);
+        maximumZ = std::max<double>(maximumZ, vertex.position.z);
         Check(Near(vertex.position.y, rc::TerrainHeight(vertex.position.x, vertex.position.z)),
               "Terrain mesh differs from placement height queries");
         Check(vertex.normal.y > 0.0f, "Terrain normal points below the surface");
@@ -155,7 +155,7 @@ void Lamps() {
     float maximum = 0.0f;
     for (const auto& vertex : post.vertices) {
         Check(vertex.position.y >= 0.0f, "Lamp post extends below its placement origin");
-        maximum = std::max(maximum, vertex.position.y);
+        maximum = std::max<double>(maximum, vertex.position.y);
     }
     Check(Near(maximum, 2.61f), "Lamp post height does not match the scene scale");
     for (const auto& vertex : glass.vertices)

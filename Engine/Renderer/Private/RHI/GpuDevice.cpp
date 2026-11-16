@@ -5,6 +5,27 @@
 #include <LuxEngine/Renderer/Renderer3D/Renderer3D.hpp>
 
 namespace LuxEngine {
+GpuVec2::GpuVec2() = default;
+
+GpuVec2::GpuVec2(double a, double b) : x(static_cast<float>(a)), y(static_cast<float>(b)) {}
+
+GpuVec2::GpuVec2(Vec2 v) : GpuVec2(v.x, v.y) {}
+
+GpuVec2::operator Vec2() const {
+    return {x, y};
+}
+
+GpuVec3::GpuVec3() = default;
+
+GpuVec3::GpuVec3(double a, double b, double c)
+    : x(static_cast<float>(a)), y(static_cast<float>(b)), z(static_cast<float>(c)) {}
+
+GpuVec3::GpuVec3(Vec3 v) : GpuVec3(v.x, v.y, v.z) {}
+
+GpuVec3::operator Vec3() const {
+    return {x, y, z};
+}
+
 namespace {
 const std::string NoError;
 const GpuDeviceInfo NoInfo;

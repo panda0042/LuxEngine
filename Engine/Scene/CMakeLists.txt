@@ -12,6 +12,7 @@ lux_engine_module(Scene
         Private/ScenePhysicsWorld.cpp
         Private/SceneJson.cpp
         Private/Scene.cpp
+        Private/SceneAnimation.cpp
         Private/SceneHierarchy.cpp
         Private/SceneManager.cpp
         Private/PrefabLibrary.cpp

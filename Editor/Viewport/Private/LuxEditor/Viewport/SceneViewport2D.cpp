@@ -43,10 +43,11 @@ bool InsideMap(LuxEngine::Entity entity, LuxUI::PointF world, LuxUI::PointF* cel
     return true;
 }
 
-LuxUI::Color Exposed(LuxUI::Color color, float exposure) {
-    return LuxUI::Color::fromRgbF(std::clamp(color.redF() * exposure, 0.0f, 1.0f),
-                                  std::clamp(color.greenF() * exposure, 0.0f, 1.0f),
-                                  std::clamp(color.blueF() * exposure, 0.0f, 1.0f), color.alphaF());
+LuxUI::Color Exposed(LuxUI::Color color, double exposure) {
+    return LuxUI::Color::fromRgbF(std::clamp<double>(color.redF() * exposure, 0.0f, 1.0f),
+                                  std::clamp<double>(color.greenF() * exposure, 0.0f, 1.0f),
+                                  std::clamp<double>(color.blueF() * exposure, 0.0f, 1.0f),
+                                  color.alphaF());
 }
 
 constexpr LuxUI::Color Selection(255, 205, 92);
@@ -370,7 +371,7 @@ void SceneViewport2D::paintEvent(LuxUI::PaintEvent*) {
         const auto matrix = entity.GetScene()->GetWorldMatrix(entity.GetId());
         const auto color = entity.GetComponent<LuxEngine::SpriteRendererComponent>().color;
         if (std::any_of(std::begin(matrix.elements), std::end(matrix.elements),
-                        [](float value) { return !std::isfinite(value); }))
+                        [](double value) { return !std::isfinite(value); }))
             continue;
         const LuxUI::PolygonF shape = polygon(entity, {-.5, -.5, 1, 1});
         const bool active = document_.IsSelected(entity.GetId());
@@ -744,14 +745,14 @@ void SceneViewport2D::mouseMoveEvent(LuxUI::MouseEvent* event) {
             }
             double x = dragInitial_[0] + movement.x();
             double y = dragInitial_[1] + movement.y();
-            value.position.x = static_cast<float>(x);
-            value.position.y = static_cast<float>(y);
+            value.position.x = static_cast<double>(x);
+            value.position.y = static_cast<double>(y);
         } else if (tool_ == EditorTool::Rotate) {
             const double start = std::atan2(dragStartWorld_.y() - dragPivot_.y(),
                                             dragStartWorld_.x() - dragPivot_.x());
             const double current =
                 std::atan2(world.y() - dragPivot_.y(), world.x() - dragPivot_.x());
-            float angle = static_cast<float>(current - start);
+            double angle = static_cast<double>(current - start);
             if (event->modifiers() & LuxUI::Flags::ControlModifier)
                 angle = std::round(angle / LuxEngine::ToRadians(15)) * LuxEngine::ToRadians(15);
             value.rotation.z = dragInitial_[5] + angle;
@@ -770,7 +771,7 @@ void SceneViewport2D::mouseMoveEvent(LuxUI::MouseEvent* event) {
                 const double current = LuxUI::LineF(world, dragPivot_).length();
                 factor = current / std::max(.01, initial);
             }
-            const float scale = static_cast<float>(std::clamp(factor, .05, 100.0));
+            const double scale = static_cast<double>(std::clamp(factor, .05, 100.0));
             value.scale.x = dragInitial_[6] * (dragAxis_ != 1 ? scale : 1);
             value.scale.y = dragInitial_[7] * (dragAxis_ != 0 ? scale : 1);
         }

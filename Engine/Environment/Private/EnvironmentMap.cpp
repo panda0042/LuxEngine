@@ -124,14 +124,14 @@ struct Source {
 
     Vec3 Sample(Vec3 d) const {
         if (pixels.empty()) {
-            const float sky = std::max(0.f, d.y);
+            const float sky = std::max<double>(0.f, d.y);
             const Vec3 sun = Vec3{-.5f, 1, .5f}.Normalized();
-            const float highlight = 6 * std::pow(std::max(0.f, d.Dot(sun)), 64.f);
+            const float highlight = 6 * std::pow(std::max<double>(0.f, d.Dot(sun)), 64.f);
             return Vec3{.18f + .45f * sky, .2f + .6f * sky, .25f + .9f * sky} +
                    Vec3{1, .85f, .65f} * highlight;
         }
         const float u = (std::atan2(d.z, d.x) / (2 * Pi) + .5f) * width - .5f;
-        const float v = (std::acos(std::clamp(d.y, -1.f, 1.f)) / Pi) * height - .5f;
+        const float v = (std::acos(std::clamp<double>(d.y, -1.f, 1.f)) / Pi) * height - .5f;
         const int x = static_cast<int>(std::floor(u)), y = static_cast<int>(std::floor(v));
         const auto at = [&](int px, int py) {
             const size_t i = (static_cast<size_t>(std::clamp(py, 0, height - 1)) * width +
@@ -155,7 +155,9 @@ template <class Sample> EnvironmentImage Cube(uint32 size, uint32 levels, Sample
                     const Vec3 d =
                         CubeDirection(face, 2 * (x + .5f) / side - 1, 2 * (y + .5f) / side - 1);
                     const Vec3 color = sample(d, level);
-                    image.pixels.insert(image.pixels.end(), {color.x, color.y, color.z, 1});
+                    image.pixels.insert(image.pixels.end(),
+                                        {static_cast<float>(color.x), static_cast<float>(color.y),
+                                         static_cast<float>(color.z), 1});
                 }
     }
     return image;
@@ -198,7 +200,7 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& pat
                 const Vec3 h =
                     Ggx(n, static_cast<float>(level) / 7, (i + .5f) / 64, RadicalInverse(i));
                 const Vec3 l = h * (2 * n.Dot(h)) - n;
-                const float nl = std::max(0.f, n.Dot(l));
+                const float nl = std::max<double>(0.f, n.Dot(l));
                 sum += source.Sample(l) * nl;
                 weight += nl;
             }
@@ -214,8 +216,8 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& pat
                 for (uint32 i = 0; i < 128; ++i) {
                     const Vec3 h = Ggx(n, rough, (i + .5f) / 128, RadicalInverse(i));
                     const Vec3 l = (h * (2 * v.Dot(h)) - v).Normalized();
-                    const float nl = std::max(l.z, 0.f), nh = std::max(h.z, 1e-5f),
-                                vh = std::max(v.Dot(h), 0.f);
+                    const float nl = std::max<double>(l.z, 0.f), nh = std::max<double>(h.z, 1e-5f),
+                                vh = std::max<double>(v.Dot(h), 0.f);
                     if (nl <= 0)
                         continue;
                     const float alpha = rough * rough, a2 = alpha * alpha;

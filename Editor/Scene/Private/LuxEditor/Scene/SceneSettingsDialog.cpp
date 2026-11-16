@@ -146,8 +146,8 @@ ShowSceneSettingsDialog(LuxUI::Widget* parent, const LuxEngine::SceneSettings& s
     auto* gx = number(physics, LUX_UI_TEXT("2D 중력 X"), settings.gravity.x, -10000, 10000);
     auto* gy = number(physics, LUX_UI_TEXT("2D 중력 Y"), settings.gravity.y, -10000, 10000);
     std::array<LuxUI::DoubleSpinBox*, 3> gravity3D;
-    const std::array<float, 3> gravity{settings.gravity3D.x, settings.gravity3D.y,
-                                       settings.gravity3D.z};
+    const std::array<double, 3> gravity{settings.gravity3D.x, settings.gravity3D.y,
+                                        settings.gravity3D.z};
     for (size_t index = 0; index < gravity3D.size(); ++index)
         gravity3D[index] = number(
             physics,

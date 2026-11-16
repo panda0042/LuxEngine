@@ -142,13 +142,13 @@ double Renderer3D::Context::GetEnvironmentPreparationMs() const {
     return impl_ && impl_->modern ? impl_->modern->EnvironmentPreparationMs() : 0;
 }
 
-PerspectiveCamera::PerspectiveCamera(float fovRadians, float aspect, float nearClip,
-                                     float farClip) {
+PerspectiveCamera::PerspectiveCamera(double fovRadians, double aspect, double nearClip,
+                                     double farClip) {
     SetPerspective(fovRadians, aspect, nearClip, farClip);
 }
 
-void PerspectiveCamera::SetPerspective(float fovRadians, float aspect, float nearClip,
-                                       float farClip) {
+void PerspectiveCamera::SetPerspective(double fovRadians, double aspect, double nearClip,
+                                       double farClip) {
     projectionMatrix_ = Mat4::Perspective(fovRadians, aspect, nearClip, farClip);
     RecalculateMatrix();
 }
@@ -183,6 +183,7 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
     for (uint32 index : indices)
         if (index >= vertices.size())
             return false;
+    const Vec3 origin = vertices.front().position;
     std::vector<RenderVertex> data;
     data.reserve(vertices.size());
     for (const auto& vertex : vertices) {
@@ -193,7 +194,7 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
             !std::isfinite(normal.z) || !std::isfinite(vertex.texCoords.x) ||
             !std::isfinite(vertex.texCoords.y))
             return false;
-        data.push_back({position, {1, 1, 1, 1}, vertex.texCoords, normal});
+        data.push_back({position - origin, {1, 1, 1, 1}, vertex.texCoords, normal});
     }
     const auto vertexBytes = static_cast<uint32>(data.size() * sizeof(RenderVertex));
     const auto indexBytes = static_cast<uint32>(indices.size_bytes());
@@ -204,6 +205,7 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
         Release();
         return false;
     }
+    origin_ = origin;
     indexCount_ = static_cast<uint32>(indices.size());
     return true;
 }
@@ -222,6 +224,7 @@ bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
     if (!IsValid() ||
         vertices.size_bytes() / sizeof(Vertex3D) != vertices_.GetSize() / sizeof(RenderVertex))
         return false;
+    const Vec3 origin = vertices.front().position;
     std::vector<RenderVertex> data;
     data.reserve(vertices.size());
     for (const auto& vertex : vertices) {
@@ -231,9 +234,13 @@ bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
             !std::isfinite(n.x) || !std::isfinite(n.y) || !std::isfinite(n.z) ||
             !std::isfinite(vertex.texCoords.x) || !std::isfinite(vertex.texCoords.y))
             return false;
-        data.push_back({p, {1, 1, 1, 1}, vertex.texCoords, n});
+        data.push_back({p - origin, {1, 1, 1, 1}, vertex.texCoords, n});
     }
-    return vertices_.SetData(data.data(), static_cast<uint32>(data.size() * sizeof(RenderVertex)));
+    const bool updated =
+        vertices_.SetData(data.data(), static_cast<uint32>(data.size() * sizeof(RenderVertex)));
+    if (updated)
+        origin_ = origin;
+    return updated;
 }
 
 Renderer3D::Context::Context() : impl_(std::make_unique<Impl>()) {}
@@ -335,7 +342,8 @@ void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera, const Dire
     if (impl_->modern)
         impl_->modern->ClearDraws();
     impl_->lastError.clear();
-    impl_->viewProjection = camera.GetViewProjectionMatrix();
+    impl_->viewProjection = camera.GetProjectionMatrix() * camera.GetViewMatrix() *
+                            Mat4::Translate(camera.GetPosition());
     const float sunIntensity = std::isfinite(sun.intensity) ? std::max(0.0f, sun.intensity) : 0.0f;
     const Vec3 sunDir = (std::isfinite(sun.direction.x) && std::isfinite(sun.direction.y) &&
                          std::isfinite(sun.direction.z))
@@ -501,10 +509,10 @@ void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
     if (!impl_->modern || impl_->modern->DrawCount() >= 65536 ||
         !impl_->modern->AddDraw(
             {mesh.vertices_.handle_, mesh.indices_.handle_, texture ? texture->handle_ : 0,
-             mesh.indexCount_, transform, material.albedoColor, material.metallic,
-             material.roughness, static_cast<uint32>(material.alphaMode), material.alphaCutoff,
-             material.doubleSided, !impl_->pbr, normal, metallic, roughness, occlusion,
-             material.normalScale, material.occlusionStrength, sampling}))
+             mesh.indexCount_, transform * Mat4::Translate(mesh.origin_), material.albedoColor,
+             material.metallic, material.roughness, static_cast<uint32>(material.alphaMode),
+             material.alphaCutoff, material.doubleSided, !impl_->pbr, normal, metallic, roughness,
+             occlusion, material.normalScale, material.occlusionStrength, sampling}))
         return;
     ++impl_->stats.meshCount;
     ++impl_->stats.drawCalls;
@@ -599,7 +607,8 @@ Ref<GpuTexture> Renderer3D::Context::ResolveBaseColorTexture(const std::string& 
 
 bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& transform,
                                         const Material3D& material, int32 modelSubmesh, int32 clip,
-                                        double time, uint64 instance) {
+                                        double time, uint64 instance, const ModelPose* overridePose,
+                                        uint64 poseRevision) {
     if (!impl_ || !impl_->active || !impl_->LockValidState())
         return false;
     std::string key = path;
@@ -623,6 +632,8 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
     }
     auto& cached = found->second;
     cached.used = ++impl_->sequence;
+    if (overridePose)
+        time = static_cast<double>(poseRevision);
     const auto revision = path.empty() ? uint64{1} : AssetManager::GetMeshRevision(path);
     const bool requiresUv = !material.baseColorTexture.empty() || !material.normalTexture.empty() ||
                             !material.metallicTexture.empty() ||
@@ -642,7 +653,9 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
             } else if (cached.model != model || cached.clip != clip || cached.time != time) {
                 ModelPose pose;
                 const std::vector<ModelVertex>* source = &part.vertices;
-                if (clip >= 0 || part.skinned || part.morphTargets) {
+                if (overridePose) {
+                    source = &overridePose->submeshes.at(static_cast<size_t>(modelSubmesh));
+                } else if (clip >= 0 || part.skinned || part.morphTargets) {
                     if (model->Evaluate(time, clip, pose, error))
                         source = &pose.submeshes[static_cast<size_t>(modelSubmesh)];
                 }
@@ -941,13 +954,14 @@ void Renderer3D::DrawMesh(const Mesh3D& mesh, const Mat4& transform, const Mater
 
 bool Renderer3D::DrawMeshAsset(const std::string& path, const Mat4& transform,
                                const Material3D& material, int32 modelSubmesh, int32 clip,
-                               double time, uint64 instance) {
+                               double time, uint64 instance, const ModelPose* overridePose,
+                               uint64 poseRevision) {
     if (t_ActiveContext3D)
         return t_ActiveContext3D->DrawMeshAsset(path, transform, material, modelSubmesh, clip, time,
-                                                instance);
+                                                instance, overridePose, poseRevision);
     std::lock_guard<std::recursive_mutex> lock(s_DefaultContext3DMutex);
     return DefaultContext3D().DrawMeshAsset(path, transform, material, modelSubmesh, clip, time,
-                                            instance);
+                                            instance, overridePose, poseRevision);
 }
 
 void Renderer3D::DrawCube(const Vec3& p, const Vec3& scale, const Material3D& material) {

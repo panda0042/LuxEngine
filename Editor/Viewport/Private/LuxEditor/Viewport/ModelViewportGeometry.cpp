@@ -72,7 +72,7 @@ bool ModelViewportBounds(LuxEngine::Entity entity, LuxEngine::Vec3& minimum,
     Geometry geometry;
     if (!Resolve(entity, geometry))
         return false;
-    const float infinity = std::numeric_limits<float>::infinity();
+    const double infinity = std::numeric_limits<double>::infinity();
     minimum = {infinity, infinity, infinity};
     maximum = {-infinity, -infinity, -infinity};
     for (const auto& vertex : *geometry.vertices) {

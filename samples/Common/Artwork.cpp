@@ -63,7 +63,7 @@ void Artwork::Sprite(const std::string& relative, le::Vec2 position, le::Vec2 si
 }
 
 void Artwork::Panel(le::Vec2 position, le::Vec2 size) {
-    const float edge = std::min(.14f, std::min(size.x, size.y) * .25f);
+    const float edge = std::min<double>(.14f, std::min<double>(size.x, size.y) * .25f);
     const std::array<float, 4> x{position.x - size.x * .5f, position.x - size.x * .5f + edge,
                                  position.x + size.x * .5f - edge, position.x + size.x * .5f};
     const std::array<float, 4> y{position.y + size.y * .5f, position.y + size.y * .5f - edge,

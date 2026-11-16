@@ -18,17 +18,17 @@ struct Vertex2D {
 class LUX_API OrthographicCamera {
 public:
     OrthographicCamera();
-    OrthographicCamera(float left, float right, float bottom, float top);
+    OrthographicCamera(double left, double right, double bottom, double top);
 
-    void SetProjection(float left, float right, float bottom, float top);
+    void SetProjection(double left, double right, double bottom, double top);
 
     void SetPosition(const Vec3& position);
 
-    void SetRotation(float rotationRadians);
+    void SetRotation(double rotationRadians);
 
     const Vec3& GetPosition() const;
 
-    float GetRotation() const;
+    double GetRotation() const;
 
     const Mat4& GetProjectionMatrix() const;
 
@@ -43,7 +43,7 @@ private:
     Mat4 viewMatrix_ = Mat4::Identity();
     Mat4 viewProjectionMatrix_ = Mat4::Identity();
     Vec3 position_{0.0f, 0.0f, 0.0f};
-    float rotation_ = 0.0f;
+    double rotation_ = 0.0f;
 };
 
 class LUX_API Renderer2D {
@@ -75,10 +75,13 @@ public:
         void DrawQuad(const Vec2& position, const Vec2& size, const Vec4& color);
         void DrawQuad(const Vec3& position, const Vec2& size, const Vec4& color);
         void DrawQuad(const Mat4& transform, const Vec4& color);
-        void DrawRotatedQuad(const Vec2& position, const Vec2& size, float rotationRadians,
+        void DrawRotatedQuad(const Vec2& position, const Vec2& size, double rotationRadians,
                              const Vec4& color);
         void DrawSprite(const Vec2& position, const Vec2& size, GpuTexture* texture,
                         const Vec4& tint = Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+
+        bool DrawSpriteAsset(const Mat4& transform, const std::string& path, uint32 frame,
+                             uint32 columns, uint32 rows, const Vec4& tint);
 
         void ResetStats();
         Statistics GetStats() const;
@@ -110,10 +113,13 @@ public:
     static void DrawQuad(const Vec2& position, const Vec2& size, const Vec4& color);
     static void DrawQuad(const Vec3& position, const Vec2& size, const Vec4& color);
     static void DrawQuad(const Mat4& transform, const Vec4& color);
-    static void DrawRotatedQuad(const Vec2& position, const Vec2& size, float rotationRadians,
+    static void DrawRotatedQuad(const Vec2& position, const Vec2& size, double rotationRadians,
                                 const Vec4& color);
     static void DrawSprite(const Vec2& position, const Vec2& size, GpuTexture* texture,
                            const Vec4& tint = Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+
+    static bool DrawSpriteAsset(const Mat4& transform, const std::string& path, uint32 frame,
+                                uint32 columns, uint32 rows, const Vec4& tint);
 
     static void ResetStats();
     static Statistics GetStats();

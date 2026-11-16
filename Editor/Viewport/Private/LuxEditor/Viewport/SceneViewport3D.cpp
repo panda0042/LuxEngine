@@ -39,9 +39,9 @@ LuxEngine::Mat4 BoundsModel(LuxEngine::Entity entity,
              ((renderer && renderer->GetMeshBounds(path, minimum, maximum)) ||
               LuxEngine::AssetManager::GetMeshBounds(path, minimum, maximum)))) {
             auto size = maximum - minimum;
-            size.x = std::max(size.x, .001f);
-            size.y = std::max(size.y, .001f);
-            size.z = std::max(size.z, .001f);
+            size.x = std::max<double>(size.x, .001f);
+            size.y = std::max<double>(size.y, .001f);
+            size.z = std::max<double>(size.z, .001f);
             return world * LuxEngine::Mat4::Translate((minimum + maximum) * .5f) *
                    LuxEngine::Mat4::Scale(size);
         }
@@ -51,7 +51,7 @@ LuxEngine::Mat4 BoundsModel(LuxEngine::Entity entity,
         return world * LuxEngine::Mat4::Scale({1, 1, .02f});
     if (entity.HasComponent<LuxEngine::TilemapComponent>()) {
         const auto& map = entity.GetComponent<LuxEngine::TilemapComponent>();
-        const float width = map.width * map.tileSize, height = map.height * map.tileSize;
+        const double width = map.width * map.tileSize, height = map.height * map.tileSize;
         return world * LuxEngine::Mat4::Translate({width * .5f, height * .5f, 0}) *
                LuxEngine::Mat4::Scale({width, height, .04f});
     }
@@ -193,7 +193,7 @@ void SceneViewport3D::FrameBounds(bool selectedOnly) {
     const double aspect = double(std::max(1, width())) / std::max(1, height());
     const double halfFov =
         std::atan(std::tan(LuxEngine::ToRadians(viewFovDegrees_) * .5) * std::min(1.0, aspect));
-    distance_ = std::clamp(radius / std::sin(halfFov) * 1.2, 1.0, 100000.0);
+    distance_ = std::clamp(radius / std::sin(halfFov) * 1.2, 1.0, 100000000000000.0);
     update();
 }
 
@@ -212,7 +212,7 @@ void SceneViewport3D::FocusSelection() {
         const double aspect = double(std::max(1, width())) / std::max(1, height());
         const double halfFov =
             std::atan(std::tan(LuxEngine::ToRadians(viewFovDegrees_) * .5) * std::min(1.0, aspect));
-        distance_ = std::clamp(radius / std::sin(halfFov) * 1.2, 1.0, 100000.0);
+        distance_ = std::clamp(radius / std::sin(halfFov) * 1.2, 1.0, 100000000000000.0);
         update();
         return;
     }
@@ -338,10 +338,10 @@ void SceneViewport3D::paintEvent(LuxUI::PaintEvent*) {
         const double extent = spacing * 48;
         const auto point = [&](double first, double second) {
             if (front)
-                return LuxEngine::Vec3{float(first), float(second), focus_.z};
+                return LuxEngine::Vec3{double(first), double(second), focus_.z};
             if (side)
-                return LuxEngine::Vec3{focus_.x, float(second), float(first)};
-            return LuxEngine::Vec3{float(first), 0, float(second)};
+                return LuxEngine::Vec3{focus_.x, double(second), double(first)};
+            return LuxEngine::Vec3{double(first), 0, double(second)};
         };
         const auto gridLine = [&](double coordinate, bool first) {
             const auto segment =
@@ -399,7 +399,7 @@ void SceneViewport3D::paintEvent(LuxUI::PaintEvent*) {
             continue;
         const auto matrix = entity.GetScene()->GetWorldMatrix(entity.GetId());
         if (std::any_of(std::begin(matrix.elements), std::end(matrix.elements),
-                        [](float value) { return !std::isfinite(value); }))
+                        [](double value) { return !std::isfinite(value); }))
             continue;
         const bool sprite = entity.HasComponent<LuxEngine::SpriteRendererComponent>();
         const bool mesh = entity.HasComponent<LuxEngine::MeshRendererComponent>();
@@ -507,9 +507,9 @@ double GizmoLength(const LuxEngine::PerspectiveCamera& camera, LuxEngine::Vec3 p
                               std::max(1, height));
 }
 
-LuxEngine::Vec3 RingPoint(int axis, double angle, float radius) {
-    const float a = float(std::cos(angle)) * radius;
-    const float b = float(std::sin(angle)) * radius;
+LuxEngine::Vec3 RingPoint(int axis, double angle, double radius) {
+    const double a = double(std::cos(angle)) * radius;
+    const double b = double(std::sin(angle)) * radius;
     return axis == 0   ? LuxEngine::Vec3{0, a, b}
            : axis == 1 ? LuxEngine::Vec3{a, 0, b}
                        : LuxEngine::Vec3{a, b, 0};
@@ -537,7 +537,7 @@ int SceneViewport3D::HitGizmo(LuxUI::PointF point) const {
     const auto position = GizmoPosition();
     const auto basis = GizmoBasis();
     const auto camera = GetViewCamera();
-    const float length = float(GizmoLength(camera, position, height()));
+    const double length = double(GizmoLength(camera, position, height()));
     if (const auto center = ProjectViewportPoint(camera, size(), position);
         center && std::hypot(point.x() - center->x(), point.y() - center->y()) < 12)
         return -1;
@@ -584,7 +584,7 @@ void SceneViewport3D::DrawGizmo(LuxUI::Painter& painter) const {
     const auto position = GizmoPosition();
     const auto basis = GizmoBasis();
     const auto camera = GetViewCamera();
-    const float length = float(GizmoLength(camera, position, height()));
+    const double length = double(GizmoLength(camera, position, height()));
     painter.save();
     painter.setBrush(LuxUI::Flags::NoBrush);
     for (int axis = 0; axis < 3; ++axis) {
@@ -968,7 +968,7 @@ void SceneViewport3D::mousePressEvent(LuxUI::MouseEvent* event) {
             distance = markerDistance;
         if (!distance || *distance >= best)
             continue;
-        const auto surface = ray->origin + ray->direction * static_cast<float>(*distance);
+        const auto surface = ray->origin + ray->direction * static_cast<double>(*distance);
         if (!ProjectViewportPoint(camera, size(), surface))
             continue;
         best = *distance;
@@ -1108,7 +1108,7 @@ void SceneViewport3D::mouseMoveEvent(LuxUI::MouseEvent* event) {
                              std::max(1, height());
         const LuxEngine::Vec3 right{view[0], view[4], view[8]};
         const LuxEngine::Vec3 up{view[1], view[5], view[9]};
-        focus_ += right * float(-delta.x() * scale) + up * float(delta.y() * scale);
+        focus_ += right * double(-delta.x() * scale) + up * double(delta.y() * scale);
         update();
     } else if (dragging_ && (event->buttons() & LuxUI::Flags::LeftButton)) {
         LuxEngine::Entity entity = document_.GetSelected();
@@ -1156,7 +1156,7 @@ void SceneViewport3D::mouseMoveEvent(LuxUI::MouseEvent* event) {
                 if (!start || !current)
                     return;
                 double amount = *current - *start;
-                movement = axis * float(amount);
+                movement = axis * double(amount);
             } else {
                 auto normal = (camera.GetPosition() - focus_).Normalized();
                 if (tool_ == EditorTool::Select) {
@@ -1180,7 +1180,7 @@ void SceneViewport3D::mouseMoveEvent(LuxUI::MouseEvent* event) {
             modelingDelta = LuxEngine::Mat4::Translate(movement);
         } else if (tool_ == EditorTool::Rotate) {
             const int axis = axis_ >= 0 ? axis_ : 1;
-            float angle = static_cast<float>((drag.x() - drag.y()) * .01);
+            double angle = static_cast<double>((drag.x() - drag.y()) * .01);
             const auto camera = GetViewCamera();
             const auto from = MakeViewportRay3D(camera, size(), dragStart_);
             const auto to = MakeViewportRay3D(camera, size(), event->position());
@@ -1211,7 +1211,7 @@ void SceneViewport3D::mouseMoveEvent(LuxUI::MouseEvent* event) {
                                       ? originalRotation * localRotation
                                       : localRotation * originalRotation;
             const auto* m = rotation.elements;
-            value.rotation.y = std::asin(std::clamp(-m[2], -1.0f, 1.0f));
+            value.rotation.y = std::asin(std::clamp<double>(-m[2], -1.0f, 1.0f));
             if (std::abs(std::cos(value.rotation.y)) > .00001f) {
                 value.rotation.x = std::atan2(m[6], m[10]);
                 value.rotation.z = std::atan2(m[1], m[0]);
@@ -1227,13 +1227,14 @@ void SceneViewport3D::mouseMoveEvent(LuxUI::MouseEvent* event) {
                 const auto projected = ProjectViewportSegment(
                     camera, size(), initialPivot_,
                     initialPivot_ +
-                        direction * float(GizmoLength(camera, initialPosition_, height())));
+                        direction * double(GizmoLength(camera, initialPosition_, height())));
                 if (!projected || projected->length() < 1)
                     return;
                 pixels = LuxUI::PointF::dotProduct(drag, projected->p2() - projected->p1()) /
                          projected->length();
             }
-            const float factor = static_cast<float>(std::clamp(std::exp(pixels * .01), .05, 100.0));
+            const double factor =
+                static_cast<double>(std::clamp(std::exp(pixels * .01), .05, 100.0));
             value.scale = {initialScale_.x * (axis_ < 0 || axis_ == 0 ? factor : 1),
                            initialScale_.y * (axis_ < 0 || axis_ == 1 ? factor : 1),
                            initialScale_.z * (axis_ < 0 || axis_ == 2 ? factor : 1)};
@@ -1281,7 +1282,8 @@ void SceneViewport3D::wheelEvent(LuxUI::WheelEvent* event) {
     }
     if (dragging_ || marquee_)
         CancelInteraction();
-    distance_ = std::clamp(distance_ * std::pow(.9, event->angleDelta().y() / 120.0), .1, 100000.0);
+    distance_ = std::clamp(distance_ * std::pow(.9, event->angleDelta().y() / 120.0), .1,
+                           100000000000000.0);
     update();
 }
 
@@ -1303,17 +1305,17 @@ void SceneViewport3D::SetTool(EditorTool tool) {
 namespace LuxEditor {
 LuxEngine::PerspectiveCamera SceneViewport3D::GetViewCamera() const {
     auto camera = MakeViewportCamera3D(size(), focus_, yaw_, pitch_, distance_);
-    float fov, nearClip, farClip;
+    double fov, nearClip, farClip;
     GetViewProjection(fov, nearClip, farClip);
     camera.SetPerspective(LuxEngine::ToRadians(fov),
-                          static_cast<float>(std::max(1, width())) / std::max(1, height()),
+                          static_cast<double>(std::max(1, width())) / std::max(1, height()),
                           nearClip, farClip);
     if (roll_ != 0) {
         const auto& view = camera.GetViewMatrix().elements;
         const LuxEngine::Vec3 right{view[0], view[4], view[8]};
         const LuxEngine::Vec3 up{view[1], view[5], view[9]};
-        camera.SetUp(up * static_cast<float>(std::cos(roll_)) +
-                     right * static_cast<float>(std::sin(roll_)));
+        camera.SetUp(up * static_cast<double>(std::cos(roll_)) +
+                     right * static_cast<double>(std::sin(roll_)));
     }
     return camera;
 }
@@ -1324,16 +1326,17 @@ void SceneViewport3D::UseEditorProjection() {
     viewNearClip_ = viewFarClip_ = 0;
 }
 
-void SceneViewport3D::GetViewProjection(float& fovDegrees, float& nearClip, float& farClip) const {
+void SceneViewport3D::GetViewProjection(double& fovDegrees, double& nearClip,
+                                        double& farClip) const {
     fovDegrees = viewFovDegrees_;
     nearClip = viewNearClip_ > 0 ? viewNearClip_
-                                 : static_cast<float>(std::clamp(distance_ * .001, .001, 1000.));
+                                 : static_cast<double>(std::clamp(distance_ * .001, .001, 1000.));
     farClip = viewFarClip_ > nearClip ? viewFarClip_
-                                      : static_cast<float>(std::max(1000., distance_ * 100.));
+                                      : static_cast<double>(std::max(1000000., distance_ * 1000.));
 }
 
-bool SceneViewport3D::SetViewCamera(const LuxEngine::PerspectiveCamera& camera, float fovDegrees,
-                                    float nearClip, float farClip) {
+bool SceneViewport3D::SetViewCamera(const LuxEngine::PerspectiveCamera& camera, double fovDegrees,
+                                    double nearClip, double farClip) {
     const auto position = camera.GetPosition();
     const auto direction = camera.GetTarget() - position;
     const double length = std::hypot(direction.x, direction.y, direction.z);
@@ -1349,14 +1352,14 @@ bool SceneViewport3D::SetViewCamera(const LuxEngine::PerspectiveCamera& camera, 
     try {
         (void)LuxEngine::Mat4::Perspective(
             LuxEngine::ToRadians(fovDegrees),
-            static_cast<float>(std::max(1, width())) / std::max(1, height()), nearClip, farClip);
+            static_cast<double>(std::max(1, width())) / std::max(1, height()), nearClip, farClip);
     } catch (const std::exception&) {
         return false;
     }
     CancelInteraction();
-    const auto forward = direction * static_cast<float>(1 / length);
-    distance_ = std::clamp(length, .1, 100000.);
-    focus_ = position + forward * static_cast<float>(distance_);
+    const auto forward = direction * static_cast<double>(1 / length);
+    distance_ = std::clamp(length, .1, 100000000000000.);
+    focus_ = position + forward * static_cast<double>(distance_);
     yaw_ = std::atan2(-forward.x, -forward.z);
     pitch_ = std::asin(std::clamp(static_cast<double>(forward.y), -1., 1.));
     viewFovDegrees_ = fovDegrees;
@@ -1464,8 +1467,8 @@ void SceneViewport3D::AdvanceFlyCamera() {
         direction.y -= 1;
     const bool shift =
         flyFast_ || (LuxUI::Application::keyboardModifiers() & LuxUI::Flags::ShiftModifier);
-    focus_ +=
-        direction.Normalized() * static_cast<float>(dt * GetEffectiveMoveSpeed() * (shift ? 3 : 1));
+    focus_ += direction.Normalized() *
+              static_cast<double>(dt * GetEffectiveMoveSpeed() * (shift ? 3 : 1));
     update();
 }
 } // namespace LuxEditor

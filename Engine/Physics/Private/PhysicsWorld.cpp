@@ -2,6 +2,9 @@
 // clang-format off
 #include <Jolt/Jolt.h>
 // clang-format on
+#ifndef JPH_DOUBLE_PRECISION
+#error "LuxEngine requires Jolt built with DOUBLE_PRECISION=ON"
+#endif
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/TempAllocator.h>
@@ -75,7 +78,7 @@ void EnsureRuntime() {
     static JoltRuntime runtime;
 }
 
-bool Valid(Vec3 value, float limit = 100000.f) {
+bool Valid(Vec3 value, double limit = 100000.0) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z) &&
            std::abs(value.x) <= limit && std::abs(value.y) <= limit && std::abs(value.z) <= limit;
 }
@@ -85,7 +88,7 @@ bool Same(Vec3 a, Vec3 b) {
 }
 
 JPH::Vec3 Vector(Vec3 v) {
-    return {v.x, v.y, v.z};
+    return {static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)};
 }
 
 Vec3 Vector(JPH::Vec3Arg v) {
@@ -176,8 +179,8 @@ struct PhysicsWorld::Impl final : JPH::ContactListener {
         event.entityB = static_cast<uint32>(b.GetUserData());
         event.normal = Vector(manifold.mWorldSpaceNormal);
         const auto point = manifold.GetWorldSpaceContactPointOn1(0);
-        event.point = {static_cast<float>(point.GetX()), static_cast<float>(point.GetY()),
-                       static_cast<float>(point.GetZ())};
+        event.point = {static_cast<double>(point.GetX()), static_cast<double>(point.GetY()),
+                       static_cast<double>(point.GetZ())};
         event.isTrigger = a.IsSensor() || b.IsSensor();
         contacts.push_back(event);
     }
@@ -217,7 +220,7 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input) {
             report(id, "duplicate entity ID");
             continue;
         }
-        if (!id || !Valid(description.position) || !Valid(description.rotation) ||
+        if (!id || !Valid(description.position, 1e15) || !Valid(description.rotation) ||
             !Valid(description.velocity) || !Valid(description.size, 10000) ||
             !Valid(description.offset) || description.size.x < .02f || description.size.y < .02f ||
             description.size.z < .02f || !std::isfinite(description.mass) ||
@@ -347,8 +350,8 @@ void PhysicsWorld::Step(double dt, Vec3 gravity) {
     const auto& bodies = impl_->system.GetBodyInterface();
     for (auto& [id, entry] : impl_->entries) {
         const auto p = bodies.GetPosition(entry.body);
-        entry.state = {{static_cast<float>(p.GetX()), static_cast<float>(p.GetY()),
-                        static_cast<float>(p.GetZ())},
+        entry.state = {{static_cast<double>(p.GetX()), static_cast<double>(p.GetY()),
+                        static_cast<double>(p.GetZ())},
                        Vector(bodies.GetRotation(entry.body).GetEulerAngles()),
                        Vector(bodies.GetLinearVelocity(entry.body)),
                        false};
@@ -390,8 +393,8 @@ bool PhysicsWorld::Raycast(Vec3 origin, Vec3 direction, float maxDistance, Rayca
     const double length =
         std::hypot(static_cast<double>(direction.x), static_cast<double>(direction.y),
                    static_cast<double>(direction.z));
-    if (!Valid(origin) || !std::isfinite(length) || length < 1e-12 || !std::isfinite(maxDistance) ||
-        maxDistance <= 0 || maxDistance > 100000)
+    if (!Valid(origin, 1e15) || !std::isfinite(length) || length < 1e-12 ||
+        !std::isfinite(maxDistance) || maxDistance <= 0 || maxDistance > 100000)
         return false;
     const Vec3 unit{static_cast<float>(direction.x / length),
                     static_cast<float>(direction.y / length),

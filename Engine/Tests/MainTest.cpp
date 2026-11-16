@@ -335,7 +335,7 @@ void Core() {
     Check(Near(clampedSample.position.x, 20.0f),
           "animation factor clamped at end without extrapolation");
     clip.loop = true;
-    float animTime = 0.0f;
+    double animTime = 0.0;
     TransformComponent animTransform;
     for (int step = 0; step < 1000; ++step) {
         AnimationEngine::UpdateClip(clip, animTime, 0.016f, animTransform);

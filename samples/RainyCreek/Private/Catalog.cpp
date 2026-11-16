@@ -53,11 +53,13 @@ le::RawMeshData ReadMesh(const ModelPart& part) {
     for (const auto index : raw.indices)
         if (index >= raw.vertices.size() / 3)
             throw std::runtime_error("모델의 인덱스 범위가 올바르지 않습니다.");
-    for (const auto* values : {&raw.vertices, &raw.normals, &raw.texCoords})
-        for (const float value : *values)
-            if (!std::isfinite(value))
-                throw std::runtime_error("모델에 유효하지 않은 좌표가 있습니다.");
-    for (const float value : raw.vertices)
+    const auto valid = [](const auto& values) {
+        return std::all_of(values.begin(), values.end(),
+                           [](auto value) { return std::isfinite(value); });
+    };
+    if (!valid(raw.vertices) || !valid(raw.normals) || !valid(raw.texCoords))
+        throw std::runtime_error("모델에 유효하지 않은 좌표가 있습니다.");
+    for (const double value : raw.vertices)
         if (std::abs(value) > 10000.f)
             throw std::runtime_error("샘플 모델 좌표는 10km 이내여야 합니다.");
     return raw;

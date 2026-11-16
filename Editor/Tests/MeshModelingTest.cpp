@@ -43,7 +43,7 @@ std::vector<uint32> Fingerprint(const ModelingMesh& mesh) {
         for (const auto value :
              {vertex.position.x, vertex.position.y, vertex.position.z, vertex.normal.x,
               vertex.normal.y, vertex.normal.z, vertex.texCoords.x, vertex.texCoords.y})
-            words.push_back(std::bit_cast<uint32>(value));
+            words.push_back(std::bit_cast<uint64>(value));
     return words;
 }
 

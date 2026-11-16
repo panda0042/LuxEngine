@@ -77,10 +77,10 @@ bool ValidPath(const std::string& value) {
     return true;
 }
 
-float Scalar(double value) {
+double Scalar(double value) {
     Require(std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max(),
             "FBX 값이 유효한 실수 범위를 벗어났습니다.");
-    return static_cast<float>(value);
+    return static_cast<double>(value);
 }
 
 Vec3 Vector(ufbx_vec3 value) {
@@ -247,8 +247,9 @@ void ReadMaterials(const ufbx_scene& scene, ModelAsset& model) {
         const auto& pbr = source->pbr;
         const auto& color = pbr.base_color.has_value ? pbr.base_color : source->fbx.diffuse_color;
         if (color.has_value) {
-            material.baseColor = {Scalar(color.value_vec3.x), Scalar(color.value_vec3.y),
-                                  Scalar(color.value_vec3.z), 1.0f};
+            material.baseColor = {static_cast<float>(Scalar(color.value_vec3.x)),
+                                  static_cast<float>(Scalar(color.value_vec3.y)),
+                                  static_cast<float>(Scalar(color.value_vec3.z)), 1.0f};
         }
         const double factor = pbr.base_factor.has_value ? pbr.base_factor.value_real : 1.0;
         material.baseColor.x = Scalar(material.baseColor.x * factor);
@@ -306,7 +307,8 @@ void ReadWeights(const ufbx_mesh& mesh, uint32 vertex, ModelVertex& result, size
                 const auto weight = skin->weights.data[info.weight_begin + index];
                 Require(weight.cluster_index < skin->clusters.count && weight.weight >= 0,
                         "FBX 스킨 가중치가 올바르지 않습니다.");
-                result.weights.push_back({offset + weight.cluster_index, Scalar(weight.weight)});
+                result.weights.push_back(
+                    {offset + weight.cluster_index, static_cast<float>(Scalar(weight.weight))});
             }
         }
         offset += static_cast<uint32>(skin->clusters.count);
@@ -597,6 +599,22 @@ bool ModelAsset::Evaluate(double seconds, int32 clip, ModelPose& output, std::st
                         Normal(normalMatrix, AttributeValue(mesh.skinned_normal, corner));
                 }
             }
+            std::vector<Vec3> inputs;
+            inputs.reserve(vertices.size());
+            for (size_t vertex = 0; vertex < vertices.size(); ++vertex) {
+                const auto corner = mapping.corners.at(vertex);
+                const auto control = mesh.vertex_indices.data[corner];
+                ufbx_vec3 offset{};
+                for (const auto* blend : mesh.blend_deformers) {
+                    const auto value = ufbx_get_blend_vertex_offset(blend, control);
+                    offset.x += value.x;
+                    offset.y += value.y;
+                    offset.z += value.z;
+                }
+                const auto deformed = ufbx_transform_direction(&node->geometry_to_node, offset);
+                inputs.push_back(submeshes[index].vertices[vertex].position + Vector(deformed));
+            }
+            result.deformationPositions.push_back(std::move(inputs));
             result.submeshes.push_back(std::move(vertices));
         }
         impl_->cachedPose = result;

@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace LuxEngine {
+struct ModelPose;
 
 struct Vertex3D {
     Vec3 position;
@@ -44,9 +45,9 @@ struct PointLight {
 class LUX_API PerspectiveCamera {
 public:
     PerspectiveCamera();
-    PerspectiveCamera(float fovRadians, float aspect, float nearClip, float farClip);
+    PerspectiveCamera(double fovRadians, double aspect, double nearClip, double farClip);
 
-    void SetPerspective(float fovRadians, float aspect, float nearClip, float farClip);
+    void SetPerspective(double fovRadians, double aspect, double nearClip, double farClip);
 
     void SetPosition(const Vec3& position);
 
@@ -92,6 +93,7 @@ private:
     GpuBuffer vertices_;
     GpuBuffer indices_;
     uint32 indexCount_ = 0;
+    Vec3 origin_;
 };
 
 class LUX_API Renderer3D {
@@ -130,7 +132,8 @@ public:
                       GpuTexture* texture);
         bool DrawMeshAsset(const std::string& path, const Mat4& transform,
                            const Material3D& material, int32 modelSubmesh = -1, int32 clip = -1,
-                           double time = 0.0, uint64 instance = 0);
+                           double time = 0.0, uint64 instance = 0, const ModelPose* pose = nullptr,
+                           uint64 poseRevision = 0);
         void DrawMesh(std::span<const Vec3> positions, std::span<const uint32> indices,
                       const Mat4& transform, const Material3D& material);
         void DrawCube(const Vec3& position, const Vec3& scale, const Material3D& material);
@@ -179,7 +182,8 @@ public:
                          GpuTexture* texture);
     static bool DrawMeshAsset(const std::string& path, const Mat4& transform,
                               const Material3D& material, int32 modelSubmesh = -1, int32 clip = -1,
-                              double time = 0.0, uint64 instance = 0);
+                              double time = 0.0, uint64 instance = 0,
+                              const ModelPose* pose = nullptr, uint64 poseRevision = 0);
     static void DrawMesh(std::span<const Vec3> positions, std::span<const uint32> indices,
                          const Mat4& transform, const Material3D& material);
     static void DrawCube(const Vec3& position, const Vec3& scale, const Material3D& material);

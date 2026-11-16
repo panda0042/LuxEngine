@@ -8,6 +8,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -20,6 +21,19 @@
 #endif
 
 namespace LuxEngine::Forge {
+namespace {
+std::array<float, 16> GpuMatrix(const Mat4& matrix) {
+    std::array<float, 16> result;
+    std::transform(std::begin(matrix.elements), std::end(matrix.elements), result.begin(),
+                   [](double v) { return static_cast<float>(v); });
+    return result;
+}
+
+void CopyMatrix(float* destination, const Mat4& matrix) {
+    const auto packed = GpuMatrix(matrix);
+    std::copy(packed.begin(), packed.end(), destination);
+}
+} // namespace
 
 struct ForgeLibrary {
     SDL_SharedObject* module = nullptr;
@@ -287,10 +301,10 @@ bool ForgeBackend::DrawTexturedTriangles(std::span<const RenderVertex> vertices,
         return Reject("DrawTriangles needs a non-empty triangle list");
     if (texture && !textures_.count(texture))
         return Reject("DrawTriangles with a texture that is not live");
-    if (!lib_->api->drawTriangles(lib_->device,
-                                  reinterpret_cast<const LuxForgeVertex*>(vertices.data()),
-                                  static_cast<uint32_t>(vertices.size()), viewProjection.elements,
-                                  static_cast<uint32_t>(texture), depth ? 1 : 0))
+    if (!lib_->api->drawTriangles(
+            lib_->device, reinterpret_cast<const LuxForgeVertex*>(vertices.data()),
+            static_cast<uint32_t>(vertices.size()), GpuMatrix(viewProjection).data(),
+            static_cast<uint32_t>(texture), depth ? 1 : 0))
         return ForgeFailure();
     UpdateFrameStats();
     return true;
@@ -301,13 +315,18 @@ bool ForgeBackend::SetLighting(const GpuLighting& lighting) {
         return false;
     if (!frameOpen_)
         return Reject("SetLighting called outside a frame");
+    lighting_ = lighting;
+    lightPoints_.assign(lighting.points.begin(), lighting.points.end());
+    lighting_.points = lightPoints_;
     LuxForgePointLight points[16] = {};
     const size_t count = std::min<size_t>(lighting.points.size(), 16);
     for (size_t i = 0; i < count; ++i) {
         const GpuPointLight& p = lighting.points[i];
-        points[i] = {{p.position.x, p.position.y, p.position.z},
+        points[i] = {{static_cast<float>(p.position.x), static_cast<float>(p.position.y),
+                      static_cast<float>(p.position.z)},
                      p.radius,
-                     {p.color.x, p.color.y, p.color.z},
+                     {static_cast<float>(p.color.x), static_cast<float>(p.color.y),
+                      static_cast<float>(p.color.z)},
                      p.intensity};
     }
     LuxForgeLighting desc = {};
@@ -338,7 +357,7 @@ bool ForgeBackend::DrawIndexed(uint64 vertexBuffer, uint64 indexBuffer, uint32 i
     const float colour[4] = {albedo.x, albedo.y, albedo.z, albedo.w};
     if (!lib_->api->drawIndexed(lib_->device, static_cast<uint32_t>(vertexBuffer),
                                 static_cast<uint32_t>(indexBuffer), indexCount,
-                                viewProjection.elements, model.elements, colour,
+                                GpuMatrix(viewProjection).data(), GpuMatrix(model).data(), colour,
                                 static_cast<uint32_t>(texture), metallic, roughness, pbr ? 1 : 0))
         return ForgeFailure();
     UpdateFrameStats();
@@ -522,7 +541,7 @@ public:
         d.indexBuffer = static_cast<uint32_t>(draw.indexBuffer);
         d.texture = static_cast<uint32_t>(draw.texture);
         d.indexCount = draw.indexCount;
-        std::memcpy(d.model, draw.model.elements, sizeof(d.model));
+        CopyMatrix(d.model, draw.model);
         Copy4(d.albedo, draw.albedo);
         d.metallic = draw.metallic;
         d.roughness = draw.roughness;
@@ -538,6 +557,7 @@ public:
         d.occlusionStrength = draw.occlusionStrength;
         d.sampling = draw.sampling;
         draws_.push_back(d);
+        models_.push_back(draw.model);
         return true;
     }
 
@@ -547,6 +567,7 @@ public:
 
     void ClearDraws() override {
         draws_.clear();
+        models_.clear();
     }
 
     bool EnvironmentReady() const override {
@@ -572,12 +593,24 @@ public:
         const bool active = ready_ && activePath_ == settings.environmentPath;
 
         LuxForgeScene scene = {};
-        std::memcpy(scene.viewProjection, camera.GetViewProjectionMatrix().elements,
-                    sizeof(scene.viewProjection));
+        const Vec3 origin = camera.GetPosition();
+        const Mat4 relativeView = camera.GetViewMatrix() * Mat4::Translate(origin);
+        CopyMatrix(scene.viewProjection, camera.GetProjectionMatrix() * relativeView);
+        for (size_t index = 0; index < draws_.size(); ++index)
+            CopyMatrix(draws_[index].model, Mat4::Translate(origin * -1.0) * models_[index]);
         const auto position = camera.GetPosition();
-        Copy4(scene.camera, {position.x, position.y, position.z, exposure});
-        Copy4(scene.environment, {settings.environmentColor.x, settings.environmentColor.y,
-                                  settings.environmentColor.z, settings.environmentIntensity});
+        auto lighting = backend_->lighting_;
+        std::vector<GpuPointLight> relativeLights(lighting.points.begin(), lighting.points.end());
+        for (auto& light : relativeLights)
+            light.position = light.position - origin;
+        lighting.points = relativeLights;
+        lighting.camera = {};
+        backend_->SetLighting(lighting);
+        Copy4(scene.camera, {0, 0, 0, exposure});
+        Copy4(scene.environment,
+              {static_cast<float>(settings.environmentColor.x),
+               static_cast<float>(settings.environmentColor.y),
+               static_cast<float>(settings.environmentColor.z), settings.environmentIntensity});
         scene.options[0] = settings.environmentRotation * std::numbers::pi_v<float> / 180;
         scene.options[1] = settings.imageBasedLighting && active ? 1.f : 0.f;
         scene.options[2] = settings.toneMapping ? 1.f : 0.f;
@@ -602,7 +635,7 @@ public:
             const Mat4 shadowMatrix =
                 Mat4::Orthographic(-half, half, -half, half, .1f, settings.shadowRange * 4) *
                 lightView;
-            std::memcpy(scene.shadowMatrix, shadowMatrix.elements, sizeof(scene.shadowMatrix));
+            CopyMatrix(scene.shadowMatrix, shadowMatrix * Mat4::Translate(origin));
             scene.shadowOptions[0] = 1;
             scene.shadowOptions[1] = 1.f / settings.shadowResolution;
             scene.shadowOptions[2] = settings.shadowDepthBias;
@@ -698,7 +731,8 @@ private:
         const Mat4 viewProjection = camera.GetViewProjectionMatrix();
         for (const auto& d : draws_) {
             Mat4 model;
-            std::memcpy(model.elements, d.model, sizeof(d.model));
+            for (size_t index = 0; index < 16; ++index)
+                model.elements[index] = d.model[index];
             const Vec4 albedo(d.albedo[0] * exposure, d.albedo[1] * exposure,
                               d.albedo[2] * exposure, d.albedo[3]);
             if (!backend_->DrawIndexed(d.vertexBuffer, d.indexBuffer, d.indexCount, viewProjection,
@@ -711,6 +745,7 @@ private:
     ForgeBackend* backend_;
     std::weak_ptr<ForgeLibrary> library_;
     std::vector<LuxForgeSceneDraw> draws_;
+    std::vector<Mat4> models_;
     uint32_t environment_ = 0, neutral_ = 0;
     std::shared_ptr<EnvironmentJob> job_;
     std::string requestedPath_, attemptedPath_, activePath_;
