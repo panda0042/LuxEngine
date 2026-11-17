@@ -3,8 +3,16 @@
 #include <LuxEngine/Platform/Input.hpp>
 #include <LuxEngine/Platform/Window.hpp>
 #include <SDL3/SDL.h>
+#include <unordered_map>
+#include <vector>
 
 namespace LuxEngine {
+namespace {
+std::unordered_map<SDL_WindowID, Window*>& Windows() {
+    static std::unordered_map<SDL_WindowID, Window*> windows;
+    return windows;
+}
+} // namespace
 
 Window::~Window() {
     Shutdown();
@@ -43,6 +51,7 @@ bool Window::Initialize(const WindowProps& props) {
 
     if (!ApplySystemTheme())
         Log::Warn(std::string("Window icon failed: ") + SDL_GetError());
+    Windows()[SDL_GetWindowID(window_)] = this;
     isRunning_ = true;
     if (!props_.hidden)
         Log::Info("Window initialized successfully (" + props_.title + ")");
@@ -73,6 +82,7 @@ bool Window::ApplySystemTheme() {
 
 void Window::Shutdown() {
     if (window_) {
+        Windows().erase(SDL_GetWindowID(window_));
         SDL_DestroyWindow(window_);
         window_ = nullptr;
     }
@@ -107,98 +117,105 @@ void Window::PollEvents() {
     const bool dark = SDL_GetSystemTheme() == SDL_SYSTEM_THEME_DARK;
     if (hasWindowIcon_ && (colorTheme_ == ColorTheme::Dark) != dark)
         ApplySystemTheme();
-    const SDL_WindowID currentWindowID = SDL_GetWindowID(window_);
     SDL_Event event;
     uint32 processed = 0;
-
     while (processed < MaxEventsPerPoll && SDL_PollEvent(&event)) {
         ++processed;
-        const bool foreignInput =
-            ((event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
-             event.key.windowID != currentWindowID) ||
-            (event.type == SDL_EVENT_MOUSE_MOTION && event.motion.windowID != currentWindowID) ||
-            (event.type == SDL_EVENT_MOUSE_WHEEL && event.wheel.windowID != currentWindowID) ||
-            ((event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
-              event.type == SDL_EVENT_MOUSE_BUTTON_UP) &&
-             event.button.windowID != currentWindowID) ||
-            ((event.type == SDL_EVENT_WINDOW_FOCUS_LOST ||
-              event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) &&
-             event.window.windowID != currentWindowID);
-        if (foreignInput)
-            continue;
-        Input::ProcessEvent(event);
-        if (event.type == SDL_EVENT_SYSTEM_THEME_CHANGED) {
-            if (!ApplySystemTheme())
-                Log::Warn(std::string("Window icon update failed: ") + SDL_GetError());
-        } else if (event.type == SDL_EVENT_QUIT) {
+        if (auto* native = SDL_GetWindowFromEvent(&event)) {
+            const auto found = Windows().find(SDL_GetWindowID(native));
+            if (found != Windows().end())
+                found->second->ProcessEvent(event);
+        } else if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_SYSTEM_THEME_CHANGED) {
+            // A callback may close another window. Resolve each owner again before dispatch.
+            std::vector<SDL_WindowID> ids;
+            for (const auto& [id, window] : Windows()) {
+                static_cast<void>(window);
+                ids.push_back(id);
+            }
+            for (const auto id : ids)
+                if (const auto found = Windows().find(id); found != Windows().end())
+                    found->second->ProcessEvent(event);
+        } else if (event.type >= SDL_EVENT_GAMEPAD_AXIS_MOTION &&
+                   event.type <= SDL_EVENT_GAMEPAD_STEAM_HANDLE_UPDATED) {
+            Input::ProcessEvent(event);
+        }
+    }
+}
+
+void Window::ProcessEvent(const SDL_Event& event) {
+    const SDL_WindowID currentWindowID = SDL_GetWindowID(window_);
+    Input::ProcessEvent(event);
+    if (event.type == SDL_EVENT_SYSTEM_THEME_CHANGED) {
+        if (!ApplySystemTheme())
+            Log::Warn(std::string("Window icon update failed: ") + SDL_GetError());
+    } else if (event.type == SDL_EVENT_QUIT) {
+        isRunning_ = false;
+        if (eventCallback_) {
+            WindowCloseEvent e;
+            eventCallback_(e);
+        }
+    } else if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
+        if (event.window.windowID == currentWindowID && eventCallback_) {
+            WindowFocusEvent e;
+            eventCallback_(e);
+        }
+    } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+        if (event.window.windowID == currentWindowID && eventCallback_) {
+            WindowLostFocusEvent e;
+            eventCallback_(e);
+        }
+    } else if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+        if (event.window.windowID == currentWindowID) {
             isRunning_ = false;
             if (eventCallback_) {
                 WindowCloseEvent e;
                 eventCallback_(e);
             }
-        } else if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
-            if (event.window.windowID == currentWindowID && eventCallback_) {
-                WindowFocusEvent e;
-                eventCallback_(e);
+        }
+    } else if (event.type == SDL_EVENT_KEY_DOWN) {
+        if (eventCallback_) {
+            KeyPressedEvent e(static_cast<int32>(event.key.key), event.key.repeat);
+            eventCallback_(e);
+        }
+    } else if (event.type == SDL_EVENT_KEY_UP) {
+        if (eventCallback_) {
+            KeyReleasedEvent e(static_cast<int32>(event.key.key));
+            eventCallback_(e);
+        }
+    } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
+        if (eventCallback_) {
+            MouseMovedEvent e(event.motion.x, event.motion.y);
+            eventCallback_(e);
+        }
+    } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+        if (eventCallback_) {
+            MouseScrolledEvent e(event.wheel.x, event.wheel.y);
+            eventCallback_(e);
+        }
+    } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+        if (eventCallback_) {
+            MouseButtonPressedEvent e(static_cast<int32>(event.button.button));
+            eventCallback_(e);
+        }
+    } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+        if (eventCallback_) {
+            MouseButtonReleasedEvent e(static_cast<int32>(event.button.button));
+            eventCallback_(e);
+        }
+    } else if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+               event.type == SDL_EVENT_WINDOW_RESIZED ||
+               event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED ||
+               event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED ||
+               event.type == SDL_EVENT_WINDOW_RESTORED) {
+        if (event.window.windowID == currentWindowID) {
+            int width = 0, height = 0;
+            if (SDL_GetWindowSize(window_, &width, &height)) {
+                props_.width = static_cast<uint32>(width);
+                props_.height = static_cast<uint32>(height);
             }
-        } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
-            if (event.window.windowID == currentWindowID && eventCallback_) {
-                WindowLostFocusEvent e;
-                eventCallback_(e);
-            }
-        } else if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
-            if (event.window.windowID == currentWindowID) {
-                isRunning_ = false;
-                if (eventCallback_) {
-                    WindowCloseEvent e;
-                    eventCallback_(e);
-                }
-            }
-        } else if (event.type == SDL_EVENT_KEY_DOWN) {
             if (eventCallback_) {
-                KeyPressedEvent e(static_cast<int32>(event.key.key), event.key.repeat);
+                WindowResizeEvent e(props_.width, props_.height);
                 eventCallback_(e);
-            }
-        } else if (event.type == SDL_EVENT_KEY_UP) {
-            if (eventCallback_) {
-                KeyReleasedEvent e(static_cast<int32>(event.key.key));
-                eventCallback_(e);
-            }
-        } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
-            if (eventCallback_) {
-                MouseMovedEvent e(event.motion.x, event.motion.y);
-                eventCallback_(e);
-            }
-        } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
-            if (eventCallback_) {
-                MouseScrolledEvent e(event.wheel.x, event.wheel.y);
-                eventCallback_(e);
-            }
-        } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-            if (eventCallback_) {
-                MouseButtonPressedEvent e(static_cast<int32>(event.button.button));
-                eventCallback_(e);
-            }
-        } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
-            if (eventCallback_) {
-                MouseButtonReleasedEvent e(static_cast<int32>(event.button.button));
-                eventCallback_(e);
-            }
-        } else if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
-                   event.type == SDL_EVENT_WINDOW_RESIZED ||
-                   event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED ||
-                   event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED ||
-                   event.type == SDL_EVENT_WINDOW_RESTORED) {
-            if (event.window.windowID == currentWindowID) {
-                int width = 0, height = 0;
-                if (SDL_GetWindowSize(window_, &width, &height)) {
-                    props_.width = static_cast<uint32>(width);
-                    props_.height = static_cast<uint32>(height);
-                }
-                if (eventCallback_) {
-                    WindowResizeEvent e(props_.width, props_.height);
-                    eventCallback_(e);
-                }
             }
         }
     }

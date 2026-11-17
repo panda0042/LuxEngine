@@ -1,5 +1,7 @@
 #include <LuxEditor/Build/BuildOutput.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
+#include <LuxEditor/Scripting/CSharpLanguageClient.hpp>
+#include <LuxEditor/Scripting/ScriptDebugger.hpp>
 #include <LuxEditor/Scripting/ScriptWorkspace.hpp>
 #include <LuxEditor/Ui/IconFactory.hpp>
 #include <algorithm>
@@ -221,6 +223,7 @@ ScriptWorkspace::ScriptWorkspace(LuxUI::Widget* parent) : LuxUI::Widget(parent) 
                                                  item->data(LuxUI::Flags::UserRole + 2).toInt()))
                     ShowFailure(error);
             });
+    BuildScriptServices(toolbar, bottom);
     SetExecutionActive(false);
 }
 
@@ -272,6 +275,46 @@ bool ScriptWorkspace::OpenFile(const std::filesystem::path& path, std::string& e
     connect(editor, &LuxUI::CodeEditor::modificationChanged, this,
             [this, editor] { UpdateCaption(editor); });
     connect(editor, &LuxUI::CodeEditor::textChanged, this, [this] { outlineTimer_.start(); });
+    connect(editor, &LuxUI::CodeEditor::textChanged, this,
+            [this, editor] { SourceChanged(editor); });
+    connect(editor, &LuxUI::CodeEditor::CompletionRequested, this, [this] { CompleteCode(); });
+    connect(editor, &LuxUI::CodeEditor::DefinitionRequested, this, [this] { GoToDefinition(); });
+    connect(editor, &LuxUI::CodeEditor::BreakpointsChanged, this,
+            [this, editor] { SaveBreakpoints(editor); });
+    connect(editor, &LuxUI::CodeEditor::BreakpointConditionRequested, this,
+            [this, editor](int line) {
+                auto points = editor->Breakpoints();
+                const auto found =
+                    std::find_if(points.begin(), points.end(),
+                                 [line](const auto& point) { return point.line == line; });
+                bool accepted = false;
+                const auto condition = LuxUI::InputDialog::getText(
+                    this, LUX_UI_TEXT("중단점 조건"), LUX_UI_TEXT("C# 식 (비우면 항상 중단)"),
+                    LuxUI::LineEdit::Normal,
+                    found == points.end() ? LuxUI::String() : found->condition, &accepted);
+                if (!accepted)
+                    return;
+                if (found == points.end())
+                    points.push_back({line, condition, false});
+                else
+                    found->condition = condition;
+                editor->SetBreakpoints(points);
+                SaveBreakpoints(editor);
+            });
+    const auto saved = LuxUI::Settings().value(LUX_UI_TEXT("scripts/breakpoints")).toByteArray();
+    const auto points =
+        LuxUI::JsonDocument::fromJson(saved).object().value(TextPath(canonical)).toArray();
+    std::vector<LuxUI::CodeBreakpoint> breakpoints;
+    for (const auto& point : points)
+        breakpoints.push_back({point.toObject().value("line").toInt(),
+                               point.toObject().value("condition").toString(), false});
+    editor->SetBreakpoints(breakpoints);
+    debugger_->SetBreakpoints(TextPath(canonical), breakpoints);
+    editor->setReadOnly(debugger_->Active());
+    if (!language_->Ready())
+        RestartLanguage();
+    language_->Update(LuxUI::Url::fromLocalFile(TextPath(canonical)).toString(),
+                      editor->toPlainText(), sources_.back().version);
     connect(editor, &LuxUI::CodeEditor::cursorPositionChanged, this, [this] { UpdateStatus(); });
     connect(editor, &LuxUI::CodeEditor::FindRequested, this, [this] {
         searchBar_->show();
@@ -387,6 +430,7 @@ void ScriptWorkspace::CloseFile(int index) {
             return;
         }
     }
+    language_->Close(LuxUI::Url::fromLocalFile(TextPath(sources_[index].path)).toString());
     sources_.erase(sources_.begin() + index);
     tabs_->removeTab(index);
     delete editor;
@@ -435,16 +479,20 @@ void ScriptWorkspace::ShowFailure(const std::string& error) {
 void ScriptWorkspace::SetProjectRoot(const std::filesystem::path& root) {
     if (root_ == root)
         return;
+    if (debugger_->Active())
+        StopDebugger();
     StopBuild();
     root_ = root;
+    RestartLanguage();
     RefreshFiles();
     SetExecutionActive(executionActive_);
 }
 
 void ScriptWorkspace::SetExecutionActive(bool active) {
     executionActive_ = active;
-    build_->setEnabled(!active && !process_ && !root_.empty());
-    create_->setEnabled(!root_.empty());
+    build_->setEnabled(!active && !process_ && !root_.empty() && !debugger_->Active());
+    create_->setEnabled(!root_.empty() && !debugger_->Active());
+    RefreshDebugControls();
 }
 
 void ScriptWorkspace::RefreshFiles() {
@@ -544,7 +592,7 @@ void ScriptWorkspace::AddDiagnostic(const BuildDiagnostic& diagnostic,
 }
 
 void ScriptWorkspace::BuildScripts() {
-    if (executionActive_ || process_ || root_.empty() || !SaveAll())
+    if (executionActive_ || process_ || root_.empty() || debugger_->Active() || !SaveAll())
         return;
     const auto project = root_ / "Scripts/GameScripts.csproj";
     const auto core =
@@ -602,6 +650,10 @@ void ScriptWorkspace::BuildScripts() {
                 finished->deleteLater();
                 stop_->setEnabled(false);
                 SetExecutionActive(executionActive_);
+                const bool debug = debugAfterBuild_;
+                debugAfterBuild_ = false;
+                if (debug && code == 0 && result == LuxUI::Process::NormalExit && debugRequested)
+                    debugRequested();
             });
     connect(
         process_, &LuxUI::Process::errorOccurred, this, [this](LuxUI::Process::ProcessError error) {

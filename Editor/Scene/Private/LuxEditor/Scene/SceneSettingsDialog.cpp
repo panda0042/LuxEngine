@@ -54,10 +54,10 @@ ShowSceneSettingsDialog(LuxUI::Widget* parent, const LuxEngine::SceneSettings& s
     const auto& r = settings.render3D;
     auto* sunGroup = group(LUX_UI_TEXT("방향광"));
     std::array<LuxUI::DoubleSpinBox*, 3> sunDirection, sunColor, ambientColor;
-    const std::array<float, 3> directions{r.sun.direction.x, r.sun.direction.y, r.sun.direction.z};
-    const std::array<float, 3> sunColors{r.sun.color.x, r.sun.color.y, r.sun.color.z};
-    const std::array<float, 3> ambientColors{r.environmentColor.x, r.environmentColor.y,
-                                             r.environmentColor.z};
+    const std::array<double, 3> directions{r.sun.direction.x, r.sun.direction.y, r.sun.direction.z};
+    const std::array<double, 3> sunColors{r.sun.color.x, r.sun.color.y, r.sun.color.z};
+    const std::array<double, 3> ambientColors{r.environmentColor.x, r.environmentColor.y,
+                                              r.environmentColor.z};
     for (size_t i = 0; i < 3; ++i) {
         sunDirection[i] = number(sunGroup, LUX_UI_TEXT("방향 %1").arg(LUX_UI_TEXT("XYZ").at(i)),
                                  directions[i], -10000, 10000);

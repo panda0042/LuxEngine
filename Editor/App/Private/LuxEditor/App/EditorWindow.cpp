@@ -152,6 +152,7 @@ EditorWindow::~EditorWindow() {
     sceneStreamingTimer_.stop();
     StopPreview();
     StopSceneWindow();
+    scriptWorkspace_->StopDebugger();
     CancelBuild();
     pendingSceneLoads_.clear();
     undo_->clear();
@@ -886,8 +887,11 @@ void EditorWindow::RefreshInspector() {
     selectionLabel_->setToolTip(
         LUX_UI_TEXT("표시 값은 활성 오브젝트 기준입니다. Transform 필드를 변경하면 선택된 "
                     "오브젝트에 함께 적용합니다."));
-    animationPanel_->setEnabled(
-        selected && selected.HasComponent<LuxEngine::TransformComponent>() && !previewActive_);
+    // Only the legacy scene clip requires an authoring selection. Asset editing is independent.
+    if (auto* legacy =
+            animationPanel_->findChild<LuxUI::Widget*>(LUX_UI_TEXT("animationWorkspace")))
+        legacy->setEnabled(selected && selected.HasComponent<LuxEngine::TransformComponent>() &&
+                           !previewActive_);
     animationTarget_->setText(selected ? LUX_UI_TEXT("대상 · 엔티티 #%1").arg(selected.GetId())
                                        : LUX_UI_TEXT("대상 없음"));
     inspectorBody_->setVisible(static_cast<bool>(selected));
@@ -1339,13 +1343,13 @@ void EditorWindow::OnPhysicsChanged(const LuxUI::Widget* field) {
         } else if (entity.HasComponent<LuxEngine::BoxCollider2DComponent>()) {
             auto& collider = entity.GetComponent<LuxEngine::BoxCollider2DComponent>();
             if (field == colliderSize_[0])
-                collider.size.x = static_cast<float>(colliderSize_[0]->value());
+                collider.size.x = colliderSize_[0]->value();
             else if (field == colliderSize_[1])
-                collider.size.y = static_cast<float>(colliderSize_[1]->value());
+                collider.size.y = colliderSize_[1]->value();
             else if (field == colliderOffset_[0])
-                collider.offset.x = static_cast<float>(colliderOffset_[0]->value());
+                collider.offset.x = colliderOffset_[0]->value();
             else if (field == colliderOffset_[1])
-                collider.offset.y = static_cast<float>(colliderOffset_[1]->value());
+                collider.offset.y = colliderOffset_[1]->value();
             else if (field == triggerEnabled_)
                 collider.isTrigger = triggerEnabled_->isChecked();
         }
@@ -1358,7 +1362,7 @@ void EditorWindow::OnPhysicsChanged(const LuxUI::Widget* field) {
 }
 
 void EditorWindow::StartPreview() {
-    if (scriptWorkspace_->IsBuilding() || buildProcess_) {
+    if (scriptWorkspace_->IsBuilding() || scriptWorkspace_->IsDebugging() || buildProcess_) {
         Log(LUX_UI_TEXT("빌드가 끝난 뒤 실행해 주세요."), true);
         return;
     }

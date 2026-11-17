@@ -164,6 +164,31 @@ void AssetsAndAnimator(const std::filesystem::path& root) {
           "descendant color alpha and sprite bindings");
 }
 
+void MutedEvents(const std::filesystem::path& root) {
+    auto clip = Clip(0);
+    clip.events = {{0, "Start", ""}, {.1, "Later", ""}};
+    std::string error;
+    const auto path = (root / "event-boundary.luxanim").string();
+    Check(clip.Save(path, error), error.c_str());
+    for (const double weight : {0., .000001, 1.})
+        for (const double dt : {0., 1. / 60, .2})
+            for (const bool emit : {false, true}) {
+                auto controller = CreateRef<AnimatorController>();
+                AnimatorLayer layer;
+                layer.weight = weight;
+                layer.entry = "Boundary";
+                layer.states.push_back({"Boundary", path});
+                controller->layers.push_back(layer);
+                AnimatorPlayer player;
+                Check(player.SetController(controller, error), error.c_str());
+                const auto frame = player.Update(dt, emit);
+                const size_t expected = emit && weight > 0 ? (dt >= .1 ? 2u : 1u) : 0u;
+                Check(frame.events.size() == expected,
+                      "start and interval events obey the same layer weight and emit policy");
+                Check(player.Update(0, emit).events.empty(), "start event is not repeated");
+            }
+}
+
 void SkeletalBlend() {
     std::string error;
     auto model = ModelAsset::LoadFbx(LUX_FBX_ANIMATED_FIXTURE, error);
@@ -225,6 +250,7 @@ int main() {
         std::filesystem::create_directories(root);
         Curves();
         AssetsAndAnimator(root);
+        MutedEvents(root);
         SkeletalBlend();
         World64();
         std::filesystem::remove_all(root);

@@ -9,6 +9,7 @@
 #include <LuxEditor/Viewport/SceneViewport3D.hpp>
 #include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/ECS/ECS.hpp>
+#include <LuxEngine/Physics/PhysicsWorld.hpp>
 #include <LuxUI/AssetList.hpp>
 #include <LuxUI/Widgets.hpp>
 #include <algorithm>
@@ -32,8 +33,8 @@ LuxUI::Label* Caption(const LuxUI::String& text, LuxUI::Widget* parent) {
 LuxUI::DoubleSpinBox* Number(LuxUI::Widget* parent, double low, double high, double value,
                              double step) {
     auto* control = new LuxUI::DoubleSpinBox(parent);
-    control->setRange(low, high);
     control->setDecimals(3);
+    control->setRange(low, high);
     control->setSingleStep(step);
     control->setValue(value);
     control->setButtonSymbols(LuxUI::AbstractSpinBox::NoButtons);
@@ -788,7 +789,9 @@ void EditorWindow::BuildLayout() {
     physicsLayout->addRow(LUX_UI_TEXT("중력 배율"), gravityScale_);
     physicsLayout->addRow(colliderEnabled_);
     for (int axis = 0; axis < 2; ++axis) {
-        colliderSize_[axis] = Number(physicsGroup, .02, 10000, 1, .1);
+        colliderSize_[axis] = Number(physicsGroup, 0, 10000, 1, .1);
+        colliderSize_[axis]->setDecimals(6);
+        colliderSize_[axis]->setMinimum(LuxEngine::PhysicsWorld::MinBodyExtent);
         colliderOffset_[axis] = Number(physicsGroup, -10000, 10000, 0, .1);
         physicsLayout->addRow(axis == 0 ? LUX_UI_TEXT("폭") : LUX_UI_TEXT("높이"),
                               colliderSize_[axis]);

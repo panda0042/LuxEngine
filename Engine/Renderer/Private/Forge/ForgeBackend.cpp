@@ -140,7 +140,7 @@ bool ForgeBackend::Initialize(Window& window, const GpuDeviceConfig& config) {
 
     desc.width = width;
     desc.height = height;
-    desc.framesInFlight = std::clamp(config.framesInFlight, 1u, 3u);
+    desc.framesInFlight = std::clamp(config.framesInFlight, 1u, 8u);
     desc.vsync = config.vsync ? 1 : 0;
     desc.validation = config.validation == GpuValidation::Off ? 0 : 1;
     desc.maxFrameVertexBytes = config.maxFrameVertexBytes;
@@ -223,6 +223,8 @@ GpuDeviceCounters ForgeBackend::GetCounters() const {
         LuxForgeStats stats = {};
         lib_->api->stats(lib_->device, &stats);
         counters.swapchainRecreations = stats.swapchainRecreations;
+        counters.validationErrors = stats.validationErrors;
+        counters.validationWarnings = stats.validationWarnings;
     }
     return counters;
 }
@@ -233,8 +235,9 @@ GpuMemoryStats ForgeBackend::GetMemoryStats() const {
         LuxForgeStats stats = {};
         lib_->api->stats(lib_->device, &stats);
         memory.liveTextures = stats.liveTextures;
+        memory.liveBuffers = stats.liveBuffers;
         memory.pendingDestructions = stats.pendingDeletes;
-        memory.allocationBytes = stats.sceneBytes + stats.textureBytes;
+        memory.allocationBytes = stats.sceneBytes + stats.textureBytes + stats.bufferBytes;
     }
     return memory;
 }

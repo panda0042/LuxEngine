@@ -24,5 +24,6 @@ private:
     PhysicsWorld world_;
     std::vector<uint32> active_;
     std::string error_;
+    std::string lastError_;
 };
 } // namespace LuxEngine

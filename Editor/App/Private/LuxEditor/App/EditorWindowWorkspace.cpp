@@ -68,6 +68,11 @@ void EditorWindow::BuildWorkspaceChrome() {
     workspaceStack_->addWidget(animationDock_);
     animationDock_->hide();
     scriptWorkspace_ = new ScriptWorkspace(workspaceStack_);
+    scriptWorkspace_->debugRequested = [this] { StartScriptDebug(); };
+    scriptWorkspace_->debugStopped = [this] {
+        if (playerProcess_ && playerProcess_->property("scriptDebugger").toBool())
+            StopSceneWindow();
+    };
     workspaceStack_->addWidget(scriptWorkspace_);
 
     auto* detailsLayout = qobject_cast<LuxUI::VBoxLayout*>(inspectorBody_->layout());

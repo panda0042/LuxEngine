@@ -1,4 +1,5 @@
 #include "ScenePhysicsWorld.hpp"
+#include <LuxEngine/Core/Log.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
 #include <cmath>
@@ -97,6 +98,9 @@ void ScenePhysicsWorld::Step(Scene& scene, double dt) {
                                                : PhysicsEngine::GetGravity3D());
     if (error_.empty())
         error_ = world_.GetLastError();
+    if (!error_.empty() && error_ != lastError_)
+        Log::Warn(error_);
+    lastError_ = error_;
     for (const auto id : active_) {
         const auto state = world_.GetState(id);
         if (!state)

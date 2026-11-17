@@ -97,6 +97,60 @@ ScenePlayerCameraView ResolveScenePlayerCamera(Scene& scene, const ScenePlayerVi
     return result;
 }
 
+ScenePlayerCameras ResolveScenePlayerCameras(Scene& scene, double aspect,
+                                             const ScenePlayerView& fallback) {
+    ScenePlayerCameras result;
+    auto view = fallback;
+    double rotation = 0;
+    bool foundCamera = false;
+    for (const auto id : scene.GetComponentEntityIds<CameraComponent>()) {
+        const auto& camera = scene.GetComponent<CameraComponent>(id);
+        if (!camera.isPrimary || !scene.HasComponent<TransformComponent>(id))
+            continue;
+        if (camera.isPerspective) {
+            try {
+                Mat4::Perspective(ToRadians(camera.fov), aspect, camera.nearClip, camera.farClip);
+            } catch (const std::invalid_argument&) {
+                continue;
+            }
+            result.perspective = true;
+        } else {
+            if (!std::isfinite(camera.orthoSize) || camera.orthoSize <= 0)
+                continue;
+            const auto matrix = scene.GetWorldMatrix(id);
+            double angle = 0;
+            try {
+                angle = scene.GetWorldTransform(id).rotation.z;
+            } catch (const std::logic_error&) {
+                // Collapsed parents still have an authored 2D orientation.
+                for (auto node = id; node; node = scene.GetParent(node))
+                    if (const auto* transform = scene.TryGetComponent<TransformComponent>(node))
+                        angle += transform->rotation.z;
+            }
+            if (!std::isfinite(matrix.elements[12]) || !std::isfinite(matrix.elements[13]) ||
+                !std::isfinite(angle))
+                continue;
+            view = {matrix.elements[12], matrix.elements[13], camera.orthoSize};
+            rotation = angle;
+        }
+        foundCamera = true;
+        break;
+    }
+    if (!foundCamera)
+        result.perspective = !scene.GetComponentEntityIds<MeshRendererComponent>().empty();
+    const double halfWidth = view.halfHeight * aspect;
+    result.camera2D.SetProjection(-halfWidth, halfWidth, -view.halfHeight, view.halfHeight);
+    result.camera2D.SetPosition({view.centerX, view.centerY, 0});
+    result.camera2D.SetRotation(rotation);
+    const auto primary = ResolveScenePlayerCamera(scene, view);
+    result.camera3D.SetPerspective(ToRadians(primary.fovDegrees), aspect, primary.nearClip,
+                                   primary.farClip);
+    result.camera3D.SetPosition(primary.position);
+    result.camera3D.SetTarget(primary.target);
+    result.camera3D.SetUp(primary.up);
+    return result;
+}
+
 std::optional<ScenePlayerOptions> ParseScenePlayerArguments(const std::vector<std::string>& args,
                                                             std::string& error) {
     error.clear();
@@ -292,27 +346,10 @@ void ScenePlayer::UpdateCamera() {
     double aspect = 16.0f / 9.0f;
     if (GetWindow().GetFramebufferSize(width, height) && width > 0 && height > 0)
         aspect = static_cast<double>(width) / static_cast<double>(height);
-    auto view = view_;
-    if (!options_.view) {
-        for (auto entity : scene_->GetEntities()) {
-            const auto* camera = entity.TryGetComponent<CameraComponent>();
-            if (camera && camera->isPrimary && !camera->isPerspective) {
-                const auto transform = scene_->GetWorldTransform(entity.GetId());
-                view = {transform.position.x, transform.position.y, camera->orthoSize};
-                break;
-            }
-        }
-    }
-    const double halfWidth = view.halfHeight * aspect;
-    camera_.SetProjection(view.centerX - halfWidth, view.centerX + halfWidth,
-                          view.centerY - view.halfHeight, view.centerY + view.halfHeight);
-
-    const auto primary = ResolveScenePlayerCamera(*scene_, view_);
-    camera3D_.SetPerspective(ToRadians(primary.fovDegrees), aspect, primary.nearClip,
-                             primary.farClip);
-    camera3D_.SetPosition(primary.position);
-    camera3D_.SetTarget(primary.target);
-    camera3D_.SetUp(primary.up);
+    const auto cameras = ResolveScenePlayerCameras(*scene_, aspect, view_);
+    camera_ = cameras.camera2D;
+    camera3D_ = cameras.camera3D;
+    perspective_ = cameras.perspective;
 }
 
 void ScenePlayer::OnUpdate(double dt) {
@@ -374,14 +411,7 @@ void ScenePlayer::OnRender(float) {
     UpdateCamera();
     const auto clear = scene_->GetSettings().clearColor;
     GetGpuDevice().Clear(clear.x, clear.y, clear.z, clear.w);
-    bool has3DMeshes = false;
-    for (Entity entity : scene_->GetEntities()) {
-        if (entity.HasComponent<MeshRendererComponent>()) {
-            has3DMeshes = true;
-            break;
-        }
-    }
-    if (has3DMeshes) {
+    if (perspective_) {
         DirectionalLight sun;
         sun.direction = Vec3(0.5f, -1.0f, 0.5f).Normalized();
         sun.color = {1.0f, 0.98f, 0.95f};

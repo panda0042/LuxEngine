@@ -136,6 +136,29 @@ void Primary3D(EngineSceneRenderer& renderer) {
     Check(!Red(image, 320, 160), "GPU Game View returned a stale frame after the scene changed");
 }
 
+void LargeSceneView(EngineSceneRenderer& renderer) {
+    for (const double origin : {0., 1e6, 1e9, 1e12}) {
+        Scene scene;
+        auto sprite = scene.CreateEntity("Large-world sprite");
+        sprite.GetComponent<TransformComponent>().position = {origin, origin, 0};
+        sprite.AddComponent<SpriteRendererComponent>().color = {1, 0, 0, 1};
+        auto camera = scene.CreateEntity("Primary camera");
+        camera.GetComponent<TransformComponent>().position = {origin, origin, 0};
+        camera.AddComponent<CameraComponent>().orthoSize = 2;
+        LuxUI::Image editorImage;
+        const LuxUI::RectF bounds(LuxUI::PointF(origin - 2, origin + 2),
+                                  LuxUI::PointF(origin + 2, origin - 2));
+        Check(renderer.Render(scene, 128, 128, bounds, editorImage),
+              "large-world Scene View GPU frame failed");
+        LuxUI::Image gameImage;
+        Check(renderer.RenderGame(scene, 128, 128, gameImage),
+              "large-world Game View GPU frame failed");
+        Check(Red(editorImage, 64, 64) && RedPixels(editorImage) == 1024 &&
+                  RedPixels(gameImage) == 1024,
+              "Scene View and Game View must preserve a unit sprite at large coordinates");
+    }
+}
+
 void StoppedAndPlaying(LuxUI::Application& app) {
     LuxUI::TemporaryDir settings;
     Check(settings.isValid(), "Game View GPU settings directory is unavailable");
@@ -237,6 +260,7 @@ int main(int argc, char** argv) {
     try {
         Primary2D(renderer);
         Primary3D(renderer);
+        LargeSceneView(renderer);
         StoppedAndPlaying(app);
         const auto* gpu = renderer.GetGpuDevice();
         Check(gpu && gpu->IsReady() && gpu->GetCounters().framesSubmitted >= 6,

@@ -222,13 +222,14 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input) {
         }
         if (!id || !Valid(description.position, 1e15) || !Valid(description.rotation) ||
             !Valid(description.velocity) || !Valid(description.size, 10000) ||
-            !Valid(description.offset) || description.size.x < .02f || description.size.y < .02f ||
-            description.size.z < .02f || !std::isfinite(description.mass) ||
-            description.mass < .001f || description.mass > 1000000 ||
-            !std::isfinite(description.gravityScale) ||
+            !Valid(description.offset) || description.size.x < MinBodyExtent ||
+            description.size.y < MinBodyExtent || description.size.z < MinBodyExtent ||
+            !std::isfinite(description.mass) || description.mass < .001f ||
+            description.mass > 1000000 || !std::isfinite(description.gravityScale) ||
             std::abs(description.gravityScale) > 10000 || description.type < BodyType::Static ||
             description.type > BodyType::Kinematic) {
-            report(id, "invalid body type, transform, velocity, mass or collider dimensions");
+            report(id, "invalid body type, transform, velocity, mass or collider dimensions "
+                       "(0.000001~10000)");
             continue;
         }
         incoming.emplace(id, description);

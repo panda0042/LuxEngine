@@ -1,5 +1,7 @@
 #include <LuxEditor/App/EditorWindow.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
+#include <LuxEditor/Scripting/ScriptWorkspace.hpp>
+#include <LuxEditor/Scripting/ToolProtocol.hpp>
 #include <LuxEditor/Viewport/SceneViewport2D.hpp>
 #include <LuxUI/Widgets.hpp>
 #include <algorithm>
@@ -15,6 +17,24 @@ LuxUI::String PlayerExecutable() {
     return LuxUI::Dir(LuxUI::CoreApplication::applicationDirPath()).filePath(name);
 }
 } // namespace
+
+void EditorWindow::StartScriptDebug() {
+    if (!project_ || previewActive_ || buildProcess_ || scriptWorkspace_->IsDebugging())
+        return;
+    if (FindScriptTool("LUX_NETCOREDBG", "scripts/debugAdapter", "netcoredbg").isEmpty()) {
+        ShowError(LUX_UI_TEXT("C# 디버깅"),
+                  LUX_UI_TEXT("C# 도구 설정에서 netcoredbg 경로를 지정해 주세요."));
+        return;
+    }
+    if (document_.GetScene().GetComponentEntityIds<LuxEngine::ScriptComponent>().empty()) {
+        statusBar()->showMessage(LUX_UI_TEXT("실행할 씬에 C# 스크립트 컴포넌트를 연결해 주세요."),
+                                 5000);
+        return;
+    }
+    setProperty("launchScriptDebugger", true);
+    RunSceneInWindow();
+    setProperty("launchScriptDebugger", false);
+}
 
 void EditorWindow::RunSceneInWindow() {
     StopPreview();
@@ -71,6 +91,13 @@ void EditorWindow::RunSceneInWindow() {
                   << LuxUI::String::number(halfHeight, 'g', 17);
     }
     playerProcess_ = new LuxUI::Process(this);
+    const bool debugging = property("launchScriptDebugger").toBool();
+    playerProcess_->setProperty("scriptDebugger", debugging);
+    if (debugging) {
+        auto environment = LuxUI::ProcessEnvironment::systemEnvironment();
+        environment.insert(LUX_UI_TEXT("LUX_SCRIPT_DEBUG_WAIT"), LUX_UI_TEXT("1"));
+        playerProcess_->setProcessEnvironment(environment);
+    }
     playerProcess_->setProcessChannelMode(LuxUI::Process::MergedChannels);
     auto* process = playerProcess_;
     const auto scenePath = playerScenePath_;
@@ -86,6 +113,11 @@ void EditorWindow::RunSceneInWindow() {
             const auto count = newline < 0 ? buffer.size() : newline;
             const auto line = LuxUI::String::fromUtf8(buffer.left(count)).trimmed();
             buffer.remove(0, count + (newline >= 0 ? 1 : 0));
+            if (line == LUX_UI_TEXT("LUX_SCRIPT_DEBUG_READY") &&
+                process->property("scriptDebugger").toBool()) {
+                process->setProperty("scriptDebuggerAttached", true);
+                scriptWorkspace_->AttachDebugger(process->processId());
+            }
             if (line.contains(LUX_UI_TEXT("error"), LuxUI::Flags::CaseInsensitive) ||
                 line.contains(LUX_UI_TEXT("warning"), LuxUI::Flags::CaseInsensitive) ||
                 line.contains(LUX_UI_TEXT("failed"), LuxUI::Flags::CaseInsensitive) ||
@@ -110,6 +142,8 @@ void EditorWindow::RunSceneInWindow() {
                         true);
                 process->deleteLater();
                 playerProcess_ = nullptr;
+                if (process->property("scriptDebugger").toBool())
+                    scriptWorkspace_->StopDebugger();
                 LuxUI::File::remove(scenePath);
                 playerScenePath_.clear();
             });
@@ -134,6 +168,8 @@ void EditorWindow::StopSceneWindow() {
         return;
     LuxUI::Process* process = playerProcess_;
     playerProcess_ = nullptr;
+    if (process->property("scriptDebugger").toBool())
+        scriptWorkspace_->StopDebugger();
     process->disconnect(this);
     if (process->state() != LuxUI::Process::NotRunning) {
         process->terminate();

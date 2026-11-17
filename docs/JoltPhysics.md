@@ -12,9 +12,10 @@ cmake -S JoltPhysics/Build -B jolt-debug -G Ninja \
   -DCMAKE_INSTALL_PREFIX="$HOME/.local" -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DTARGET_UNIT_TESTS=OFF -DTARGET_HELLO_WORLD=OFF -DTARGET_SAMPLES=OFF \
   -DTARGET_VIEWER=OFF -DTARGET_PERFORMANCE_TEST=OFF \
+  -DDOUBLE_PRECISION=ON \
   -DJPH_USE_DX12=OFF -DJPH_USE_VK=OFF -DJPH_USE_MTL=OFF -DJPH_USE_CPU_COMPUTE=OFF \
   -DINTERPROCEDURAL_OPTIMIZATION=OFF -DOVERRIDE_CXX_FLAGS=OFF \
-  -DCPP_RTTI_ENABLED=ON -DDOUBLE_PRECISION=ON \
+  -DCPP_RTTI_ENABLED=ON \
   -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF -DPROFILER_IN_DEBUG_AND_RELEASE=OFF
 cmake --build jolt-debug --target install --parallel
 ```
@@ -35,7 +36,9 @@ Unix CI는 Jolt의 `CPP_RTTI_ENABLED=ON`으로 빌드한다. UBSan의 가상 함
 - 바닥은 사용자가 배치한 정적 충돌체다. Y=0에서 물체를 멈추는 숨겨진 바닥은 없다.
 - `Scene::GetCollisionEvents2D/3D`로 접촉 시작 이벤트를 읽는다. 3D 이벤트에는 월드 접점과 법선이 포함된다.
 
-`PhysicsEngine::Step2D/Step3D` 단일 바디 호환 함수는 제거했다. 기존 프레임워크 앱은 `Scene::OnUpdate` 또는 `PhysicsWorld`로 옮긴다. 기존 Rigidbody/BoxCollider 씬 필드는 유지한다. 월드 위치와 엔진의 Transform은 `double`이며 Jolt의 속도·형상 연산은 `float` 경계를 사용한다.
+`PhysicsEngine::Step2D/Step3D` 단일 바디 호환 함수는 제거했다. 기존 프레임워크 앱은 `Scene::OnUpdate` 또는 `PhysicsWorld`로 옮긴다. 기존 Rigidbody/BoxCollider 씬 필드는 유지한다. 월드 좌표는 `double`이며 Jolt의 double-precision 위치와 연결한다.
+
+박스의 월드 축 크기는 `0.000001~10000`을 지원한다. 작은 크기는 변환 Scale로 줄여도 동일하게 시뮬레이션한다. 0 크기·비유한 값 등으로 바디를 제외하면 엔티티 ID와 지원 범위를 로그에 한 번 알리고, 같은 오류를 매 프레임 반복하지 않는다. `PhysicsWorld::GetLastError()`로 독립 월드의 동기화 오류를 읽을 수 있다.
 
 ## 게임 코드에서의 사용
 

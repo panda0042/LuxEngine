@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 10u
+#define LUX_FORGE_API_VERSION 11u
 
 #if defined(_WIN32)
 #if defined(LUX_FORGE_BUILD)
@@ -79,6 +79,10 @@ typedef struct LuxForgeStats {
     uint64_t textureBytes;
     uint64_t sceneBytes;           // HDR/depth/shadow targets and environment maps of renderScene
     uint64_t swapchainRecreations; // successful recreations, excluding initial creation
+    uint64_t bufferBytes;          // includes internal buffers and deferred releases
+    uint32_t liveBuffers;
+    uint32_t validationErrors;
+    uint32_t validationWarnings;
 } LuxForgeStats;
 
 typedef struct LuxForgePointLight {
