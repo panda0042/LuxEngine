@@ -13,7 +13,7 @@
 
 namespace LuxEngine {
 
-// View rectangle given by the editor: centre and half height in world units.
+// Fallback view rectangle when the scene has no valid primary camera.
 struct ScenePlayerView {
     double centerX = 0.0f;
     double centerY = 0.0f;
@@ -44,6 +44,17 @@ struct ScenePlayerCameraView {
 // Primary perspective cameras follow their complete world transform: local -Z is forward and
 // +Y is up. Scale is normalized away; collapsed/parallel axes use a finite orthonormal fallback.
 ScenePlayerCameraView ResolveScenePlayerCamera(Scene& scene, const ScenePlayerView& fallback);
+
+struct ScenePlayerCameras {
+    bool perspective = false;
+    OrthographicCamera camera2D;
+    PerspectiveCamera camera3D;
+};
+
+// Shared by the editor Game View and standalone player. Authored primary cameras take
+// precedence over the fallback view, including the editor's --view argument.
+ScenePlayerCameras ResolveScenePlayerCameras(Scene& scene, double aspect,
+                                             const ScenePlayerView& fallback);
 
 // Parses: <scene> [--title T] [--size W H] [--fullscreen] [--view X Y HALF_HEIGHT] [--frames N]
 // Returns std::nullopt and sets error on invalid arguments.
@@ -77,6 +88,7 @@ private:
     Entity player_;
     OrthographicCamera camera_;
     PerspectiveCamera camera3D_;
+    bool perspective_ = false;
     ScenePlayerView view_;
     bool loaded_ = false;
     uint32 frames_ = 0;

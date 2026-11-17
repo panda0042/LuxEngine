@@ -1,3 +1,4 @@
+#include <LuxEngine/Core/Log.hpp>
 #include <LuxEngine/EntryPoint.hpp>
 #include <LuxEngine/Physics/PhysicsWorld.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
@@ -14,8 +15,71 @@ void Check(bool condition, const char* message) {
         throw std::runtime_error(message);
 }
 
+void SmallBodies() {
+    using namespace LuxEngine;
+    for (const bool planar : {false, true})
+        for (const double origin : {0., 1e9, 1e12})
+            for (const int fps : {30, 60, 120})
+                for (const uint32 substeps : {1u, 4u})
+                    for (const double size : {.01, .019, .02, .1, 1.}) {
+                        Scene scene;
+                        auto settings = scene.GetSettings();
+                        settings.overrideGravity = true;
+                        settings.gravity = {0, -9.81};
+                        settings.gravity3D = {0, -9.81, 0};
+                        settings.physicsSubsteps = substeps;
+                        Check(scene.SetSettings(settings), "small body settings");
+                        auto floor = scene.CreateEntity("Floor");
+                        floor.GetComponent<TransformComponent>().position = {origin, origin - .5,
+                                                                             0};
+                        auto box = scene.CreateEntity("Small box");
+                        auto& transform = box.GetComponent<TransformComponent>();
+                        transform.position = {origin + .125, origin + 3, 0};
+                        transform.scale = {size, size, size};
+                        if (planar) {
+                            floor.AddComponent<BoxCollider2DComponent>().size = {20, 1};
+                            box.AddComponent<BoxCollider2DComponent>();
+                            box.AddComponent<Rigidbody2DComponent>();
+                        } else {
+                            floor.AddComponent<BoxCollider3DComponent>().size = {20, 1, 20};
+                            box.AddComponent<BoxCollider3DComponent>();
+                            box.AddComponent<Rigidbody3DComponent>();
+                        }
+                        std::string snapshot;
+                        Check(scene.SerializeToString(snapshot), "small body scene can be saved");
+                        bool contact = false;
+                        for (int frame = 0; frame < fps * 2; ++frame) {
+                            scene.OnUpdate(1. / fps);
+                            contact |= planar ? !scene.GetCollisionEvents2D().empty()
+                                              : !scene.GetCollisionEvents3D().empty();
+                        }
+                        const double height = transform.position.y - origin;
+                        if (!contact || std::abs(height - size * .5) >= .04) {
+                            std::cerr << "small body: planar=" << planar << " origin=" << origin
+                                      << " fps=" << fps << " substeps=" << substeps
+                                      << " size=" << size << " height=" << height << '\n';
+                            throw std::runtime_error("small authored body lost its simulation");
+                        }
+                    }
+    Scene invalid;
+    auto box = invalid.CreateEntity("Collapsed collider");
+    box.AddComponent<BoxCollider3DComponent>();
+    box.GetComponent<TransformComponent>().scale = {};
+    const auto before = Log::ReadAfter(0);
+    const auto cursor = before.empty() ? 0 : before.back().sequence;
+    invalid.OnUpdate(1. / 60);
+    const auto warning = Log::ReadAfter(cursor);
+    Check(warning.size() == 1 && warning.front().level == LogLevel::Warn &&
+              warning.front().message.find("#1") != std::string::npos,
+          "invalid world collider reports its entity instead of silently disappearing");
+    invalid.OnUpdate(1. / 60);
+    Check(Log::ReadAfter(warning.front().sequence).empty(),
+          "unchanged invalid collider does not flood the editor console");
+}
+
 int Run(int, char**) {
     using namespace LuxEngine;
+    SmallBodies();
     for (const bool planar : {false, true}) {
         PhysicsWorld world(planar);
         PhysicsBodyDescription floor;
@@ -72,7 +136,8 @@ int Run(int, char**) {
               "Jolt trigger blocked the falling body");
         box.velocity.x = std::numeric_limits<float>::quiet_NaN();
         descriptions = {floor, box};
-        Check(!world.Synchronize(descriptions) && !world.GetState(2),
+        Check(!world.Synchronize(descriptions) && !world.GetState(2) &&
+                  !world.GetLastError().empty(),
               "Invalid Jolt body was retained");
         world.Remove(1);
         Check(world.BodyCount() == 0 && world.BeganContacts().empty(),

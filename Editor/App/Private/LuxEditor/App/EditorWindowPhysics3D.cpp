@@ -1,5 +1,6 @@
 #include <LuxEditor/App/EditorWindow.hpp>
 #include <LuxEditor/Viewport/SceneViewport3D.hpp>
+#include <LuxEngine/Physics/PhysicsWorld.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 
 namespace LuxEditor {
@@ -15,8 +16,8 @@ void EditorWindow::BuildPhysics3DDetails(LuxUI::VBoxLayout* layout) {
     body3DType_->addItems({LUX_UI_TEXT("고정"), LUX_UI_TEXT("동적"), LUX_UI_TEXT("키네마틱")});
     const auto number = [group](double low, double high, double value) {
         auto* field = new LuxUI::DoubleSpinBox(group);
-        field->setRange(low, high);
         field->setDecimals(3);
+        field->setRange(low, high);
         field->setValue(value);
         field->setKeyboardTracking(false);
         return field;
@@ -34,7 +35,9 @@ void EditorWindow::BuildPhysics3DDetails(LuxUI::VBoxLayout* layout) {
     form->addRow(LUX_UI_TEXT("중력 배율"), body3DGravity_);
     const char* axes[] = {"X", "Y", "Z"};
     for (size_t i = 0; i < 3; ++i) {
-        collider3DSize_[i] = number(.02, 10000, 1);
+        collider3DSize_[i] = number(0, 10000, 1);
+        collider3DSize_[i]->setDecimals(6);
+        collider3DSize_[i]->setMinimum(LuxEngine::PhysicsWorld::MinBodyExtent);
         collider3DOffset_[i] = number(-10000, 10000, 0);
         collider3DSize_[i]->setObjectName(LUX_UI_TEXT("collider3DSize%1").arg(i));
         collider3DOffset_[i]->setObjectName(LUX_UI_TEXT("collider3DOffset%1").arg(i));

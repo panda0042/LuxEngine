@@ -375,7 +375,7 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents) {
         const auto& current = layer.states[runtime.current];
         const auto clip = impl_->Primary(current);
         runtime.playback.speed = current.speed * impl_->speed;
-        if (emitEvents && runtime.fresh && impl_->playing)
+        if (emitEvents && runtime.fresh && impl_->playing && layer.weight > 0)
             for (const auto& event : clip->events)
                 if (event.time == 0)
                     result.events.push_back(event);

@@ -71,7 +71,7 @@ void EnsureRuntime() {
     static JoltRuntime runtime;
 }
 
-bool Valid(Vec3 value, float limit = 100000.f) {
+bool Valid(Vec3 value, double limit = 100000.0) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z) &&
            std::abs(value.x) <= limit && std::abs(value.y) <= limit && std::abs(value.z) <= limit;
 }
@@ -132,6 +132,7 @@ struct PhysicsWorld::Impl final : JPH::ContactListener {
     JPH::JobSystemSingleThreaded jobs{JPH::cMaxPhysicsJobs};
     std::map<uint32, Entry> entries;
     std::vector<Collision3DEvent> contacts, began;
+    std::string lastError;
 
     explicit Impl(bool plane) : planar(plane) {
         system.Init(16384, 0, 65536, 16384, layers, broadFilter, pairFilter);
@@ -193,6 +194,7 @@ PhysicsWorld::PhysicsWorld(bool planar) {
 PhysicsWorld::~PhysicsWorld() = default;
 
 bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input) {
+    impl_->lastError.clear();
     std::set<uint32> active;
     auto& bodies = impl_->system.GetBodyInterface();
     bool valid = true;
@@ -201,12 +203,17 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input) {
         if (!id || active.contains(id) || !Valid(description.position, 1e15) ||
             !Valid(description.rotation) || !Valid(description.velocity) ||
             !Valid(description.size, 10000) || !Valid(description.offset) ||
-            description.size.x < .02f || description.size.y < .02f || description.size.z < .02f ||
-            !std::isfinite(description.mass) || description.mass < .001f ||
-            description.mass > 1000000 || !std::isfinite(description.gravityScale) ||
+            description.size.x < MinBodyExtent || description.size.y < MinBodyExtent ||
+            description.size.z < MinBodyExtent || !std::isfinite(description.mass) ||
+            description.mass < .001f || description.mass > 1000000 ||
+            !std::isfinite(description.gravityScale) ||
             std::abs(description.gravityScale) > 10000 || description.type < BodyType::Static ||
             description.type > BodyType::Kinematic) {
             valid = false;
+            if (impl_->lastError.empty())
+                impl_->lastError = "물리 바디 #" + std::to_string(id) +
+                                   "를 동기화하지 못했습니다. 위치·속도·질량과 월드 충돌체 "
+                                   "크기(0.000001~10000)를 확인해 주세요.";
             continue;
         }
         active.insert(id);
@@ -284,6 +291,10 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input) {
             impl_->Remove(id);
     }
     return valid;
+}
+
+const std::string& PhysicsWorld::GetLastError() const {
+    return impl_->lastError;
 }
 
 void PhysicsWorld::Remove(uint32 entity) {

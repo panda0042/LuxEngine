@@ -43,6 +43,7 @@ enum class GpuValidation { Auto, Off, On, Synchronization };
 enum class GpuStatus { Uninitialized, Ready, OutOfMemory, SurfaceLost, Timeout, DeviceLost, Error };
 
 struct GpuDeviceConfig {
+    // Clamped to 1..8. Swapchain image count is selected independently by the platform.
     uint32 framesInFlight = 2;
     bool vsync = true;
     GpuValidation validation = GpuValidation::Auto;
@@ -103,6 +104,8 @@ struct GpuDeviceCounters {
 struct GpuMemoryStats {
     uint64 deviceLocalUsage = 0;
     uint64 deviceLocalBudget = 0;
+    // Tracked resource payload, including buffers awaiting GPU completion. Driver allocations
+    // and swapchain storage are not measured by the Forge bridge.
     uint64 allocationBytes = 0;
     uint32 allocationCount = 0;
     uint32 liveBuffers = 0;
