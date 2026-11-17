@@ -166,61 +166,10 @@ void EngineSceneRenderer::ClearMeshPreview() {
 }
 
 GameViewCamera ResolveGameViewCamera(LuxEngine::Scene& scene, int width, int height) {
-    GameViewCamera result;
     const double aspect = static_cast<double>(std::max(1, width)) / std::max(1, height);
-    auto view = LuxEngine::FitSceneView(scene);
-    double rotation = 0;
-    auto cameras = scene.GetComponentEntityIds<LuxEngine::CameraComponent>();
-    std::sort(cameras.begin(), cameras.end());
-    bool foundCamera = false;
-    for (const auto id : cameras) {
-        const auto& camera = scene.GetComponent<LuxEngine::CameraComponent>(id);
-        if (!camera.isPrimary || !scene.HasComponent<LuxEngine::TransformComponent>(id))
-            continue;
-        if (camera.isPerspective) {
-            if (!std::isfinite(camera.fov) || camera.fov <= 0 || camera.fov >= 180 ||
-                !std::isfinite(camera.nearClip) || !std::isfinite(camera.farClip) ||
-                camera.nearClip <= 0 || camera.farClip <= camera.nearClip)
-                continue;
-            result.perspective = true;
-        } else {
-            if (!std::isfinite(camera.orthoSize) || camera.orthoSize <= 0)
-                continue;
-            const auto matrix = scene.GetWorldMatrix(id);
-            const auto* m = matrix.elements;
-            double angle = 0;
-            try {
-                angle = scene.GetWorldTransform(id).rotation.z;
-            } catch (const std::logic_error&) {
-                // A zero scale does not invalidate a camera's position or its authored 2D
-                // orientation. Avoid decomposing the singular world matrix in this case.
-                for (auto node = id; node; node = scene.GetParent(node))
-                    if (const auto* transform =
-                            scene.TryGetComponent<LuxEngine::TransformComponent>(node))
-                        angle += transform->rotation.z;
-            }
-            if (!std::isfinite(m[12]) || !std::isfinite(m[13]) || !std::isfinite(angle))
-                continue;
-            view = {m[12], m[13], camera.orthoSize};
-            rotation = angle;
-        }
-        foundCamera = true;
-        break;
-    }
-    if (!foundCamera)
-        result.perspective =
-            !scene.GetComponentEntityIds<LuxEngine::MeshRendererComponent>().empty();
-    const double halfWidth = view.halfHeight * aspect;
-    result.camera2D.SetProjection(-halfWidth, halfWidth, -view.halfHeight, view.halfHeight);
-    result.camera2D.SetPosition({view.centerX, view.centerY, 0});
-    result.camera2D.SetRotation(rotation);
-    const auto primary = LuxEngine::ResolveScenePlayerCamera(scene, view);
-    result.camera3D.SetPerspective(LuxEngine::ToRadians(primary.fovDegrees), aspect,
-                                   primary.nearClip, primary.farClip);
-    result.camera3D.SetPosition(primary.position);
-    result.camera3D.SetTarget(primary.target);
-    result.camera3D.SetUp(primary.up);
-    return result;
+    const auto cameras =
+        LuxEngine::ResolveScenePlayerCameras(scene, aspect, LuxEngine::FitSceneView(scene));
+    return {cameras.perspective, cameras.camera2D, cameras.camera3D};
 }
 
 void EngineSceneRenderer::SetForceAllowed(bool force) {
@@ -448,9 +397,11 @@ bool EngineSceneRenderer::Render(LuxEngine::Scene& scene, int pixelWidth, int pi
     auto& s = *state_;
     // The widget draws the scene background and grid before compositing object pixels.
     s.gpu.Clear(0, 0, 0, 0);
-    const LuxEngine::OrthographicCamera camera(
-        static_cast<double>(worldBounds.left()), static_cast<double>(worldBounds.right()),
-        static_cast<double>(worldBounds.bottom()), static_cast<double>(worldBounds.top()));
+    const auto center = worldBounds.center();
+    LuxEngine::OrthographicCamera camera(-worldBounds.width() * .5, worldBounds.width() * .5,
+                                         -std::abs(worldBounds.height()) * .5,
+                                         std::abs(worldBounds.height()) * .5);
+    camera.SetPosition({center.x(), center.y(), 0});
     s.context2D.Init(&s.gpu);
     LuxEngine::Renderer2D::ScopedContext scope2D(s.context2D);
     try {

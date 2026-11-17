@@ -1343,13 +1343,13 @@ void EditorWindow::OnPhysicsChanged(const LuxUI::Widget* field) {
         } else if (entity.HasComponent<LuxEngine::BoxCollider2DComponent>()) {
             auto& collider = entity.GetComponent<LuxEngine::BoxCollider2DComponent>();
             if (field == colliderSize_[0])
-                collider.size.x = static_cast<float>(colliderSize_[0]->value());
+                collider.size.x = colliderSize_[0]->value();
             else if (field == colliderSize_[1])
-                collider.size.y = static_cast<float>(colliderSize_[1]->value());
+                collider.size.y = colliderSize_[1]->value();
             else if (field == colliderOffset_[0])
-                collider.offset.x = static_cast<float>(colliderOffset_[0]->value());
+                collider.offset.x = colliderOffset_[0]->value();
             else if (field == colliderOffset_[1])
-                collider.offset.y = static_cast<float>(colliderOffset_[1]->value());
+                collider.offset.y = colliderOffset_[1]->value();
             else if (field == triggerEnabled_)
                 collider.isTrigger = triggerEnabled_->isChecked();
         }

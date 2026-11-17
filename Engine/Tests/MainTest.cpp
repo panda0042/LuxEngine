@@ -1,5 +1,6 @@
 #include <LuxEngine/Environment/EnvironmentMap.hpp>
 #include <LuxEngine/LuxEngine.hpp>
+#include <LuxEngine/Physics/PhysicsWorld.hpp>
 #include <LuxEngine/Platform/Branding.hpp>
 #include <LuxEngine/Testing/GpuFault.hpp>
 #include <SDL3/SDL.h>
@@ -486,14 +487,18 @@ void Physics2D() {
         Check(Near(body.GetComponent<TransformComponent>().position.y, 3),
               "overflowing density is ignored safely");
         rigidbody.mass = 1;
-        collider.size = {0.001f, 0.001f};
+        const double invalidSize = PhysicsWorld::MinBodyExtent * .5;
+        collider.size = {invalidSize, invalidSize};
         scene.OnUpdate(1.0 / 60.0);
         Check(Near(body.GetComponent<TransformComponent>().position.y, 3),
-              "undersized collider is ignored safely");
-        collider.size = {1, 1};
-        scene.OnUpdate(1.0 / 60.0);
-        Check(body.GetComponent<TransformComponent>().position.y < 3,
-              "valid body resumes simulation after invalid values");
+              "collider below the minimum world extent is ignored safely");
+        for (const double size : {PhysicsWorld::MinBodyExtent, .001, 1.}) {
+            collider.size = {size, size};
+            const double previousY = body.GetComponent<TransformComponent>().position.y;
+            scene.OnUpdate(1.0 / 60.0);
+            Check(body.GetComponent<TransformComponent>().position.y < previousY,
+                  "valid collider at or above the minimum extent resumes simulation");
+        }
     }
     {
         PhysicsEngine::SetGravity2D({0, 0});
@@ -1623,6 +1628,45 @@ void WindowEvents() {
         Check(foundKey, "selective drain preserved key input event");
         SDL_DestroyWindow(secondWindow);
     }
+    for (const bool pollOtherFirst : {false, true}) {
+        Window first, second;
+        WindowProps props;
+        props.hidden = true;
+        Check(first.Initialize(props) && second.Initialize(props), "routed windows initialize");
+        first.PollEvents();
+        SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+        int firstEvents = 0, keys = 0, clicks = 0, focus = 0, closes = 0;
+        first.SetEventCallback([&](Event&) { ++firstEvents; });
+        second.SetEventCallback([&](Event& event) {
+            keys += event.GetEventType() == EventType::KeyPressed;
+            clicks += event.GetEventType() == EventType::MouseButtonPressed;
+            focus += event.GetEventType() == EventType::WindowLostFocus;
+            closes += event.GetEventType() == EventType::WindowClose;
+        });
+        const auto target = SDL_GetWindowID(second.GetNativeHandle());
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.windowID = target;
+        event.key.key = SDLK_A;
+        Check(SDL_PushEvent(&event), "routed key queued");
+        event = {};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.windowID = target;
+        event.button.button = SDL_BUTTON_LEFT;
+        Check(SDL_PushEvent(&event), "routed click queued");
+        for (const auto type : {SDL_EVENT_WINDOW_FOCUS_LOST, SDL_EVENT_WINDOW_CLOSE_REQUESTED}) {
+            event = {};
+            event.type = type;
+            event.window.windowID = target;
+            Check(SDL_PushEvent(&event), "routed window event queued");
+        }
+        if (pollOtherFirst)
+            first.PollEvents();
+        second.PollEvents();
+        Check(first.IsRunning() && !second.IsRunning() && firstEvents == 0 && keys == 1 &&
+                  clicks == 1 && focus == 1 && closes == 1,
+              "poll order does not lose or misroute another window's input and close events");
+    }
     Input::Shutdown();
     SDL_Quit();
 }
@@ -2359,7 +2403,15 @@ void RenderOutput(Graphics& graphics) {
     red.position = {0, 0, 2};
     red.radius = 1.0f;
     const auto outOfRange = Pixel(pointLit(std::span(&red, 1)), 0.5f, 0.5f);
-    Check(ambient[0] < 60 && front[0] > 200 && front[1] < 60,
+    const auto displayByte = [](double linear) {
+        const double encoded =
+            linear <= .0031308 ? linear * 12.92 : 1.055 * std::pow(linear, 1.0 / 2.4) - .055;
+        return static_cast<int>(std::lround(std::clamp(encoded, 0.0, 1.0) * 255));
+    };
+    const int ambientByte = displayByte(.15);
+    const int litByte = displayByte(.15 + .85 * .85);
+    Check(IsColor(ambient, ambientByte, ambientByte, ambientByte, 2) &&
+              IsColor(front, litByte, ambientByte, ambientByte, 2),
           "point light in front of a face lights it with its own color");
     Check(IsColor(behind, ambient[0], ambient[1], ambient[2], 2) &&
               IsColor(outOfRange, ambient[0], ambient[1], ambient[2], 2),
@@ -2450,10 +2502,12 @@ void RenderOutput(Graphics& graphics) {
     warm.color = {1, 0, 0};
     DirectionalLight dark;
     dark.intensity = 0.0f;
+    const auto cpuFront = Pixel(drawCube(false, Mat4{}, dark, std::span(&warm, 1)), 0.5f, 0.5f);
     const auto gpuFront = Pixel(drawCube(true, Mat4{}, dark, std::span(&warm, 1)), 0.5f, 0.5f);
     warm.position = {0, 0, -3};
     const auto gpuBehind = Pixel(drawCube(true, Mat4{}, dark, std::span(&warm, 1)), 0.5f, 0.5f);
-    Check(gpuFront[0] > 200 && gpuFront[1] < 60 &&
+    Check(IsColor(gpuFront, cpuFront[0], cpuFront[1], cpuFront[2], 2) &&
+              gpuFront[0] > gpuFront[1] + 100 &&
               IsColor(gpuBehind, ambient[0], ambient[1], ambient[2], 2),
           "GPU mesh point lighting matches the CPU path at the face center");
 
@@ -2508,7 +2562,9 @@ void RenderOutput(Graphics& graphics) {
     facing.direction = {-1, 0, 0};
     facing.intensity = 1;
     const auto normalFrame = drawAttributed(Mat4::Scale({2, 1, .5f}), nullptr, facing);
-    Check(IsColor(Pixel(normalFrame, .5f, .5f), 100, 100, 100, 5),
+    // inverse-transpose((2,1,.5)) * normalize(1,0,1) points along (.5,0,2).
+    const int normalByte = displayByte(.15 + 1.0 / std::sqrt(17.0));
+    Check(IsColor(Pixel(normalFrame, .5f, .5f), normalByte, normalByte, normalByte, 2),
           "authored vertex normals use inverse transpose under nonuniform scale");
     Files assetFiles;
     assetFiles.Text("scene-mesh.obj", "v -1 -1 0\nv 1 -1 0\nv 0 1 0\nvn 0 0 1\nf 1//1 2//1 3//1\n");
@@ -4006,6 +4062,17 @@ void ModernLifetimes() {
     camera.SetPosition({2, 2, 4});
     camera.SetTarget({0, 0, 0});
     auto empty = [&] { graphics.Capture([&] { graphics.gpu.Clear(0, 0, 0, 1); }); };
+    // The device retains its scene constant buffers across CPU contexts. Include that
+    // one-time allocation in the baseline, then require exact reclamation of each context.
+    graphics.Capture([&] {
+        Renderer3D::Context local(&graphics.gpu);
+        Renderer3D::ScopedContext scoped(local);
+        graphics.gpu.Clear(0, 0, 0, 1);
+        Renderer3D::BeginScene(camera, settings, 1);
+        Renderer3D::DrawCube({0, 0, 0}, {1, 1, 1}, {});
+        Renderer3D::EndScene();
+    });
+    empty();
     empty();
     empty();
     empty();

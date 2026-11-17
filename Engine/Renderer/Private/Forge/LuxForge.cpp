@@ -76,6 +76,8 @@ struct LuxForgeDevice {
     Queue* graphicsQueue = nullptr;
     uint32_t framesInFlight = 2;
     bool validation = false;
+    uint64_t validationErrorBase = 0;
+    uint64_t validationWarningBase = 0;
     std::string lastError;
 
     WindowHandle window = {};
@@ -195,6 +197,7 @@ struct LuxForgeDevice {
     struct PendingTarget {
         uint64_t frame;
         RenderTarget* target;
+        uint64_t bytes;
     };
 
     struct EnvironmentSlot {
@@ -259,8 +262,23 @@ bool g_SharedRootSignatures = false;
 std::mutex g_InitializationLogMutex;
 std::string g_InitializationError;
 bool g_CaptureInitializationError = false;
+std::atomic<uint64_t> g_ValidationErrors{0};
+std::atomic<uint64_t> g_ValidationWarnings{0};
+
+bool IsValidationMessage(const char* message) {
+    return std::strstr(message, "[VUID-") || std::strstr(message, "[UNASSIGNED-") ||
+           std::strstr(message, "[SYNC-") || std::strstr(message, "[WARNING-") ||
+           std::strstr(message, "Validation Error:") || std::strstr(message, "Validation Warning:");
+}
+
+void CaptureValidationWarning(void*, const char* message) {
+    if (IsValidationMessage(message))
+        ++g_ValidationWarnings;
+}
 
 void CaptureInitializationError(void*, const char* message) {
+    if (IsValidationMessage(message))
+        ++g_ValidationErrors;
     std::lock_guard<std::mutex> lock(g_InitializationLogMutex);
     if (!g_CaptureInitializationError || !g_InitializationError.empty())
         return;
@@ -342,6 +360,8 @@ bool AcquirePlatform(std::string& error) {
     initLog("LuxForge", static_cast<LogLevel>(LogLevel::eWARNING | LogLevel::eERROR));
     addLogCallback("LuxForgeInitialization", LogLevel::eERROR, nullptr, CaptureInitializationError,
                    nullptr, nullptr);
+    addLogCallback("LuxForgeValidationWarnings", LogLevel::eWARNING, nullptr,
+                   CaptureValidationWarning, nullptr, nullptr);
     return true;
 }
 
@@ -967,6 +987,8 @@ LuxForgeDevice* Create(const LuxForgeInitDesc* desc, char* error, size_t errorSi
         return nullptr;
     }
     auto* device = new LuxForgeDevice();
+    device->validationErrorBase = g_ValidationErrors.load();
+    device->validationWarningBase = g_ValidationWarnings.load();
     device->framesInFlight = desc->framesInFlight ? desc->framesInFlight : 2;
     if (device->framesInFlight > 8)
         device->framesInFlight = 8;
@@ -1426,13 +1448,40 @@ void Stats(const LuxForgeDevice* device, LuxForgeStats* stats) {
         return;
     *stats = device->frameStats;
     stats->liveTextures = device->liveTextures;
-    stats->pendingDeletes = static_cast<uint32_t>(device->pendingTextures.size());
+    stats->pendingDeletes =
+        static_cast<uint32_t>(device->pendingTextures.size() + device->pendingBuffers.size() +
+                              device->pendingTargets.size() + device->pendingEnvironments.size());
     stats->scenePasses = device->scenePasses;
     stats->textureBytes = 0;
     for (uint32_t id = 1; id < device->textures.size(); ++id)
         if (id != device->whiteTexture)
             stats->textureBytes += device->textures[id].bytes;
     stats->sceneBytes = device->sceneBytes;
+    const auto buffer = [stats](const Buffer* resource, bool live = true) {
+        if (resource) {
+            stats->bufferBytes += resource->mSize;
+            stats->liveBuffers += live ? 1 : 0;
+        }
+    };
+    buffer(device->captureBuffer);
+    for (const auto& slot : device->buffers)
+        buffer(slot.buffer, !slot.pendingDelete);
+    for (const auto& frame : device->frames) {
+        buffer(frame.uniforms);
+        buffer(frame.vertices);
+        for (const auto* retired : frame.retired) {
+            buffer(retired, false);
+            ++stats->pendingDeletes;
+        }
+    }
+    for (const auto* lights : device->lightBuffers)
+        buffer(lights);
+    for (const auto* uniforms : device->sceneUniforms)
+        buffer(uniforms);
+    stats->validationErrors = static_cast<uint32_t>(
+        std::min<uint64_t>(UINT32_MAX, g_ValidationErrors.load() - device->validationErrorBase));
+    stats->validationWarnings = static_cast<uint32_t>(std::min<uint64_t>(
+        UINT32_MAX, g_ValidationWarnings.load() - device->validationWarningBase));
     stats->swapchainRecreations = device->swapchainCreations ? device->swapchainCreations - 1 : 0;
 }
 
@@ -1712,8 +1761,7 @@ void Transition(Cmd* cmd, LuxForgeDevice::SceneTarget& target, ResourceState sta
 void RetireTarget(LuxForgeDevice* device, LuxForgeDevice::SceneTarget& target) {
     if (!target.target)
         return;
-    device->pendingTargets.push_back({target.lastUsedFrame, target.target});
-    device->sceneBytes -= target.bytes;
+    device->pendingTargets.push_back({target.lastUsedFrame, target.target, target.bytes});
     target = {};
 }
 
@@ -1758,9 +1806,10 @@ void ReleaseEnvironment(LuxForgeDevice* device, uint32_t id) {
 void CollectSceneGarbage(LuxForgeDevice* device, bool everything) {
     size_t kept = 0;
     for (const auto& pending : device->pendingTargets) {
-        if (everything || pending.frame <= device->completedFrames)
+        if (everything || pending.frame <= device->completedFrames) {
             removeRenderTarget(device->renderer, pending.target);
-        else
+            device->sceneBytes -= pending.bytes;
+        } else
             device->pendingTargets[kept++] = pending;
     }
     device->pendingTargets.resize(kept);
@@ -2010,8 +2059,10 @@ void ShutdownScene(LuxForgeDevice* device) {
     RetireTarget(device, device->hdr);
     RetireTarget(device, device->sceneDepth);
     RetireTarget(device, device->shadow);
-    for (const auto& pending : device->pendingTargets)
+    for (const auto& pending : device->pendingTargets) {
         removeRenderTarget(device->renderer, pending.target);
+        device->sceneBytes -= pending.bytes;
+    }
     device->pendingTargets.clear();
     for (Buffer*& uniforms : device->sceneUniforms)
         if (uniforms) {
@@ -2519,3 +2570,13 @@ const LuxForgeApi g_Api = {LUX_FORGE_API_VERSION,
 extern "C" LUX_FORGE_EXPORT const LuxForgeApi* LuxForgeGetApi(void) {
     return &g_Api;
 }
+
+#if defined(LUX_FORGE_TESTING)
+// Exercises the real Forge log callbacks and ABI counters without submitting invalid GPU work.
+extern "C" LUX_FORGE_EXPORT void LuxForgeTestValidationLog(int warning) {
+    if (warning < 0)
+        LOGF(eERROR, "LuxForge diagnostic probe: unrelated application error");
+    else
+        LOGF(warning ? eWARNING : eERROR, "[VUID-LuxForge-Test] synthetic validation probe");
+}
+#endif

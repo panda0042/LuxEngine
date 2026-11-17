@@ -1,4 +1,5 @@
 #include "ScenePhysicsWorld.hpp"
+#include <LuxEngine/Core/Log.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
 #include <cmath>
@@ -62,6 +63,10 @@ void ScenePhysicsWorld::Step(Scene& scene, double dt) {
         active_.push_back(id);
     }
     world_.Synchronize(descriptions);
+    const auto& error = world_.GetLastError();
+    if (!error.empty() && error != lastError_)
+        Log::Warn(error);
+    lastError_ = error;
     const auto& settings = scene.GetSettings();
     const auto gravity2D =
         settings.overrideGravity ? settings.gravity : PhysicsEngine::GetGravity2D();

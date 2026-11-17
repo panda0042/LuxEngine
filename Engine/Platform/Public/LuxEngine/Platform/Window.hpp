@@ -6,6 +6,7 @@
 #include <string>
 
 struct SDL_Window;
+union SDL_Event;
 
 namespace LuxEngine {
 
@@ -37,6 +38,7 @@ public:
 
     bool Initialize(const WindowProps& props = WindowProps{});
     void Shutdown();
+    // Pumps the shared SDL queue and routes events to every registered engine window.
     void PollEvents();
 
     ColorTheme GetColorTheme() const;
@@ -69,6 +71,7 @@ public:
     static constexpr uint32 MaxEventsPerPoll = 4096;
 
 private:
+    void ProcessEvent(const SDL_Event& event);
     bool ApplySystemTheme();
     ColorTheme colorTheme_ = ColorTheme::Light;
     bool hasWindowIcon_ = false;

@@ -1,26 +1,45 @@
+#include "GpuTestEnvironment.hpp"
 #include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/Platform/Window.hpp>
 #include <LuxEngine/Renderer/Renderer2D/Renderer2D.hpp>
 #include <LuxEngine/Renderer/Renderer3D/Renderer3D.hpp>
+#include <SDL3/SDL.h>
 #include <iostream>
 #include <stdexcept>
 using namespace LuxEngine;
 
 int main() {
+    if (!LuxEngine::Testing::HasGpuDisplay())
+        return 77;
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        std::cerr << SDL_GetError() << '\n';
+        return 1;
+    }
+
+    struct VideoLifetime {
+        ~VideoLifetime() {
+            SDL_Quit();
+        }
+    } video;
+
     Window window;
     WindowProps properties;
     properties.vulkan = true;
     properties.hidden = true;
     properties.width = 128;
     properties.height = 128;
-    if (!window.Initialize(properties))
-        return 77;
+    if (!window.Initialize(properties)) {
+        std::cerr << SDL_GetError() << '\n';
+        return 1;
+    }
     GpuDevice gpu;
     GpuDeviceConfig config;
     config.vsync = false;
     config.validation = GpuValidation::On;
-    if (!gpu.Initialize(window, config))
-        return 77;
+    if (!gpu.Initialize(window, config)) {
+        std::cerr << gpu.GetLastError() << '\n';
+        return 1;
+    }
     try {
         Renderer3D::Context renderer(&gpu);
         Renderer3D::ScopedContext scoped(renderer);

@@ -34,7 +34,7 @@ cmake --build build --target LuxEditor LuxForgeBackendTests
 ctest --test-dir build -L forge --output-on-failure
 ```
 
-`LUX_ENABLE_FORGE`나 `LUX_RENDER_BACKEND`를 선택할 필요가 없다. 렌더러 파일이 없거나 엔진과 ABI가 맞지 않으면 초기화 오류를 반환한다. ABI 버전은 현재 `8`이며 엔진과 렌더러를 함께 다시 빌드해야 한다.
+`LUX_ENABLE_FORGE`나 `LUX_RENDER_BACKEND`를 선택할 필요가 없다. 렌더러 파일이 없거나 엔진과 ABI가 맞지 않으면 초기화 오류를 반환한다. ABI 버전은 현재 `11`이며 엔진과 렌더러를 함께 다시 빌드해야 한다.
 
 ## 프레임과 자원 수명
 
@@ -57,3 +57,17 @@ Forge 전용 회귀 테스트는 초기화·캡처, 프레임 반복, 드로잉�
 삭제한 Native Vulkan 구현의 오류 주입 API는 Forge의 검증 기능이 아니다. 기존 오류 주입 전용 테스트는 해당 기능이 없음을 명시하며, Forge에서 동일한 오류 복구 기능이 구현됐다고 간주하지 않는다. 렌더러 이관과 별개로 각 플랫폼의 GPU 손실 복구·메모리 계측·배포 도구 검증을 계속 확장해야 한다.
 
 검증 계층은 기준 The Forge의 빌드 설정(`ENABLE_GRAPHICS_VALIDATION`)에 따라 프로세스 단위로 구성한다. 현재 Debug는 검증을 켜고 Release는 끈다. 공유 렌더러를 사용하는 각 뷰포트의 `GpuValidation::Off`/`Auto` 요청으로 이 모드를 실행 중에 전환하지는 못한다. 장치 정보는 요청값 대신 실제 빌드 모드를 반환한다.
+
+## 감사 회귀와 RenderDoc
+
+`framesInFlight`는 1~8로 제한한다. 실제 스왑체인 이미지 개수는 플랫폼이 별도로 선택한다. `GetCounters()`의 검증 오류·경고는 Forge 로그 콜백에서 수집하며, 공유 렌더러를 쓰는 장치마다 생성 이전의 이력은 제외한다. `GetMemoryStats()`는 사용자·내부 버퍼와 GPU 해제 대기 자원의 데이터 크기를 포함한다. 드라이버의 힙·메타데이터와 스왑체인 저장 공간을 측정한 값은 아니다.
+
+`Forge_diagnostics`는 실제 로그 콜백과 C ABI를 통한 오류·경고 전달, 장치별 이력, 버퍼 생성·지연 해제의 통계를 검사한다. `Forge_lifecycle`는 1/2/3/4/8 슬롯을, `Forge_resize`는 크기 변경과 픽셀 출력을 검사한다. 최소화 복귀는 X11에서 검사하며, Wayland에서는 컴포지터의 사용자 활성화가 필요한 항목으로 명시한다. Wayland에서 API 호출 성공만으로 실제 창이 복귀했다고 판단하지 않는다.
+
+Linux의 RenderDoc 1.42 주입과 실시간 Vulkan 검증을 겹치면 PRESENT/GENERAL 레이아웃에 관한 도구 상호작용 오류가 발생할 수 있다. `tools/CaptureRenderDoc.py`는 먼저 주입 없는 코어·동기화 검증이 성공했음을 확인하고, 별도 캡처 단계에서만 중복 검증 레이어를 비활성화한다. 검증 단계의 실패는 캡처로 덮어쓰지 않는다. 사용자 레이어 등록이나 시스템 설정을 바꾸지 않는다.
+
+```sh
+python3 tools/CaptureRenderDoc.py --build-dir out -- scene3d
+```
+
+필요하면 `--icd`로 Vulkan 드라이버 JSON, `--exe`로 다른 실행 파일을 지정한다. 게임에는 `--frames`처럼 종료 조건을 전달한다. 결과 디렉터리에는 단계별 로그, `.rdc`와 재생 결과 `result.json`이 남는다. 이 도구는 GPU 장치 손실·물리·Windows UI의 검증을 대신하지 않는다.

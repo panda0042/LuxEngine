@@ -189,6 +189,30 @@ void Fit() {
           "collapsed camera axes receive a finite, non-parallel view basis");
 }
 
+void Primary2DCamera() {
+    using namespace LuxEngine;
+    Scene scene;
+    auto parent = scene.CreateEntity("Rig");
+    parent.GetComponent<TransformComponent>().position = {1e12, 1e12, 0};
+    auto camera = scene.CreateEntity("Primary 2D");
+    Check(scene.SetParent(camera.GetId(), parent.GetId(), false), "2D camera parented");
+    camera.GetComponent<TransformComponent>().position = {.125, .25, 0};
+    camera.GetComponent<TransformComponent>().rotation.z = ToRadians(90);
+    camera.AddComponent<CameraComponent>().orthoSize = 2;
+    const auto cameras = ResolveScenePlayerCameras(scene, 2, {0, 0, 4.5});
+    Check(!cameras.perspective && cameras.camera2D.GetPosition().x == 1e12 + .125 &&
+              cameras.camera2D.GetPosition().y == 1e12 + .25 &&
+              std::abs(cameras.camera2D.GetRotation() - ToRadians(90)) < 1e-12 &&
+              cameras.camera2D.GetProjectionMatrix().elements[0] == .25,
+          "primary 2D world position, rotation and size override the editor fallback view");
+    camera.GetComponent<CameraComponent>().isPrimary = false;
+    const auto fallback = ResolveScenePlayerCameras(scene, 2, {3, 4, 5});
+    Check(fallback.camera2D.GetPosition().x == 3 && fallback.camera2D.GetPosition().y == 4 &&
+              fallback.camera2D.GetRotation() == 0 &&
+              fallback.camera2D.GetProjectionMatrix().elements[0] == .1,
+          "the explicit view is used when no primary camera is active");
+}
+
 // Writes a small platformer scene for the LuxPlayer smoke test.
 void WriteScene(const std::string& path) {
     LuxEngine::Scene scene;
@@ -380,9 +404,10 @@ int main(int argc, char** argv) {
         const std::string_view suite = argc > 1 ? argv[1] : "parse";
         if (suite == "parse")
             Parse();
-        else if (suite == "fit")
+        else if (suite == "fit") {
             Fit();
-        else if (suite == "write-scene" && argc > 2)
+            Primary2DCamera();
+        } else if (suite == "write-scene" && argc > 2)
             WriteScene(argv[2]);
         else if (suite == "scene-management-gpu")
             return SceneManagementGpu();

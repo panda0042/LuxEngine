@@ -38,6 +38,7 @@ struct Collision3DEvent {
 // Scene-independent Jolt world. Planar worlds constrain motion to XY and rotation to Z.
 class LUX_API PhysicsWorld final {
 public:
+    static constexpr double MinBodyExtent = 1e-6;
     explicit PhysicsWorld(bool planar = false);
     ~PhysicsWorld();
     PhysicsWorld(const PhysicsWorld&) = delete;
@@ -45,6 +46,7 @@ public:
     // Descriptors are a complete world snapshot. Missing/invalid bodies are removed;
     // valid descriptors still synchronize, and false reports any invalid input.
     bool Synchronize(std::span<const PhysicsBodyDescription> bodies);
+    const std::string& GetLastError() const;
     void Remove(uint32 entity);
     void Step(double dt, Vec3 gravity);
     std::optional<PhysicsBodyState> GetState(uint32 entity) const;

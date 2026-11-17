@@ -19,5 +19,6 @@ private:
     bool planar_;
     PhysicsWorld world_;
     std::vector<uint32> active_;
+    std::string lastError_;
 };
 } // namespace LuxEngine

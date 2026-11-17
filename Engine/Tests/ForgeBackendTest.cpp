@@ -1,8 +1,9 @@
 // GpuDevice running on The Forge backend (LUX_RENDER_BACKEND=forge): frame loop, clear,
-// capture, resize and vsync. Exit code 77 = skipped (no video / no Forge), 0 = pass.
+// capture, resize and vsync. Exit code 77 = skipped (no display), 0 = pass.
 #include <LuxEngine/LuxEngine.hpp>
 // Mesh tests drive the render backend directly (SetLighting/DrawIndexed are reserved for
 // Renderer3D on GpuDevice).
+#include "GpuTestEnvironment.hpp"
 #include "RHI/RenderBackend.hpp"
 
 #include <SDL3/SDL.h>
@@ -128,6 +129,60 @@ struct Session {
         window.Shutdown();
     }
 };
+
+void Diagnostics() {
+    Session first;
+    Check(first.ok, "diagnostic device starts");
+    if (!first.ok)
+        return;
+    const auto baseline = first.gpu.GetMemoryStats();
+    GpuBuffer buffer;
+    Check(buffer.Initialize(&first.gpu, BufferType::Vertex, 4096), "diagnostic buffer created");
+    const auto allocated = first.gpu.GetMemoryStats();
+    Check(allocated.liveBuffers == baseline.liveBuffers + 1 &&
+              allocated.allocationBytes >= baseline.allocationBytes + 4096,
+          "GPU buffer payload and live count are reported");
+    buffer.Release();
+    Check(first.gpu.GetMemoryStats().pendingDestructions > 0,
+          "deferred buffer release remains visible");
+    Check(first.gpu.WaitIdle(), "diagnostic buffers drained");
+    const auto released = first.gpu.GetMemoryStats();
+    Check(released.liveBuffers == baseline.liveBuffers &&
+              released.allocationBytes == baseline.allocationBytes &&
+              released.pendingDestructions == 0,
+          "buffer memory returns to its baseline after GPU completion");
+#if defined(_WIN32)
+    const auto library = std::string(SDL_GetBasePath()) + "LuxForge.dll";
+#elif defined(__APPLE__)
+    const auto library = std::string(SDL_GetBasePath()) + "libLuxForge.dylib";
+#else
+    const auto library = std::string(SDL_GetBasePath()) + "libLuxForge.so";
+#endif
+    auto* module = SDL_LoadObject(library.c_str());
+    auto emit =
+        module
+            ? reinterpret_cast<void (*)(int)>(SDL_LoadFunction(module, "LuxForgeTestValidationLog"))
+            : nullptr;
+    Check(emit != nullptr, "test build exposes the Forge diagnostic log probe");
+    if (emit) {
+        const auto before = first.gpu.GetCounters();
+        emit(-1);
+        Check(first.gpu.GetCounters().validationErrors == before.validationErrors,
+              "unrelated application errors do not count as validation errors");
+        emit(0);
+        emit(1);
+        const auto after = first.gpu.GetCounters();
+        Check(after.validationErrors == before.validationErrors + 1 &&
+                  after.validationWarnings == before.validationWarnings + 1,
+              "Forge error and warning callbacks reach the engine counters");
+        Session second;
+        Check(second.ok && second.gpu.GetCounters().validationErrors == 0 &&
+                  second.gpu.GetCounters().validationWarnings == 0,
+              "a new device does not inherit earlier validation history");
+    }
+    if (module)
+        SDL_UnloadObject(module);
+}
 
 void Basics() {
     std::printf("[basics]\n");
@@ -266,6 +321,11 @@ void Resizing() {
                     capture.width, capture.height);
         Check(capture.width == fw && capture.height == fh, "swap chain follows the framebuffer");
         Check(CentreIs(capture, 26, 230, 77), "clear after resize");
+    }
+    if (std::string(SDL_GetCurrentVideoDriver()) == "wayland") {
+        std::printf("  minimize/restore subcase not run: Wayland requires compositor/user "
+                    "activation to restore a minimized window\n");
+        return;
     }
     SDL_MinimizeWindow(s.window.GetNativeHandle());
     for (int i = 0; i < 50 && !s.window.IsMinimized(); ++i) {
@@ -2165,7 +2225,9 @@ std::array<int, 4> At(const GpuFrameCapture& c, float fx, float fy) {
 
 void Scene3D() {
     std::printf("[scene3d]\n");
-    Session s(128, 128);
+    GpuDeviceConfig config;
+    config.vsync = false; // The shutdown latency check must not measure display pacing.
+    Session s(128, 128, config);
     if (!s.ok)
         return Check(false, "session for scene3d");
     Renderer3D::Context context(&s.gpu);
@@ -2734,10 +2796,15 @@ int main(int argc, char** argv) {
         if (only.empty() || std::find(only.begin(), only.end(), name) != only.end())
             section();
     };
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        std::printf("SKIP: no video driver\n");
+    if (!LuxEngine::Testing::HasGpuDisplay()) {
+        std::printf("SKIP: no window-system display\n");
         return 77;
     }
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        std::printf("FAIL: SDL video initialization: %s\n", SDL_GetError());
+        return 1;
+    }
+    run("diagnostics", Diagnostics);
     run("basics", Basics);
     run("misuse", Misuse);
     run("ownership", Ownership);
