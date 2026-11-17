@@ -1,5 +1,6 @@
 #include <LuxEngine/Environment/EnvironmentMap.hpp>
 #include <LuxEngine/LuxEngine.hpp>
+#include <LuxEngine/Physics/PhysicsWorld.hpp>
 #include <LuxEngine/Platform/Branding.hpp>
 #include <LuxEngine/Testing/GpuFault.hpp>
 #include <SDL3/SDL.h>
@@ -486,14 +487,18 @@ void Physics2D() {
         Check(Near(body.GetComponent<TransformComponent>().position.y, 3),
               "overflowing density is ignored safely");
         rigidbody.mass = 1;
-        collider.size = {0.001f, 0.001f};
+        const double invalidSize = PhysicsWorld::MinBodyExtent * .5;
+        collider.size = {invalidSize, invalidSize};
         scene.OnUpdate(1.0 / 60.0);
         Check(Near(body.GetComponent<TransformComponent>().position.y, 3),
-              "undersized collider is ignored safely");
-        collider.size = {1, 1};
-        scene.OnUpdate(1.0 / 60.0);
-        Check(body.GetComponent<TransformComponent>().position.y < 3,
-              "valid body resumes simulation after invalid values");
+              "collider below the minimum world extent is ignored safely");
+        for (const double size : {PhysicsWorld::MinBodyExtent, .001, 1.}) {
+            collider.size = {size, size};
+            const double previousY = body.GetComponent<TransformComponent>().position.y;
+            scene.OnUpdate(1.0 / 60.0);
+            Check(body.GetComponent<TransformComponent>().position.y < previousY,
+                  "valid collider at or above the minimum extent resumes simulation");
+        }
     }
     {
         PhysicsEngine::SetGravity2D({0, 0});
