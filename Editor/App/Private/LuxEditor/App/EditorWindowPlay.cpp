@@ -172,12 +172,15 @@ void EditorWindow::StopSceneWindow() {
     if (process->property("scriptDebugger").toBool())
         scriptWorkspace_->StopDebugger();
     process->disconnect(this);
-    if (process->state() != LuxUI::Process::NotRunning) {
+    if (process->state() == LuxUI::Process::Starting)
+        process->waitForStarted(1000);
+    if (process->state() == LuxUI::Process::Running) {
         process->terminate();
-        if (!process->waitForFinished(1500)) {
-            process->kill();
-            process->waitForFinished(1000);
-        }
+        process->waitForFinished(1500);
+    }
+    if (process->state() != LuxUI::Process::NotRunning) {
+        process->kill();
+        process->waitForFinished(1000);
     }
     process->deleteLater();
     LuxUI::File::remove(playerScenePath_);

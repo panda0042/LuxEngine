@@ -393,7 +393,15 @@ void TestProjectOperations() {
     std::filesystem::create_directories(generated);
     std::ofstream(generated / "cache.txt") << "intermediate file";
     const auto archive = files.path / "export.luxpack";
-    Check(ExportProject(*project, archive, error), "project exports to package");
+#ifdef _WIN32
+    const auto& exportProject = project;
+#else
+    const auto alias = files.path / "original-alias";
+    std::filesystem::create_directory_symlink(project->GetFile().parent_path(), alias);
+    const auto exportProject = EditorProject::Open(alias / project->GetFile().filename(), error);
+    Check(exportProject.has_value(), "project opens through an aliased root");
+#endif
+    Check(ExportProject(*exportProject, archive, error), "project exports to package");
     Check(ExportProject(*project, archive, error), "project export safely replaces package");
     auto imported = ImportProject(archive, files.path / "imported", error);
     Check(imported.has_value() && imported->GetName() == "Original" &&

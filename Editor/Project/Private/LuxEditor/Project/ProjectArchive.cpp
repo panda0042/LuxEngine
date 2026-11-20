@@ -507,6 +507,12 @@ static bool WriteProjectArchive(const EditorProject& project, const std::filesys
     error.clear();
     const auto root = project.GetFile().parent_path();
     std::error_code ec;
+    const auto canonicalRoot = bundled && !bundled->empty() ? std::filesystem::canonical(root, ec)
+                                                            : std::filesystem::path{};
+    if (ec) {
+        error = "프로젝트 폴더 경로를 확인할 수 없습니다.";
+        return false;
+    }
     if (!archive.parent_path().empty())
         std::filesystem::create_directories(archive.parent_path(), ec);
     if (ec) {
@@ -523,7 +529,7 @@ static bool WriteProjectArchive(const EditorProject& project, const std::filesys
     const auto mapAsset = [&](const std::filesystem::path& source) {
         if (bundled)
             if (const auto entry = bundled->find(source); entry != bundled->end())
-                return std::filesystem::absolute(root) / entry->second;
+                return canonicalRoot / entry->second;
         return source;
     };
     uint64_t total = 0;
