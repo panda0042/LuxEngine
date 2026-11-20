@@ -50,22 +50,22 @@ Mat4 Skin(const ModelSubmesh& mesh, const ModelVertex& vertex, const std::vector
     return result;
 }
 
-bool Included(const ModelAsset& model, size_t node, const std::vector<std::string>& mask) {
+} // namespace
+
+bool ModelAsset::NodeMatchesMask(size_t node, const std::vector<std::string>& mask) const {
     if (mask.empty())
         return true;
-    std::string path = model.nodes[node].name;
-    auto parent = model.nodes[node].parent;
+    std::string path = nodes[node].name;
+    auto parent = nodes[node].parent;
     while (parent >= 0) {
-        path = model.nodes[parent].name + "/" + path;
-        parent = model.nodes[parent].parent;
+        path = nodes[parent].name + "/" + path;
+        parent = nodes[parent].parent;
     }
     return std::any_of(mask.begin(), mask.end(), [&](const auto& prefix) {
-        return model.nodes[node].name == prefix || path == prefix ||
-               path.starts_with(prefix + "/") || path.ends_with("/" + prefix) ||
-               path.find("/" + prefix + "/") != std::string::npos;
+        return nodes[node].name == prefix || path == prefix || path.starts_with(prefix + "/") ||
+               path.ends_with("/" + prefix) || path.find("/" + prefix + "/") != std::string::npos;
     });
 }
-} // namespace
 
 bool ModelAsset::MixPoses(const std::vector<ModelPoseLayer>& layers, ModelPose& output,
                           std::string& error,
@@ -90,7 +90,7 @@ bool ModelAsset::MixPoses(const std::vector<ModelPoseLayer>& layers, ModelPose& 
                 ModelTransform value = destination;
                 double total = 0;
                 for (const auto* layer : group) {
-                    if (!Included(*this, n, layer->mask))
+                    if (!NodeMatchesMask(n, layer->mask))
                         continue;
                     const auto& source = layer->pose->nodeLocalTransforms[n];
                     const double t = layer->weight / (total + layer->weight);
@@ -161,7 +161,7 @@ bool ModelAsset::MixPoses(const std::vector<ModelPoseLayer>& layers, ModelPose& 
                     Vec3 position{}, direction{};
                     double total = 0;
                     for (const auto* layer : group) {
-                        if (!Included(*this, mesh.node, layer->mask))
+                        if (!NodeMatchesMask(mesh.node, layer->mask))
                             continue;
                         const auto& source = layer->pose->submeshes[meshIndex].at(vertex);
                         const auto skin = Skin(mesh, source, layer->pose->nodeWorldTransforms);

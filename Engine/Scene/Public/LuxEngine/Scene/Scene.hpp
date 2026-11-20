@@ -133,8 +133,12 @@ public:
 private:
     friend class SceneManager;
     class AnimationBindings;
+    using RootMotionDeltas = std::unordered_map<uint32, Vec3>;
+    void UpdateAnimations(double dt, bool emitEvents, RootMotionDeltas* physicsMotion);
     void ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, double dt, bool rootMotion,
-                             AnimationBindings& bindings);
+                             AnimationBindings& bindings, RootMotionDeltas* physicsMotion);
+    void SetRootMotionVelocity(uint32 owner, Vec3 velocity);
+    void ResetPhysicsTiming();
 
     struct PoolBase {
         LUX_API virtual ~PoolBase();
@@ -200,6 +204,7 @@ private:
     SceneSettings settings_;
     std::string sourcePath_;
     double physicsAccumulator_ = 0;
+    RootMotionDeltas pendingPhysicsMotion_;
 };
 } // namespace LuxEngine
 

@@ -690,8 +690,8 @@ bool Scene::DeserializeJson(const std::string& data) {
                     component.rootMotion = value.value("root_motion", false);
                     if (value.contains("clip_data")) {
                         std::string error;
-                        auto clip = AnimationClip::DeserializeFromString(
-                            value.at("clip_data").dump(), error);
+                        auto clip = AnimationClip::DeserializeData(value.at("clip_data").dump(),
+                                                                  error);
                         RequireValidScene(bool(clip));
                         component.clip = *clip;
                     }

@@ -48,38 +48,45 @@ std::vector<AnimationEvent> AnimationPlayback::Advance(double dt, double duratio
     previousCursor = cursor;
     std::vector<std::pair<double, AnimationEvent>> crossed;
     if (!playing || !std::isfinite(dt) || dt <= 0 || !std::isfinite(speed) ||
-        !std::isfinite(cursor) || duration <= 0)
+        !std::isfinite(cursor) || !std::isfinite(duration) || duration <= 0)
         return {};
     const double previous = cursor, next = cursor + dt * speed;
-    if (!std::isfinite(next))
+    if (!std::isfinite(next) || next == previous)
         return {};
     const double low = std::min(previous, next), high = std::max(previous, next);
+    const double span = high - low;
     auto emit = [&](double at, const AnimationEvent& event) {
-        if ((next >= previous && at > previous && at <= next) ||
-            (next < previous && at >= next && at < previous))
+        if ((next > previous && at > 0 && at <= span) ||
+            (next < previous && at >= 0 && at < span))
             crossed.emplace_back(at, event);
     };
     if (wrap == AnimationWrap::Once) {
         for (const auto& event : events)
-            emit(event.time, event);
-    } else {
+            if (event.time >= low && event.time <= high)
+                emit(event.time - low, event);
+    } else if (!events.empty()) {
         const double period = duration * (wrap == AnimationWrap::PingPong ? 2 : 1);
         // Bound catch-up after a suspended application; ordinary playback never drops events.
-        const auto first = std::floor(low / period), last = std::floor(high / period);
-        if (last - first > 4096)
+        double phase = std::fmod(low, period);
+        if (phase < 0)
+            phase += period;
+        const double cycles = std::floor(span / period + phase / period);
+        if (!std::isfinite(cycles) || cycles > 4096)
             throw std::runtime_error("애니메이션 이벤트 순회 범위가 너무 큽니다.");
-        for (double cycle = first; cycle <= last; ++cycle)
+        const auto count = static_cast<unsigned>(cycles);
+        for (unsigned cycle = 0; cycle <= count; ++cycle)
             for (const auto& event : events) {
-                emit(cycle * period + event.time, event);
+                const double start = cycle ? cycle * period - phase : -phase;
+                emit(start + event.time, event);
                 if (wrap == AnimationWrap::PingPong && event.time > 0 && event.time < duration)
-                    emit(cycle * period + period - event.time, event);
+                    emit(start + period - event.time, event);
             }
     }
     std::stable_sort(crossed.begin(), crossed.end(), [&](const auto& a, const auto& b) {
         return next >= previous ? a.first < b.first : a.first > b.first;
     });
     cursor = wrap == AnimationWrap::Once ? std::clamp(next, 0.0, duration) : next;
-    if (wrap == AnimationWrap::Once && (next >= duration || next < 0))
+    if (wrap == AnimationWrap::Once && ((speed > 0 && next >= duration) || (speed < 0 && next <= 0)))
         playing = false;
     std::vector<AnimationEvent> result;
     for (auto& event : crossed)

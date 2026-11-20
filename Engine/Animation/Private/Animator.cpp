@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <map>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 
 namespace LuxEngine {
@@ -19,6 +20,14 @@ Binding Key(const AnimationSample& sample) {
     return {sample.target, sample.property, sample.field};
 }
 
+bool MaskIncludes(const std::vector<std::string>& mask, std::string_view target) {
+    return mask.empty() || std::any_of(mask.begin(), mask.end(), [&](const auto& path) {
+               return target == path || target.starts_with(path + "/") ||
+                      target.ends_with("/" + path) ||
+                      target.find("/" + path + "/") != std::string_view::npos;
+           });
+}
+
 void Merge(AnimationFrame& destination, const AnimationFrame& source, double weight,
            bool additive = false, const std::vector<std::string>& mask = {}) {
     if (weight <= 0)
@@ -31,40 +40,33 @@ void Merge(AnimationFrame& destination, const AnimationFrame& source, double wei
         else
             *destination.rootDelta += (*source.rootDelta - *destination.rootDelta) * weight;
     }
-    const auto allowed = [&](const AnimationSample& sample) {
-        return mask.empty() || std::any_of(mask.begin(), mask.end(), [&](const auto& path) {
-                   return sample.target == path || sample.target.starts_with(path + "/") ||
-                          sample.target.ends_with("/" + path) ||
-                          sample.target.find("/" + path + "/") != std::string::npos;
-               });
-    };
-    const auto isSprite = [](const AnimationSample& sample) {
-        return sample.property == AnimationProperty::SpriteFrame;
-    };
-    const bool selectSprite =
-        weight >= .5 &&
-        std::any_of(source.samples.begin(), source.samples.end(),
-                    [&](const auto& sample) { return isSprite(sample) && allowed(sample); });
-    if (selectSprite &&
-        std::tie(destination.spriteSheet, destination.spriteColumns, destination.spriteRows) !=
-            std::tie(source.spriteSheet, source.spriteColumns, source.spriteRows))
-        std::erase_if(destination.samples, isSprite);
     for (const auto& sample : source.samples) {
-        if (!allowed(sample) || (isSprite(sample) && !selectSprite))
+        const bool sprite = sample.property == AnimationProperty::SpriteFrame;
+        if (!MaskIncludes(mask, sample.target) || (sprite && weight < .5))
             continue;
         auto found = std::find_if(destination.samples.begin(), destination.samples.end(),
                                   [&](const auto& value) { return Key(value) == Key(sample); });
-        if (found == destination.samples.end()) {
+        if (sprite) {
             auto value = sample;
-            if (weight < 1 && sample.property != AnimationProperty::SpriteFrame) {
+            if (!value.spriteSheet)
+                value.spriteSheet = AnimationSpriteSheet{source.spriteSheet, source.spriteColumns,
+                                                         source.spriteRows};
+            destination.spriteSheet = value.spriteSheet->path;
+            destination.spriteColumns = value.spriteSheet->columns;
+            destination.spriteRows = value.spriteSheet->rows;
+            if (found == destination.samples.end())
+                destination.samples.push_back(std::move(value));
+            else
+                *found = std::move(value);
+        } else if (found == destination.samples.end()) {
+            auto value = sample;
+            if (weight < 1) {
                 std::array<double, 4> identity{};
                 if (sample.property == AnimationProperty::Scale)
                     identity = {1, 1, 1, 0};
                 value.value = BlendAnimationValue(sample.property, identity, sample.value, weight);
             }
             destination.samples.push_back(std::move(value));
-        } else if (sample.property == AnimationProperty::SpriteFrame) {
-            *found = sample;
         } else if (additive) {
             if (sample.property == AnimationProperty::Scale) {
                 for (size_t i = 0; i < 3; ++i)
@@ -85,11 +87,6 @@ void Merge(AnimationFrame& destination, const AnimationFrame& source, double wei
         model.weight *= weight;
         destination.models.push_back(std::move(model));
     }
-    if (selectSprite) {
-        destination.spriteSheet = source.spriteSheet;
-        destination.spriteColumns = source.spriteColumns;
-        destination.spriteRows = source.spriteRows;
-    }
 }
 } // namespace
 
@@ -100,6 +97,7 @@ struct AnimatorPlayer::Impl {
         double fade = 0, elapsed = 0;
         std::map<Binding, std::array<double, 4>> fadeOrigins;
         bool fresh = true;
+        bool positioned = false;
         bool interrupted = false;
     };
 
@@ -137,36 +135,46 @@ struct AnimatorPlayer::Impl {
         return Clip(state.blendTree.empty() ? state.clip : state.blendTree.front().clip);
     }
 
-    AnimationFrame Sample(const AnimatorState& state, const AnimationPlayback& playback) {
-        AnimationFrame frame;
-        std::vector<std::pair<Ref<AnimationClip>, double>> sources;
+    using Sources = std::vector<std::pair<Ref<AnimationClip>, double>>;
+
+    Sources BlendSources(const AnimatorState& state) {
         if (state.blendTree.empty())
-            sources.emplace_back(Clip(state.clip), 1);
-        else {
-            const double parameter = parameters[state.blendParameter];
-            auto next =
-                std::upper_bound(state.blendTree.begin(), state.blendTree.end(), parameter,
-                                 [](double value, const auto& p) { return value < p.threshold; });
-            if (next == state.blendTree.begin())
-                sources.emplace_back(Clip(next->clip), 1);
-            else if (next == state.blendTree.end())
-                sources.emplace_back(Clip(state.blendTree.back().clip), 1);
-            else {
-                const auto& a = *std::prev(next);
-                double t = (parameter - a.threshold) / (next->threshold - a.threshold);
-                sources.emplace_back(Clip(a.clip), 1 - t);
-                sources.emplace_back(Clip(next->clip), t);
-            }
-        }
-        const auto reference = Primary(state);
+            return {{Clip(state.clip), 1}};
+        const double parameter = parameters.at(state.blendParameter);
+        const auto next = std::upper_bound(
+            state.blendTree.begin(), state.blendTree.end(), parameter,
+            [](double value, const auto& point) { return value < point.threshold; });
+        if (next == state.blendTree.begin())
+            return {{Clip(next->clip), 1}};
+        if (next == state.blendTree.end())
+            return {{Clip(state.blendTree.back().clip), 1}};
+        const auto& previous = *std::prev(next);
+        const double t = (parameter - previous.threshold) / (next->threshold - previous.threshold);
+        return {{Clip(previous.clip), 1 - t}, {Clip(next->clip), t}};
+    }
+
+    AnimationPlayback StartPlayback(const AnimatorState& state) {
+        const auto clip = Primary(state);
+        const double playbackSpeed = state.speed * speed;
+        const double start = playbackSpeed < 0 && clip->GetWrap() == AnimationWrap::Once
+                                 ? clip->duration
+                                 : 0;
+        return {start, playbackSpeed, true, start};
+    }
+
+    AnimationFrame Sample(const Sources& sources, const AnimationPlayback& playback,
+                          double referenceDuration, const std::vector<std::string>& mask) {
+        AnimationFrame frame;
         double accumulated = 0;
         for (const auto& [clip, weight] : sources) {
             if (!clip || weight <= 0)
                 continue;
-            const double cursor = playback.cursor * clip->duration / reference->duration;
+            const double cursor = playback.cursor * clip->duration / referenceDuration;
             AnimationFrame part;
-            part.rootDelta = clip->RootDelta(
-                playback.previousCursor * clip->duration / reference->duration, cursor);
+            if (MaskIncludes(mask, clip->rootMotionTarget))
+                if (const auto delta = clip->RootDelta(
+                        playback.previousCursor * clip->duration / referenceDuration, cursor))
+                    frame.rootDelta = frame.rootDelta.value_or(Vec3{}) + *delta * weight;
             part.samples = clip->SampleTracks(cursor);
             part.spriteSheet = clip->spriteSheet;
             part.spriteColumns = clip->spriteColumns;
@@ -177,7 +185,7 @@ struct AnimatorPlayer::Impl {
                 model.clip = clip->modelClip;
                 model.time = AnimationTime(cursor, clip->duration, clip->GetWrap());
                 const double previous =
-                    playback.previousCursor * clip->duration / reference->duration;
+                    playback.previousCursor * clip->duration / referenceDuration;
                 model.previousTime = AnimationTime(previous, clip->duration, clip->GetWrap());
                 model.cycles = clip->GetWrap() == AnimationWrap::Loop
                                    ? std::floor(cursor / clip->duration) -
@@ -247,14 +255,14 @@ bool AnimatorPlayer::SetController(Ref<AnimatorController> controller, std::stri
                              [&](const auto& state) { return state.name == layer.entry; }) -
                 layer.states.begin());
             runtime.previous = runtime.current;
-            runtime.playback.playing = true;
-            next->layers.push_back(runtime);
             for (const auto& state : layer.states) {
                 if (!state.clip.empty())
                     next->Clip(state.clip);
                 for (const auto& point : state.blendTree)
                     next->Clip(point.clip);
             }
+            runtime.playback = next->StartPlayback(layer.states[runtime.current]);
+            next->layers.push_back(runtime);
         }
         impl_ = std::move(next);
         error.clear();
@@ -308,12 +316,13 @@ bool AnimatorPlayer::Play(const std::string& name, double fade, size_t layer) {
     runtime.previous = runtime.current;
     runtime.previousPlayback = runtime.playback;
     runtime.current = static_cast<size_t>(found - definition.states.begin());
-    runtime.playback = {0, 1, true};
+    runtime.playback = impl_->StartPlayback(*found);
     runtime.interrupted = runtime.fade > 0 && runtime.elapsed < runtime.fade;
     runtime.fade = fade;
     runtime.fadeOrigins.clear();
     runtime.elapsed = 0;
     runtime.fresh = true;
+    runtime.positioned = false;
     return true;
 }
 
@@ -322,9 +331,12 @@ void AnimatorPlayer::Seek(double seconds, size_t layer) {
         auto& state = impl_->layers[layer];
         state.playback.cursor = seconds;
         state.playback.previousCursor = seconds;
+        if (seconds >= 0 && seconds <= GetDuration(layer))
+            state.playback.playing = true;
         state.fade = 0;
         state.fadeOrigins.clear();
         state.fresh = false;
+        state.positioned = true;
     }
 }
 
@@ -350,6 +362,12 @@ bool AnimatorPlayer::SetSpeed(double value) {
     if (!std::isfinite(value))
         return false;
     impl_->speed = value;
+    for (size_t index = 0; index < impl_->layers.size(); ++index) {
+        auto& runtime = impl_->layers[index];
+        if (!runtime.positioned)
+            runtime.playback = impl_->StartPlayback(
+                impl_->controller->layers[index].states[runtime.current]);
+    }
     return true;
 }
 
@@ -400,20 +418,35 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
         }
         const auto& current = layer.states[runtime.current];
         const auto clip = impl_->Primary(current);
+        const auto sources = impl_->BlendSources(current);
         runtime.playback.speed = current.speed * impl_->speed;
-        if (emitEvents && runtime.fresh && impl_->playing && layer.weight > 0)
-            for (const auto& event : clip->events)
-                if (event.time == 0)
-                    result.events.push_back(event);
-        if (emitEvents)
-            runtime.fresh = false;
         if (impl_->playing) {
-            auto events =
-                runtime.playback.Advance(dt, clip->duration, clip->GetWrap(), clip->events);
-            if (emitEvents && layer.weight > 0)
-                result.events.insert(result.events.end(), events.begin(), events.end());
-        }
-        auto frame = impl_->Sample(current, runtime.playback);
+            runtime.playback.Advance(dt, clip->duration, clip->GetWrap(), {});
+            runtime.positioned |= runtime.playback.previousCursor != runtime.playback.cursor;
+            if (emitEvents) {
+                if (layer.weight > 0) {
+                    const auto& eventClip = *std::max_element(
+                        sources.rbegin(), sources.rend(),
+                        [](const auto& a, const auto& b) { return a.second < b.second; })->first;
+                    const double ratio = eventClip.duration / clip->duration;
+                    const double from = runtime.playback.previousCursor * ratio;
+                    const double to = runtime.playback.cursor * ratio;
+                    if (runtime.fresh) {
+                        const double initial = AnimationTime(from, eventClip.duration, eventClip.GetWrap());
+                        for (const auto& event : eventClip.events)
+                            if (event.time == initial)
+                                result.events.push_back(event);
+                    }
+                    AnimationPlayback eventPlayback{from, to - from, true};
+                    auto events = eventPlayback.Advance(1, eventClip.duration, eventClip.GetWrap(),
+                                                        eventClip.events);
+                    result.events.insert(result.events.end(), events.begin(), events.end());
+                }
+                runtime.fresh = false;
+            }
+        } else
+            runtime.playback.previousCursor = runtime.playback.cursor;
+        auto frame = impl_->Sample(sources, runtime.playback, clip->duration, layer.mask);
         if (runtime.fade > 0 && runtime.elapsed < runtime.fade) {
             if (impl_->playing) {
                 runtime.elapsed += dt;
@@ -421,9 +454,12 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
                 runtime.previousPlayback.speed =
                     layer.states[runtime.previous].speed * impl_->speed;
                 runtime.previousPlayback.Advance(dt, old->duration, old->GetWrap(), {});
-            }
+            } else
+                runtime.previousPlayback.previousCursor = runtime.previousPlayback.cursor;
             const double factor = std::clamp(runtime.elapsed / runtime.fade, 0.0, 1.0);
-            auto previous = impl_->Sample(layer.states[runtime.previous], runtime.previousPlayback);
+            const auto& previousState = layer.states[runtime.previous];
+            auto previous = impl_->Sample(impl_->BlendSources(previousState), runtime.previousPlayback,
+                                          impl_->Primary(previousState)->duration, layer.mask);
             // Preserve the weighted model pose contributors for skeleton-space mixing.
             for (auto& model : previous.models)
                 model.weight *= 1 - factor;
@@ -451,7 +487,12 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
                     previous.samples.push_back(std::move(startingSample));
                 }
             }
+            auto motion = std::optional<Vec3>{};
+            if (previous.rootDelta || frame.rootDelta)
+                motion = previous.rootDelta.value_or(Vec3{}) * (1 - factor) +
+                         frame.rootDelta.value_or(Vec3{}) * factor;
             Merge(previous, frame, factor);
+            previous.rootDelta = motion;
             if (factor >= 1)
                 runtime.fadeOrigins.clear();
 

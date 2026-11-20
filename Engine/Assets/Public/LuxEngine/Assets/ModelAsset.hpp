@@ -134,6 +134,8 @@ public:
     std::vector<std::string> warnings{};
 
 private:
+    friend class Scene;
+    bool NodeMatchesMask(size_t node, const std::vector<std::string>& mask) const;
     static Ref<ModelAsset> ReadFbx(const std::string& filepath, std::string& error, bool reload,
                                    int32 requiredSubmesh, bool requireUv);
     struct Impl;

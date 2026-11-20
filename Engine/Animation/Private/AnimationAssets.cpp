@@ -18,6 +18,7 @@ std::string Utf8(const std::filesystem::path& path) {
 }
 
 using Json = nlohmann::ordered_json;
+constexpr size_t MaxAnimationFileBytes = 8 * 1024 * 1024;
 
 void Require(bool value) {
     if (!value)
@@ -39,14 +40,38 @@ Vec3 Vector(const Json& v) {
 
 Json Read(const std::string& path) {
     const auto size = std::filesystem::file_size(std::filesystem::u8path(path));
-    Require(size <= 8 * 1024 * 1024);
+    Require(size <= MaxAnimationFileBytes);
     std::ifstream stream(std::filesystem::u8path(path));
     Json value;
     stream >> value;
     return value;
 }
 
-bool Write(const std::string& path, const Json& value, std::string& error) {
+std::string FormatFile(const Json& value) {
+    auto data = value.dump(2) + '\n';
+    if (data.size() > MaxAnimationFileBytes)
+        throw std::runtime_error("애니메이션 파일 크기 " + std::to_string(data.size()) +
+                                 "바이트가 한도 " + std::to_string(MaxAnimationFileBytes) +
+                                 "바이트를 넘었습니다.");
+    return data;
+}
+
+void RebasePath(Json& value, const std::filesystem::path& destination,
+                const std::filesystem::path& source = {}) {
+    const auto& resource = value.get_ref<const std::string&>();
+    if (resource.empty())
+        return;
+    auto file = std::filesystem::u8path(resource);
+    if (file.is_relative() && !source.empty())
+        file = source / file;
+    if (file.is_absolute()) {
+        std::error_code ec;
+        const auto relative = std::filesystem::relative(file, destination, ec);
+        value = Utf8(!ec && !relative.empty() ? relative : file);
+    }
+}
+
+bool Write(const std::string& path, const std::string& data, std::string& error) {
     std::filesystem::path temporary;
     try {
         const auto file = std::filesystem::u8path(path);
@@ -60,8 +85,8 @@ bool Write(const std::string& path, const Json& value, std::string& error) {
                      "-" + std::to_string(++sequence);
         {
             std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
-            stream << value.dump(2) << '\n';
-            stream.flush();
+            stream.write(data.data(), static_cast<std::streamsize>(data.size()));
+            stream.close();
             Require(bool(stream));
         }
 #if defined(_WIN32)
@@ -170,8 +195,15 @@ bool AnimationClip::SerializeToString(std::string& output, std::string& error) c
 
 Ref<AnimationClip> AnimationClip::DeserializeFromString(const std::string& data,
                                                         std::string& error) {
+    if (data.size() > MaxAnimationFileBytes) {
+        error = "애니메이션 파일 크기가 8 MiB 한도를 넘었습니다.";
+        return {};
+    }
+    return DeserializeData(data, error);
+}
+
+Ref<AnimationClip> AnimationClip::DeserializeData(const std::string& data, std::string& error) {
     try {
-        Require(data.size() <= 8 * 1024 * 1024);
         const auto j = Json::parse(data);
         Require(j.at("format") == "LuxAnimation" && j.at("version") == 1);
         auto clip = CreateRef<AnimationClip>();
@@ -216,23 +248,28 @@ Ref<AnimationClip> AnimationClip::DeserializeFromString(const std::string& data,
     }
 }
 
-bool AnimationClip::Save(const std::string& path, std::string& error) const {
+bool AnimationClip::SerializeForFile(const std::string& path, std::string& output,
+                                     std::string& error) const try {
+    Require(!path.empty());
     std::string value;
     if (!SerializeToString(value, error))
         return false;
     auto json = Json::parse(value);
-    for (const auto key : {"model", "sprite_sheet"}) {
-        auto reference = std::filesystem::u8path(json[key].get<std::string>());
-        if (reference.is_absolute()) {
-            std::error_code ec;
-            auto relative = std::filesystem::relative(
-                reference, std::filesystem::absolute(std::filesystem::u8path(path)).parent_path(),
-                ec);
-            if (!ec)
-                json[key] = Utf8(relative);
-        }
-    }
-    return Write(path, json, error);
+    const auto destination = std::filesystem::absolute(std::filesystem::u8path(path)).parent_path();
+    for (const auto key : {"model", "sprite_sheet"})
+        RebasePath(json[key], destination);
+    output = FormatFile(json);
+    error.clear();
+    return true;
+} catch (const std::exception& ex) {
+
+    error = ex.what();
+    return false;
+}
+
+bool AnimationClip::Save(const std::string& path, std::string& error) const {
+    std::string data;
+    return SerializeForFile(path, data, error) && Write(path, data, error);
 }
 
 Ref<AnimationClip> AnimationClip::Load(const std::string& path, std::string& error) {
@@ -292,7 +329,9 @@ bool AnimatorController::Validate(std::string& error) const {
     }
 }
 
-bool AnimatorController::Save(const std::string& path, std::string& error) const {
+bool AnimatorController::SerializeForFile(const std::string& path, std::string& output,
+                                          std::string& error) const try {
+    Require(!path.empty());
     if (!Validate(error))
         return false;
     Json j = {{"format", "LuxAnimator"},
@@ -331,28 +370,29 @@ bool AnimatorController::Save(const std::string& path, std::string& error) const
         }
         j["layers"].push_back(std::move(l));
     }
+    const auto destination = std::filesystem::absolute(std::filesystem::u8path(path)).parent_path();
+    const auto source =
+        sourcePath.empty()
+            ? std::filesystem::path{}
+            : std::filesystem::absolute(std::filesystem::u8path(sourcePath)).parent_path();
     for (auto& layer : j["layers"])
         for (auto& state : layer["states"]) {
-            auto rebase = [&](Json& value) {
-                auto file = std::filesystem::u8path(value.get<std::string>());
-                if (file.is_relative() && !sourcePath.empty())
-                    file = std::filesystem::absolute(std::filesystem::u8path(sourcePath))
-                               .parent_path() /
-                           file;
-                if (file.is_absolute()) {
-                    std::error_code ec;
-                    auto relative = std::filesystem::relative(
-                        file,
-                        std::filesystem::absolute(std::filesystem::u8path(path)).parent_path(), ec);
-                    if (!ec)
-                        value = Utf8(relative);
-                }
-            };
-            rebase(state["clip"]);
+            RebasePath(state["clip"], destination, source);
             for (auto& point : state["tree"])
-                rebase(point["clip"]);
+                RebasePath(point["clip"], destination, source);
         }
-    return Write(path, j, error);
+    output = FormatFile(j);
+    error.clear();
+    return true;
+} catch (const std::exception& ex) {
+
+    error = ex.what();
+    return false;
+}
+
+bool AnimatorController::Save(const std::string& path, std::string& error) const {
+    std::string data;
+    return SerializeForFile(path, data, error) && Write(path, data, error);
 }
 
 Ref<AnimatorController> AnimatorController::Load(const std::string& path, std::string& error) {

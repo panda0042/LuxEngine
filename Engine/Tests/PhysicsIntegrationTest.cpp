@@ -342,6 +342,44 @@ void StableContactIdentity() {
         Check(world.BeganContacts().size() == 1, "a genuine re-entry starts a new trigger");
     }
 }
+
+void PlanarColliderHierarchy() {
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.overrideGravity = true;
+    settings.gravity = {};
+    Check(scene.SetSettings(settings), "planar hierarchy settings");
+    auto parent = scene.CreateEntity("Parent");
+    auto child = scene.CreateEntity("Planar body");
+    child.GetComponent<TransformComponent>().rotation.z = .53;
+    Check(scene.SetParent(child.GetId(), parent.GetId(), false), "body attaches to parent");
+    child.AddComponent<BoxCollider2DComponent>();
+    auto& body = child.AddComponent<Rigidbody2DComponent>();
+    body.type = BodyType::Dynamic;
+    body.velocity = {4, 0};
+    scene.OnUpdate(settings.fixedStep);
+    Check(scene.GetWorldTransform(child.GetId()).position.x > 0 &&
+              scene.GetLastPhysicsError2D().empty(),
+          "an ordinary parent does not prevent planar motion");
+    parent.GetComponent<TransformComponent>().scale = {2, 1, 1};
+    body.isGrounded = true;
+    scene.OnUpdate(settings.fixedStep);
+    const auto& error = scene.GetLastPhysicsError2D();
+    Check(error.find("#" + std::to_string(child.GetId())) != std::string::npos &&
+              error.find("sheared") != std::string::npos && !body.isGrounded,
+          "a sheared planar collider reports the responsible entity and clears contact state");
+    parent.GetComponent<TransformComponent>().scale = {1, 1, 1};
+    const auto before = scene.GetWorldTransform(child.GetId()).position.x;
+    scene.OnUpdate(settings.fixedStep);
+    Check(scene.GetWorldTransform(child.GetId()).position.x > before &&
+              scene.GetLastPhysicsError2D().empty(),
+          "correcting the parent transform restores planar motion");
+    parent.GetComponent<TransformComponent>().scale.z = 0;
+    scene.OnUpdate(settings.fixedStep);
+    Check(scene.GetLastPhysicsError2D().find("simulated pose cannot be applied") !=
+              std::string::npos,
+          "a planar pose that cannot be written back reports failure");
+}
 } // namespace
 
 int main() {
@@ -355,6 +393,7 @@ int main() {
             KinematicTransformCarriesBox(substeps);
         CapacityAndReplacement();
         StableContactIdentity();
+        PlanarColliderHierarchy();
         std::cout << "Jolt queries, diagnostics, CCD, triggers and live body edits passed\n";
         return 0;
     } catch (const std::exception& error) {
