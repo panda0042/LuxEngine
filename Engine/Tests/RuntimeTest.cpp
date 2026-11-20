@@ -235,6 +235,7 @@ void WriteScene(const std::string& path) {
     for (LuxEngine::uint32 x = 0; x < 12; ++x)
         tiles.Set(x, 0, 2);
     auto cube3D = scene.CreateEntity("3D 배경 큐브");
+    cube3D.AddComponent<LuxEngine::ScriptComponent>() = {"Unused.DisabledScript", false};
     cube3D.GetComponent<LuxEngine::TransformComponent>().position = {2.5f, 1.5f, -2.0f};
     cube3D.AddComponent<LuxEngine::MeshRendererComponent>().material.albedoColor = {0.4f, 0.7f,
                                                                                     0.9f, 1.0f};

@@ -29,7 +29,7 @@ if(MSVC)
     target_compile_options(LuxGame PRIVATE /utf-8)
 endif()
 if(COMMAND lux_copy_runtime)
-    lux_copy_runtime(LuxGame)
+    lux_copy_runtime(LuxGame NO_PROJECT_CONTENT)
 elseif(COMMAND lux_copy_shaders)
     lux_copy_shaders(LuxGame)
 endif()
@@ -38,40 +38,17 @@ if(NOT EXISTS "${_lux_manifest}")
     set(_lux_manifest "${CMAKE_CURRENT_SOURCE_DIR}/project.luxproj")
 endif()
 add_custom_target(LuxGameContent
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:LuxGame>/Content"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${_lux_manifest}"
-        "$<TARGET_FILE_DIR:LuxGame>/Content/project.luxproject"
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DBINARY_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DPROJECT_MANIFEST=${_lux_manifest}"
+        "-DCONTENT_ROOT=$<TARGET_FILE_DIR:LuxGame>/Content"
+        "-DMANAGED_ROOT=${_lux_managed_output}"
+        "-DMANIFEST=${CMAKE_CURRENT_BINARY_DIR}/lux-content-$<CONFIG>.txt"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/SyncContent.cmake"
     VERBATIM)
 add_dependencies(LuxGameContent LuxGameScripts)
-add_custom_command(TARGET LuxGameContent POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${_lux_managed_output}"
-        "$<TARGET_FILE_DIR:LuxGame>/Content/Scripts")
 add_dependencies(LuxGame LuxGameContent)
-if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Assets")
-    add_custom_command(TARGET LuxGameContent POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/Assets"
-            "$<TARGET_FILE_DIR:LuxGame>/Content/Assets"
-        VERBATIM)
-endif()
-file(GLOB_RECURSE _lux_scenes CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.lux"
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.[lL][uU][xX][pP][rR][eE][fF][aA][bB]")
-foreach(_scene IN LISTS _lux_scenes)
-    if(_scene MATCHES "(^|/)(\\.git|\\.lux)(/|$)" OR
-       _scene MATCHES "^(build|out|cmake-build[^/]*)(/|$)")
-        continue()
-    endif()
-    get_filename_component(_scene_directory "${_scene}" DIRECTORY)
-    add_custom_command(TARGET LuxGameContent POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:LuxGame>/Content/${_scene_directory}"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/${_scene}"
-            "$<TARGET_FILE_DIR:LuxGame>/Content/${_scene}"
-        VERBATIM)
-endforeach()
 if(WIN32)
     get_target_property(_engine_type LuxEngine::Engine TYPE)
     if(_engine_type STREQUAL "SHARED_LIBRARY")
@@ -88,11 +65,356 @@ if(WIN32)
 endif()
 )LUX";
 
+constexpr const char* SyncContent = R"LUX(cmake_minimum_required(VERSION 3.24)
+file(GLOB_RECURSE assets LIST_DIRECTORIES false RELATIVE "${SOURCE_ROOT}"
+    "${SOURCE_ROOT}/Assets/*"
+    "${SOURCE_ROOT}/*.lux" "${SOURCE_ROOT}/*.[lL][uU][xX][pP][rR][eE][fF][aA][bB]"
+    "${SOURCE_ROOT}/*.[lL][uU][xX][aA][nN][iI][mM]"
+    "${SOURCE_ROOT}/*.[lL][uU][xX][aA][nN][iI][mM][aA][tT][oO][rR]"
+    "${SOURCE_ROOT}/*.[oO][bB][jJ]" "${SOURCE_ROOT}/*.[fF][bB][xX]"
+    "${SOURCE_ROOT}/*.[pP][nN][gG]" "${SOURCE_ROOT}/*.[jJ][pP][gG]"
+    "${SOURCE_ROOT}/*.[jJ][pP][eE][gG]" "${SOURCE_ROOT}/*.[bB][mM][pP]"
+    "${SOURCE_ROOT}/*.[tT][gG][aA]" "${SOURCE_ROOT}/*.[hH][dD][rR]")
+file(GLOB_RECURSE scripts LIST_DIRECTORIES false RELATIVE "${MANAGED_ROOT}" "${MANAGED_ROOT}/*")
+set(projectAssets)
+foreach(path IN LISTS assets)
+    set(source "${SOURCE_ROOT}/${path}")
+    if(DEFINED BINARY_ROOT AND NOT BINARY_ROOT STREQUAL SOURCE_ROOT)
+        cmake_path(IS_PREFIX BINARY_ROOT "${source}" NORMALIZE generated)
+        if(generated)
+            continue()
+        endif()
+    endif()
+    if(path MATCHES "^Assets/" OR
+       (NOT path MATCHES "(^|/)([.]git|[.]lux)(/|$)" AND
+        NOT path MATCHES "^(build|out|cmake-build[^/]*)(/|$)"))
+        list(APPEND projectAssets "${path}")
+    endif()
+endforeach()
+set(current project.luxproject ${projectAssets})
+foreach(path IN LISTS scripts)
+    list(APPEND current "Scripts/${path}")
+endforeach()
+file(LOCK "${MANIFEST}.lock" GUARD PROCESS TIMEOUT 30)
+if(IS_SYMLINK "${CONTENT_ROOT}")
+    message(FATAL_ERROR "Generated content root is a link: ${CONTENT_ROOT}")
+endif()
+file(MAKE_DIRECTORY "${CONTENT_ROOT}")
+file(REAL_PATH "${CONTENT_ROOT}" root)
+set(outputLock "${root}.lux-sync-lock.dir")
+if(IS_SYMLINK "${outputLock}" OR IS_SYMLINK "${outputLock}/cmake.lock")
+    message(FATAL_ERROR "Generated content lock is a link: ${outputLock}")
+endif()
+file(LOCK "${outputLock}" DIRECTORY GUARD PROCESS TIMEOUT 30)
+set(transaction "${root}.lux-sync.dir")
+set(nextManifest "${MANIFEST}.lux-sync.tmp")
+if(EXISTS "${transaction}" OR IS_SYMLINK "${transaction}" OR
+   EXISTS "${nextManifest}" OR IS_SYMLINK "${nextManifest}")
+    message(FATAL_ERROR
+        "Unfinished content synchronization. Check recovery plans and backups in ${transaction} and ${nextManifest}")
+endif()
+function(content_path relative output)
+    if(relative STREQUAL "" OR relative STREQUAL "." OR IS_ABSOLUTE "${relative}" OR
+       relative MATCHES "(^|/)[.][.](/|$)" OR relative MATCHES "[:\\\\]")
+        message(FATAL_ERROR "Invalid generated content path: ${relative}")
+    endif()
+    set(candidate "${root}/${relative}")
+    set(existing "${candidate}")
+    while(NOT EXISTS "${existing}" AND NOT IS_SYMLINK "${existing}")
+        cmake_path(GET existing PARENT_PATH existing)
+    endwhile()
+    set(ancestor "${existing}")
+    while(NOT ancestor STREQUAL root)
+        if(IS_SYMLINK "${ancestor}")
+            message(FATAL_ERROR "Generated content path crosses a link: ${relative}")
+        endif()
+        cmake_path(GET ancestor PARENT_PATH ancestor)
+    endwhile()
+    file(REAL_PATH "${existing}" resolved)
+    cmake_path(IS_PREFIX root "${resolved}" NORMALIZE inside)
+    if(WIN32)
+        string(TOLOWER "${resolved}" resolved)
+        string(TOLOWER "${existing}" existing)
+    endif()
+    if(NOT inside OR NOT resolved STREQUAL existing)
+        message(FATAL_ERROR "Generated content path crosses a link: ${relative}")
+    endif()
+    set(${output} "${candidate}" PARENT_SCOPE)
+endfunction()
+
+set(staleFiles)
+set(staleDirectories)
+set(previousPaths)
+if(EXISTS "${MANIFEST}")
+    file(STRINGS "${MANIFEST}" previousPaths)
+    foreach(path IN LISTS previousPaths)
+        if(path IN_LIST current OR IS_ABSOLUTE "${path}" OR
+           path MATCHES "(^|/)[.][.](/|$)" OR path MATCHES "[:\\\\]")
+            continue()
+        endif()
+        content_path("${path}" candidate)
+        list(APPEND staleFiles "${path}")
+        cmake_path(GET path PARENT_PATH directory)
+        while(NOT directory STREQUAL "")
+            list(APPEND staleDirectories "${directory}")
+            cmake_path(GET directory PARENT_PATH directory)
+        endwhile()
+    endforeach()
+    list(REMOVE_DUPLICATES staleDirectories)
+    list(SORT staleDirectories ORDER DESCENDING)
+endif()
+
+function(validate_content source path)
+    if(NOT EXISTS "${source}" OR IS_DIRECTORY "${source}")
+        message(FATAL_ERROR "Missing generated content source: ${source}")
+    endif()
+    file(READ "${source}" firstByte LIMIT 1 HEX)
+    content_path("${path}" destination)
+    if(IS_DIRECTORY "${destination}")
+        if(NOT path IN_LIST staleDirectories)
+            message(FATAL_ERROR "Unmanaged directory blocks generated content: ${path}")
+        endif()
+        file(GLOB_RECURSE entries LIST_DIRECTORIES true RELATIVE "${root}" "${destination}/*")
+        foreach(entry IN LISTS entries)
+            content_path("${entry}" candidate)
+            if(IS_DIRECTORY "${candidate}")
+                set(owned "${staleDirectories}")
+            else()
+                set(owned "${staleFiles}")
+            endif()
+            if(NOT entry IN_LIST owned)
+                message(FATAL_ERROR "Unmanaged content blocks directory replacement: ${entry}")
+            endif()
+        endforeach()
+    endif()
+    cmake_path(GET path PARENT_PATH directory)
+    while(NOT directory STREQUAL "")
+        content_path("${directory}" candidate)
+        if(EXISTS "${candidate}" AND NOT IS_DIRECTORY "${candidate}" AND
+           NOT directory IN_LIST staleFiles)
+            message(FATAL_ERROR "File blocks generated content directory: ${directory}")
+        endif()
+        cmake_path(GET directory PARENT_PATH directory)
+    endwhile()
+endfunction()
+
+validate_content("${PROJECT_MANIFEST}" project.luxproject)
+foreach(path IN LISTS projectAssets)
+    validate_content("${SOURCE_ROOT}/${path}" "${path}")
+endforeach()
+foreach(path IN LISTS scripts)
+    validate_content("${MANAGED_ROOT}/${path}" "Scripts/${path}")
+endforeach()
+
+list(SORT current)
+string(JOIN "\n" contents ${current})
+string(APPEND contents "\n")
+
+function(clean_transaction)
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E rm -r -- "${transaction}"
+                    RESULT_VARIABLE cleaned)
+    if(NOT cleaned STREQUAL "0")
+        message(WARNING "Could not remove content synchronization data: ${transaction}")
+    endif()
+endfunction()
+
+function(rollback_content reason)
+    set(failures)
+    list(REVERSE installedFiles)
+    foreach(index IN LISTS installedFiles)
+        list(GET changedFiles ${index} path)
+        file(RENAME "${root}/${path}" "${transaction}/new/${index}" NO_REPLACE RESULT result)
+        if(NOT result STREQUAL "0")
+            list(APPEND failures "${path}: ${result}")
+        endif()
+    endforeach()
+    list(REVERSE createdDirectories)
+    foreach(path IN LISTS createdDirectories)
+        file(GLOB entries "${root}/${path}/*")
+        if(entries OR IS_SYMLINK "${root}/${path}")
+            list(APPEND failures "${path}: directory changed during synchronization")
+        else()
+            list(FIND createdDirectories "${path}" index)
+            file(RENAME "${root}/${path}" "${transaction}/rollback-dirs/${index}"
+                 NO_REPLACE RESULT result)
+            if(NOT result STREQUAL "0")
+                list(APPEND failures "${path}: ${result}")
+            endif()
+        endif()
+    endforeach()
+    list(REVERSE movedDirectories)
+    foreach(index IN LISTS movedDirectories)
+        list(GET existingDirectories ${index} path)
+        file(RENAME "${transaction}/old-dirs/${index}" "${path}" NO_REPLACE RESULT result)
+        if(NOT result STREQUAL "0")
+            list(APPEND failures "${path}: ${result}")
+        endif()
+    endforeach()
+    foreach(index IN LISTS movedFiles)
+        list(GET existingFiles ${index} path)
+        file(RENAME "${transaction}/old-files/${index}" "${path}" NO_REPLACE RESULT result)
+        if(NOT result STREQUAL "0")
+            list(APPEND failures "${path}: ${result}")
+        endif()
+    endforeach()
+    if(failures)
+        string(JOIN "\n" details ${failures})
+        message(FATAL_ERROR "${reason}\nRollback incomplete. Recovery files: ${transaction}\n${details}")
+    endif()
+    file(REMOVE "${nextManifest}")
+    clean_transaction()
+    message(FATAL_ERROR "${reason}\nPrevious generated content restored.")
+endfunction()
+
+set(existingFiles)
+foreach(path IN LISTS staleFiles)
+    content_path("${path}" candidate)
+    if(EXISTS "${candidate}" AND NOT IS_DIRECTORY "${candidate}")
+        file(REAL_PATH "${candidate}" actual)
+        list(APPEND existingFiles "${actual}")
+    endif()
+endforeach()
+
+set(existingDirectories)
+foreach(path IN LISTS staleDirectories)
+    content_path("${path}" candidate)
+    if(IS_DIRECTORY "${candidate}")
+        file(REAL_PATH "${candidate}" actual)
+        list(APPEND existingDirectories "${actual}")
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES existingDirectories)
+list(SORT existingDirectories ORDER DESCENDING)
+
+set(changedFiles)
+set(changedSources)
+function(plan_content source path)
+    content_path("${path}" destination)
+    if(EXISTS "${destination}" AND NOT IS_DIRECTORY "${destination}")
+        file(REAL_PATH "${destination}" actual)
+        file(RELATIVE_PATH actualRelative "${root}" "${actual}")
+        set(owned FALSE)
+        if(path IN_LIST previousPaths OR actualRelative IN_LIST previousPaths)
+            set(owned TRUE)
+        endif()
+        file(SIZE "${source}" sourceSize)
+        file(SIZE "${destination}" destinationSize)
+        if(sourceSize EQUAL destinationSize)
+            file(SHA256 "${source}" sourceHash)
+            file(SHA256 "${destination}" destinationHash)
+            if(sourceHash STREQUAL destinationHash AND (actual STREQUAL destination OR NOT owned))
+                return()
+            endif()
+        endif()
+        if(NOT owned)
+            message(FATAL_ERROR "Unmanaged file blocks generated content: ${path}")
+        endif()
+        set(existingFiles ${existingFiles} "${actual}" PARENT_SCOPE)
+    endif()
+    set(changedFiles ${changedFiles} "${path}" PARENT_SCOPE)
+    set(changedSources ${changedSources} "${source}" PARENT_SCOPE)
+endfunction()
+
+plan_content("${PROJECT_MANIFEST}" project.luxproject)
+foreach(path IN LISTS projectAssets)
+    plan_content("${SOURCE_ROOT}/${path}" "${path}")
+endforeach()
+foreach(path IN LISTS scripts)
+    plan_content("${MANAGED_ROOT}/${path}" "Scripts/${path}")
+endforeach()
+list(REMOVE_DUPLICATES existingFiles)
+
+if(NOT changedFiles AND NOT existingFiles AND NOT existingDirectories AND EXISTS "${MANIFEST}")
+    file(READ "${MANIFEST}" oldContents)
+    if(oldContents STREQUAL contents)
+        return()
+    endif()
+endif()
+
+file(MAKE_DIRECTORY "${transaction}/new" "${transaction}/old-files"
+     "${transaction}/old-dirs" "${transaction}/rollback-dirs")
+string(JOIN "\n" filePlan ${existingFiles})
+string(JOIN "\n" directoryPlan ${existingDirectories})
+string(JOIN "\n" newFilePlan ${changedFiles})
+file(WRITE "${transaction}/old-files.txt" "${filePlan}\n")
+file(WRITE "${transaction}/old-dirs.txt" "${directoryPlan}\n")
+file(WRITE "${transaction}/new-files.txt" "${newFilePlan}\n")
+file(WRITE "${nextManifest}" "${contents}")
+
+set(index 0)
+foreach(source IN LISTS changedSources)
+    file(COPY_FILE "${source}" "${transaction}/new/${index}" RESULT result)
+    if(NOT result STREQUAL "0")
+        rollback_content("Could not stage generated content ${source}: ${result}")
+    endif()
+    math(EXPR index "${index} + 1")
+endforeach()
+
+file(WRITE "${transaction}/prepared" "")
+set(index 0)
+foreach(path IN LISTS existingFiles)
+    file(RENAME "${path}" "${transaction}/old-files/${index}" NO_REPLACE RESULT result)
+    if(NOT result STREQUAL "0")
+        rollback_content("Could not back up generated content ${path}: ${result}")
+    endif()
+    list(APPEND movedFiles "${index}")
+    math(EXPR index "${index} + 1")
+endforeach()
+
+set(index 0)
+foreach(path IN LISTS existingDirectories)
+    file(GLOB entries "${path}/*")
+    if(NOT entries)
+        file(RENAME "${path}" "${transaction}/old-dirs/${index}" NO_REPLACE RESULT result)
+        if(NOT result STREQUAL "0")
+            rollback_content("Could not back up generated directory ${path}: ${result}")
+        endif()
+        list(APPEND movedDirectories "${index}")
+        file(GLOB movedEntries "${transaction}/old-dirs/${index}/*")
+        if(movedEntries)
+            rollback_content("Generated directory changed during synchronization: ${path}")
+        endif()
+    endif()
+    math(EXPR index "${index} + 1")
+endforeach()
+
+set(index 0)
+foreach(path IN LISTS changedFiles)
+    set(parents)
+    cmake_path(GET path PARENT_PATH directory)
+    while(NOT directory STREQUAL "" AND NOT IS_DIRECTORY "${root}/${directory}")
+        list(PREPEND parents "${directory}")
+        cmake_path(GET directory PARENT_PATH directory)
+    endwhile()
+    foreach(directory IN LISTS parents)
+        execute_process(COMMAND "${CMAKE_COMMAND}" -E make_directory "${root}/${directory}"
+                        RESULT_VARIABLE result)
+        if(NOT result STREQUAL "0")
+            rollback_content("Could not create generated directory ${directory}: ${result}")
+        endif()
+        list(APPEND createdDirectories "${directory}")
+    endforeach()
+    file(RENAME "${transaction}/new/${index}" "${root}/${path}" NO_REPLACE RESULT result)
+    if(NOT result STREQUAL "0")
+        rollback_content("Could not install generated content ${path}: ${result}")
+    endif()
+    list(APPEND installedFiles "${index}")
+    math(EXPR index "${index} + 1")
+endforeach()
+
+file(RENAME "${nextManifest}" "${MANIFEST}" RESULT result)
+if(NOT result STREQUAL "0")
+    rollback_content("Could not replace generated content manifest: ${result}")
+endif()
+clean_transaction()
+)LUX";
+
 constexpr const char* GameSource = R"LUX(#include <LuxEngine/LuxEngine.hpp>
 #include <SDL3/SDL_filesystem.h>
 #include <LuxEngine/EntryPoint.hpp>
 #include <LuxEngine/Scene/SceneManager.hpp>
 #include <LuxEngine/Runtime/ProjectManifest.hpp>
+#include <LuxEngine/Runtime/ScenePlayer.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -120,7 +442,7 @@ class Game final : public le::Application {
 public:
     explicit Game(bool smokeTest)
         : le::Application({.name = "LuxGame", .width = 1280, .height = 720}),
-          camera_(-8.0f, 8.0f, -4.5f, 4.5f), smokeTest_(smokeTest) {}
+          smokeTest_(smokeTest) {}
 
 protected:
     void OnInit() override {
@@ -137,15 +459,8 @@ protected:
         scene_ = manager_.Load(sceneFile, error);
         if (!scene_)
             throw std::runtime_error(error.empty() ? "시작 씬을 열 수 없습니다." : error);
-        if (!scene_->GetComponentEntityIds<le::ScriptComponent>().empty()) {
-            le::ScriptRuntimeConfig config;
-            config.assemblyPath = basePath / "Content/Scripts/GameScripts.dll";
-            if (!scripts_.Initialize(*scene_, config))
-                throw std::runtime_error(scripts_.GetLastError());
-        }
-        camera3D_.SetPerspective(le::ToRadians(60), 16.0f / 9, .1f, 1000);
-        camera3D_.SetPosition({0, 6, 12});
-        camera3D_.SetTarget({0, 0, 0});
+        scriptAssembly_ = basePath / "Content/Scripts/GameScripts.dll";
+        EnsureScripts();
         le::Input::BindAction("Left", le::LuxKey::A);
         le::Input::BindAction("Left", le::LuxKey::Left);
         le::Input::BindAction("Right", le::LuxKey::D);
@@ -157,6 +472,20 @@ protected:
         le::Input::BindAction("Action", le::LuxKey::Space);
         le::Input::BindAction("Quit", le::LuxKey::Escape);
         FindActors();
+    }
+
+    void EnsureScripts() {
+        if (scripts_.IsRunning())
+            return;
+        for (const auto id : scene_->GetComponentEntityIds<le::ScriptComponent>()) {
+            if (!scene_->GetComponent<le::ScriptComponent>(id).enabled)
+                continue;
+            le::ScriptRuntimeConfig config;
+            config.assemblyPath = scriptAssembly_;
+            if (!scripts_.Initialize(*scene_, config))
+                throw std::runtime_error(scripts_.GetLastError());
+            return;
+        }
     }
 
     void FindActors() {
@@ -184,8 +513,7 @@ protected:
         if (streamingElapsed_ < .1)
             return;
         streamingElapsed_ = 0;
-        const auto observer =
-            player_ ? scene_->GetWorldTransform(player_.GetId()).position : le::Vec3{};
+        const auto observer = le::ResolveSceneStreamingObserver(*scene_, {}, player_.GetId());
         std::string error;
         bool changed = false;
         if (!manager_.UpdateStreaming(*scene_, {observer.x, observer.y}, error, &changed)) {
@@ -194,7 +522,10 @@ protected:
             streamingError_ = std::move(error);
         } else if (changed) {
             streamingError_.clear();
+        }
+        if (changed) {
             FindActors();
+            EnsureScripts();
         }
     }
 
@@ -222,8 +553,8 @@ protected:
                     transform.position.y += 1.0f;
                 if (le::Input::WasActionPressed("Down"))
                     transform.position.y -= 1.0f;
-                transform.position.x = std::clamp(transform.position.x, -3.0f, 3.0f);
-                transform.position.y = std::clamp(transform.position.y, -3.0f, 3.0f);
+                transform.position.x = std::clamp(transform.position.x, -3.0, 3.0);
+                transform.position.y = std::clamp(transform.position.y, -3.0, 3.0);
                 if (goal_) {
                     const auto& target = goal_.GetComponent<le::TransformComponent>().position;
                     if (transform.position.x == target.x && transform.position.y == target.y) {
@@ -266,18 +597,28 @@ protected:
         const auto& settings = scene_->GetSettings();
         GetGpuDevice().Clear(settings.clearColor.x, settings.clearColor.y, settings.clearColor.z,
                              settings.clearColor.w);
-        auto renderSettings = scene_->GetSettings().render3D;
-        if (!renderSettings.environmentPath.empty())
-            renderSettings.environmentPath =
-                scene_->ResolveAssetPath(renderSettings.environmentPath);
-        if (scene_->GetSettings().render3D.mode == le::Render3DMode::Pbr)
-            le::Renderer3D::BeginScene(camera3D_, renderSettings, scene_->GetSettings().exposure);
-        else
-            le::Renderer3D::BeginScene(camera3D_, le::DirectionalLight{});
-        scene_->OnRender3D();
-        le::Renderer3D::EndScene();
-        le::Renderer2D::BeginScene(camera_);
-        // Scene::OnRender draws tilemaps and sprites, so maps painted in the editor appear in game.
+        le::uint32 width = 0, height = 0;
+        const auto aspect = GetWindow().GetFramebufferSize(width, height) && width && height
+                                ? static_cast<double>(width) / height
+                                : 16.0 / 9;
+        auto cameras = le::ResolveScenePlayerCameras(*scene_, aspect, {});
+        if (!cameras.cameraEntity) {
+            cameras.camera3D.SetPosition({0, 6, 12});
+            cameras.camera3D.SetTarget({0, 0, 0});
+        }
+        if (cameras.perspective || !cameras.cameraEntity) {
+            auto renderSettings = settings.render3D;
+            if (!renderSettings.environmentPath.empty())
+                renderSettings.environmentPath =
+                    scene_->ResolveAssetPath(renderSettings.environmentPath);
+            if (renderSettings.mode == le::Render3DMode::Pbr)
+                le::Renderer3D::BeginScene(cameras.camera3D, renderSettings, settings.exposure);
+            else
+                le::Renderer3D::BeginScene(cameras.camera3D, le::DirectionalLight{});
+            scene_->OnRender3D();
+            le::Renderer3D::EndScene();
+        }
+        le::Renderer2D::BeginScene(cameras.camera2D);
         scene_->OnRender();
         le::Renderer2D::EndScene();
     }
@@ -294,12 +635,11 @@ protected:
 private:
     le::SceneManager manager_;
     le::ScriptRuntime scripts_;
+    std::filesystem::path scriptAssembly_;
     std::shared_ptr<le::Scene> scene_;
     le::Entity player_;
     le::Entity npc_;
     le::Entity goal_;
-    le::OrthographicCamera camera_;
-    le::PerspectiveCamera camera3D_;
     double streamingElapsed_ = 0;
     std::string streamingError_;
     bool smokeTest_ = false;
@@ -384,6 +724,7 @@ bool CreateTemplateFiles(const std::filesystem::path& directory, ProjectTemplate
         {"Scripts/GameScripts.csproj", ScriptProject},
         {"Scripts/Mover.cs", ScriptSource},
         {".editorconfig", ScriptFormatting},
+        {"SyncContent.cmake", SyncContent},
         {"Scripts/NuGet.Config",
          "<configuration><packageSources><clear /></packageSources></configuration>\n"}};
     for (const auto& [path, content] : scriptFiles) {

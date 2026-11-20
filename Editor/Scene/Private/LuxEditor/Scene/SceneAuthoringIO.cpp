@@ -1,6 +1,7 @@
 #include <LuxEditor/Project/PathEncoding.hpp>
 #include <LuxEditor/Scene/SceneAuthoringIO.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
+#include <optional>
 #include <stdexcept>
 
 namespace LuxEditor {
@@ -20,36 +21,58 @@ fs::path CanonicalPath(const fs::path& path) {
     return canonical;
 }
 
+struct PathEdits {
+    std::optional<LuxEngine::SceneSettings> settings;
+    std::vector<std::pair<std::string*, std::string>> fields;
+
+    void Apply(LuxEngine::Scene& scene) {
+        if (settings && !scene.SetSettings(*settings))
+            throw std::runtime_error("Invalid rebased environment path");
+        for (auto& [field, value] : fields)
+            field->swap(value);
+    }
+};
+
 void RebaseSceneReferences(LuxEngine::Scene& scene, const fs::path& owner,
-                           const fs::path* destination, std::uintmax_t& remaining,
-                           size_t depth = 0) {
+                           const fs::path* destination, std::uintmax_t& remaining, size_t depth = 0,
+                           PathEdits* edits = nullptr, const AuthoredPathMapper& mapPath = {}) {
     if (depth > 16)
         throw std::runtime_error("씬 참조 스냅샷의 중첩 한도를 넘었습니다.");
-    auto settings = scene.GetSettings();
-    if (!settings.render3D.environmentPath.empty()) {
-        auto path = PathFromUtf8(settings.render3D.environmentPath);
+    const auto resolve = [&](const std::string& resource) {
+        auto path = PathFromUtf8(resource);
         if (path.is_relative())
             path = owner.parent_path() / path;
-        const auto absolute = CanonicalPath(path);
+        const auto source = CanonicalPath(path);
+        const auto absolute = mapPath ? mapPath(source) : source;
         const auto relative =
             destination ? absolute.lexically_relative(destination->parent_path()) : fs::path{};
-        settings.render3D.environmentPath =
-            GenericPathUtf8(destination && !relative.empty() ? relative : absolute);
-        if (!scene.SetSettings(settings))
-            throw std::runtime_error("Invalid rebased environment path");
+        return GenericPathUtf8(destination && !relative.empty() ? relative : absolute);
+    };
+    const auto replace = [&](std::string& field, std::string value) {
+        if (field == value)
+            return;
+        if (edits)
+            edits->fields.emplace_back(&field, std::move(value));
+        else
+            field = std::move(value);
+    };
+    const auto rebase = [&](std::string& resource) {
+        if (!resource.empty())
+            replace(resource, resolve(resource));
+    };
+    const auto& currentSettings = scene.GetSettings();
+    if (!currentSettings.render3D.environmentPath.empty()) {
+        auto environment = resolve(currentSettings.render3D.environmentPath);
+        if (environment != currentSettings.render3D.environmentPath) {
+            auto settings = currentSettings;
+            settings.render3D.environmentPath = std::move(environment);
+            if (edits)
+                edits->settings = std::move(settings);
+            else if (!scene.SetSettings(settings))
+                throw std::runtime_error("Invalid rebased environment path");
+        }
     }
     for (auto entity : scene.GetEntities()) {
-        auto rebase = [&](std::string& resource) {
-            if (resource.empty())
-                return;
-            auto path = PathFromUtf8(resource);
-            if (path.is_relative())
-                path = owner.parent_path() / path;
-            const auto absolute = CanonicalPath(path);
-            const auto relative =
-                destination ? absolute.lexically_relative(destination->parent_path()) : fs::path{};
-            resource = GenericPathUtf8(destination && !relative.empty() ? relative : absolute);
-        };
         if (auto* value = entity.TryGetComponent<LuxEngine::SpriteRendererComponent>())
             rebase(value->texturePath);
         if (auto* value = entity.TryGetComponent<LuxEngine::AnimatorComponent>())
@@ -65,30 +88,13 @@ void RebaseSceneReferences(LuxEngine::Scene& scene, const fs::path& owner,
             for (auto* resource :
                  {&mesh->meshPath, &mesh->material.baseColorTexture, &mesh->material.normalTexture,
                   &mesh->material.metallicTexture, &mesh->material.roughnessTexture,
-                  &mesh->material.occlusionTexture}) {
-                if (resource->empty())
-                    continue;
-                auto path = PathFromUtf8(*resource);
-                if (path.is_relative())
-                    path = owner.parent_path() / path;
-                const auto absolute = CanonicalPath(path);
-                const auto relative = destination
-                                          ? absolute.lexically_relative(destination->parent_path())
-                                          : fs::path{};
-                *resource = GenericPathUtf8(destination && !relative.empty() ? relative : absolute);
-            }
+                  &mesh->material.occlusionTexture})
+                rebase(*resource);
+
         auto* reference = entity.TryGetComponent<LuxEngine::SceneReferenceComponent>();
         if (!reference)
             continue;
-        auto path = PathFromUtf8(reference->path);
-        if (!path.is_absolute())
-            path = owner.parent_path() / path;
-        const auto absolute = CanonicalPath(path);
-        if (destination) {
-            const auto relative = absolute.lexically_relative(destination->parent_path());
-            reference->path = GenericPathUtf8(relative.empty() ? absolute : relative);
-        } else
-            reference->path = GenericPathUtf8(absolute);
+        replace(reference->path, resolve(reference->path));
         for (std::string* data : {&reference->baseline, &reference->suspended}) {
             if (data->empty())
                 continue;
@@ -98,9 +104,12 @@ void RebaseSceneReferences(LuxEngine::Scene& scene, const fs::path& owner,
             LuxEngine::Scene snapshot;
             if (!snapshot.DeserializeFromString(*data))
                 throw std::runtime_error("저장된 씬 참조 상태가 손상되었습니다.");
-            RebaseSceneReferences(snapshot, owner, destination, remaining, depth + 1);
-            if (!snapshot.SerializeToString(*data))
+            RebaseSceneReferences(snapshot, owner, destination, remaining, depth + 1, nullptr,
+                                  mapPath);
+            std::string rebased;
+            if (!snapshot.SerializeToString(rebased))
                 throw std::runtime_error("씬 참조 경로를 저장할 수 없습니다.");
+            replace(*data, std::move(rebased));
         }
     }
 }
@@ -140,12 +149,12 @@ std::shared_ptr<LuxEngine::Scene> ReadAuthoredScene(const fs::path& path, std::s
 }
 
 bool SerializeAuthoredScene(LuxEngine::Scene& scene, const fs::path& owner, std::string& data,
-                            std::string& error) {
+                            std::string& error, const AuthoredPathMapper& mapPath) {
     try {
         auto copy = CloneAuthoredScene(scene);
         const auto target = CanonicalPath(owner);
         std::uintmax_t remaining = 128 * 1024 * 1024;
-        RebaseSceneReferences(*copy, target, &target, remaining);
+        RebaseSceneReferences(*copy, target, &target, remaining, 0, nullptr, mapPath);
         if (copy->SerializeToString(data))
             return true;
         error = "씬 경로를 직렬화하지 못했습니다.";
@@ -156,7 +165,7 @@ bool SerializeAuthoredScene(LuxEngine::Scene& scene, const fs::path& owner, std:
 }
 
 bool SaveAuthoredScene(LuxEngine::Scene& scene, const fs::path& destination,
-                       const fs::path& previous, std::string& error) {
+                       const fs::path& previous, std::string& error, bool rebaseLive) {
     error.clear();
     try {
         auto copy = CloneAuthoredScene(scene);
@@ -165,8 +174,16 @@ bool SaveAuthoredScene(LuxEngine::Scene& scene, const fs::path& destination,
         const auto owner = origin.empty() ? target : CanonicalPath(origin);
         std::uintmax_t remaining = 128 * 1024 * 1024;
         RebaseSceneReferences(*copy, owner, &target, remaining);
-        if (copy->Serialize(GenericPathUtf8(target)))
+        PathEdits live;
+        if (rebaseLive) {
+            remaining = 128 * 1024 * 1024;
+            RebaseSceneReferences(scene, owner, nullptr, remaining, 0, &live);
+        }
+        if (copy->Serialize(GenericPathUtf8(target))) {
+            if (rebaseLive)
+                live.Apply(scene);
             return true;
+        }
         error = LuxEngine::Scene::GetLastSaveError();
         if (error.empty())
             error = "씬 파일을 저장할 수 없습니다.";
@@ -175,4 +192,17 @@ bool SaveAuthoredScene(LuxEngine::Scene& scene, const fs::path& destination,
     }
     return false;
 }
+
+bool NormalizeAuthoredScenePaths(LuxEngine::Scene& scene, const fs::path& owner,
+                                 std::string& error) {
+    try {
+        std::uintmax_t remaining = 128 * 1024 * 1024;
+        RebaseSceneReferences(scene, CanonicalPath(owner), nullptr, remaining);
+        return true;
+    } catch (const std::exception& failure) {
+        error = failure.what();
+        return false;
+    }
+}
+
 } // namespace LuxEditor

@@ -1,5 +1,6 @@
 #pragma once
 #include <LuxEngine/Animation/AnimationEngine.hpp>
+#include <functional>
 #include <memory>
 
 namespace LuxEngine {
@@ -102,6 +103,10 @@ public:
     bool IsPlaying() const;
 
 private:
+    friend class Scene;
+    using PropertyReader =
+        std::function<std::optional<std::array<double, 4>>(const AnimationSample&)>;
+    AnimationFrame Update(double dt, bool emitEvents, const PropertyReader& readProperty);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

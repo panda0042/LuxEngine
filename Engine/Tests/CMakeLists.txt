@@ -84,7 +84,7 @@ add_test(NAME Runtime_player_scene
     COMMAND LuxRuntimeTests write-scene "${CMAKE_CURRENT_BINARY_DIR}/PlayerSmoke.lux")
 set_tests_properties(Runtime_player_scene PROPERTIES FIXTURES_SETUP lux_player_scene LABELS gpu)
 add_test(NAME Runtime_player
-    COMMAND LuxPlayer "${CMAKE_CURRENT_BINARY_DIR}/PlayerSmoke.lux" --frames 30)
+    COMMAND LuxPlayer "${CMAKE_CURRENT_BINARY_DIR}/PlayerSmoke.lux" --frames 30 --scripts "missing-disabled-scripts.dll")
 set_tests_properties(Runtime_player PROPERTIES TIMEOUT 60 LABELS gpu
     FIXTURES_REQUIRED lux_player_scene
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:LuxPlayer>"
@@ -102,14 +102,14 @@ set_tests_properties(Engine_fuzz_seeds PROPERTIES TIMEOUT 30 LABELS headless
 
 option(LUX_BUILD_FUZZERS "Build coverage-guided fuzzers using libFuzzer and sanitizers" OFF)
 if(LUX_BUILD_FUZZERS)
-    add_executable(LuxFuzzSceneEngine FuzzScene.cpp FuzzStubs.cpp)
-    target_include_directories(LuxFuzzSceneEngine PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Scene/Private")
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR MSVC)
+        message(FATAL_ERROR "LUX_BUILD_FUZZERS requires Clang with the libFuzzer runtime")
+    endif()
+    add_executable(LuxFuzzSceneEngine FuzzScene.cpp)
     target_link_libraries(LuxFuzzSceneEngine PRIVATE LuxEngine::Engine)
     target_compile_definitions(LuxFuzzSceneEngine PRIVATE LUX_FUZZING_ENGINE)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        target_compile_options(LuxFuzzSceneEngine PRIVATE -fsanitize=fuzzer)
-        target_link_options(LuxFuzzSceneEngine PRIVATE -fsanitize=fuzzer)
-    endif()
+    target_compile_options(LuxFuzzSceneEngine PRIVATE -fsanitize=fuzzer)
+    target_link_options(LuxFuzzSceneEngine PRIVATE -fsanitize=fuzzer)
     lux_copy_runtime(LuxFuzzSceneEngine)
 endif()
 
@@ -191,6 +191,12 @@ add_test(NAME Engine_prefab_library COMMAND LuxPrefabLibraryTests)
 set_tests_properties(Engine_prefab_library PROPERTIES LABELS "headless;scene;prefab" TIMEOUT 90)
 
 add_executable(LuxJoltPhysicsTests JoltPhysicsTest.cpp)
+add_executable(LuxPhysicsIntegrationTests PhysicsIntegrationTest.cpp)
+target_link_libraries(LuxPhysicsIntegrationTests PRIVATE LuxEngine::Engine)
+lux_set_target_warnings(LuxPhysicsIntegrationTests)
+lux_copy_runtime(LuxPhysicsIntegrationTests)
+add_test(NAME Engine_physics_integration COMMAND LuxPhysicsIntegrationTests)
+set_tests_properties(Engine_physics_integration PROPERTIES LABELS "headless;physics;jolt" TIMEOUT 90)
 target_link_libraries(LuxJoltPhysicsTests PRIVATE LuxEngine::Engine)
 lux_set_target_warnings(LuxJoltPhysicsTests)
 lux_copy_runtime(LuxJoltPhysicsTests)

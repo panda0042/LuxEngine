@@ -67,9 +67,9 @@ public:
 private:
     static bool LoadMeshImpl(const std::string& filepath, RawMeshData& outMesh, bool reload,
                              std::string& error, bool requireTexCoords = false);
+    static bool FitsCacheBudget(size_t incomingBytes);
     static void EvictUnusedUnderBudget(size_t incomingBytes);
 
-    static std::unordered_map<std::string, Ref<GpuTexture>> s_TextureCache;
     static std::unordered_map<std::string, Ref<const RawMeshData>> s_MeshCache;
     static size_t s_TextureCacheMemoryBytes;
     static size_t s_MeshCacheMemoryBytes;

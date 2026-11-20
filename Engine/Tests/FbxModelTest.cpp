@@ -1,9 +1,11 @@
 #include <LuxEngine/Assets/ModelAsset.hpp>
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -229,7 +231,46 @@ void Run(const fs::path& directory, const fs::path& primitives) {
           "Invalid UTF-8 FBX path was accepted");
     const auto path = directory / "hierarchy.fbx";
     Write(path, Fixture(false));
-    const auto model = ModelAsset::LoadFbx(path.string(), error);
+    const auto caseVariant = directory / "HIERARCHY.FBX";
+    std::error_code aliasError;
+    const bool sameFile = fs::equivalent(path, caseVariant, aliasError);
+    if (!sameFile)
+        Write(caseVariant, Fixture(false));
+    constexpr int requestCount = 8;
+    std::promise<void> ready;
+    const auto start = ready.get_future().share();
+    std::array<Ref<ModelAsset>, requestCount> models;
+    std::array<std::string, requestCount> errors;
+    {
+        std::array<std::future<void>, requestCount> workers;
+        try {
+            for (int i = 0; i < requestCount; ++i)
+                workers[i] = std::async(std::launch::async, [&, i] {
+                    start.wait();
+                    const auto& requested = i % 2 == 0 ? path : caseVariant;
+                    models[i] = ModelAsset::LoadFbx(requested.string(), errors[i]);
+                });
+        } catch (...) {
+            ready.set_value();
+            throw;
+        }
+        ready.set_value();
+        for (auto& worker : workers)
+            worker.get();
+    }
+    const auto& model = models.front();
+    for (int i = 0; i < requestCount; ++i) {
+        Check(models[i] != nullptr, errors[i].c_str());
+        Check(models[i] == models[sameFile ? 0 : i % 2],
+              "simultaneous FBX loads must share the model for their file");
+    }
+    Check(sameFile || models[0] != models[1],
+          "distinct case-sensitive FBX files must stay distinct");
+    const auto link = directory / "linked.fbx";
+    fs::create_symlink(path.filename(), link, aliasError);
+    if (!aliasError)
+        Check(ModelAsset::LoadFbx(link.string(), error) == model,
+              "FBX symlink and original path must share the same model");
     Check(model != nullptr, error.c_str());
     Check(model->submeshes.size() == 1 && model->materials.size() == 1 &&
               model->animations.size() == 1,

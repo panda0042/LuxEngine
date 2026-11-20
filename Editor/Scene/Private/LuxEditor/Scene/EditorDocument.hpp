@@ -39,7 +39,8 @@ public:
     bool ReplaceSceneFromData(const std::string& serializedData,
                               std::optional<LuxEngine::uint32> selectedId);
     bool ReplaceSceneFromData(TabId tab, const std::string& serializedData,
-                              std::optional<LuxEngine::uint32> selectedId);
+                              std::optional<LuxEngine::uint32> selectedId,
+                              const std::string& previousSourcePath = {});
 
     TabId NewTab();
     TabId OpenTab(const std::string& path);

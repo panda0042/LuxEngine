@@ -1,6 +1,7 @@
 #include "ForgeBackend.hpp"
 
 #include "LuxForgeApi.h"
+#include "Renderer3D/ShadowProjection.hpp"
 #include <LuxEngine/Environment/EnvironmentMap.hpp>
 #include <LuxEngine/Platform/Window.hpp>
 #include <LuxEngine/Renderer/Renderer3D/Renderer3D.hpp>
@@ -559,6 +560,7 @@ public:
         d.normalScale = draw.normalScale;
         d.occlusionStrength = draw.occlusionStrength;
         d.sampling = draw.sampling;
+        d.shadowOnly = draw.shadowOnly ? 1 : 0;
         draws_.push_back(d);
         models_.push_back(draw.model);
         return true;
@@ -588,27 +590,30 @@ public:
         if (!lib || !backend_->Usable() || !backend_->frameOpen_)
             return false;
         const LuxForgeApi& api = *lib->api;
-        if (!neutral_ && !(neutral_ = Upload(*lib, *EnvironmentData::Neutral()))) {
-            error = std::string("3D scene environment failed: ") + api.lastError(lib->device);
-            return Fallback(camera, exposure);
-        }
-        PollEnvironment(*lib, settings);
-        const bool active = ready_ && activePath_ == settings.environmentPath;
-
-        LuxForgeScene scene = {};
         const Vec3 origin = camera.GetPosition();
         const Mat4 relativeView = camera.GetViewMatrix() * Mat4::Translate(origin);
-        CopyMatrix(scene.viewProjection, camera.GetProjectionMatrix() * relativeView);
-        for (size_t index = 0; index < draws_.size(); ++index)
-            CopyMatrix(draws_[index].model, Mat4::Translate(origin * -1.0) * models_[index]);
-        const auto position = camera.GetPosition();
+        const Mat4 viewProjection = camera.GetProjectionMatrix() * relativeView;
         auto lighting = backend_->lighting_;
         std::vector<GpuPointLight> relativeLights(lighting.points.begin(), lighting.points.end());
         for (auto& light : relativeLights)
             light.position = light.position - origin;
         lighting.points = relativeLights;
         lighting.camera = {};
-        backend_->SetLighting(lighting);
+        if (!backend_->SetLighting(lighting)) {
+            error = backend_->GetLastError();
+            return false;
+        }
+        if (!neutral_ && !(neutral_ = Upload(*lib, *EnvironmentData::Neutral()))) {
+            error = std::string("3D scene environment failed: ") + api.lastError(lib->device);
+            return Fallback(origin, viewProjection, exposure);
+        }
+        PollEnvironment(*lib, settings);
+        const bool active = ready_ && activePath_ == settings.environmentPath;
+
+        LuxForgeScene scene = {};
+        CopyMatrix(scene.viewProjection, viewProjection);
+        for (size_t index = 0; index < draws_.size(); ++index)
+            CopyMatrix(draws_[index].model, Mat4::Translate(origin * -1.0) * models_[index]);
         Copy4(scene.camera, {0, 0, 0, exposure});
         Copy4(scene.environment,
               {static_cast<float>(settings.environmentColor.x),
@@ -626,19 +631,7 @@ public:
             scene.forward[i] = -view[i * 4 + 2];
         }
         if (settings.shadows) {
-            const auto direction = settings.sun.direction.Normalized();
-            const auto target = camera.GetTarget();
-            auto lightView =
-                Mat4::LookAt(target - direction * (settings.shadowRange * 2), target,
-                             std::abs(direction.y) > .99f ? Vec3{0, 0, 1} : Vec3{0, 1, 0});
-            const float texel = settings.shadowRange / settings.shadowResolution;
-            lightView.elements[12] = std::round(lightView.elements[12] / texel) * texel;
-            lightView.elements[13] = std::round(lightView.elements[13] / texel) * texel;
-            const float half = settings.shadowRange * .5f;
-            const Mat4 shadowMatrix =
-                Mat4::Orthographic(-half, half, -half, half, .1f, settings.shadowRange * 4) *
-                lightView;
-            CopyMatrix(scene.shadowMatrix, shadowMatrix * Mat4::Translate(origin));
+            CopyMatrix(scene.shadowMatrix, SceneShadowProjection(camera, settings));
             scene.shadowOptions[0] = 1;
             scene.shadowOptions[1] = 1.f / settings.shadowResolution;
             scene.shadowOptions[2] = settings.shadowDepthBias;
@@ -657,7 +650,7 @@ public:
                 return false;
             }
             error = reason;
-            return Fallback(camera, exposure);
+            return Fallback(origin, viewProjection, exposure);
         }
         backend_->UpdateFrameStats();
         if (drawn < draws_.size())
@@ -683,15 +676,19 @@ private:
         const auto revision = EnvironmentData::Revision(settings.environmentPath);
         if (job_) {
             std::shared_ptr<EnvironmentData> data;
+            bool done;
             {
                 std::lock_guard lock(job_->mutex);
-                if (job_->done)
+                done = job_->done;
+                if (done)
                     data = job_->data;
             }
-            if (data) {
+            if (done) {
                 job_.reset();
                 if (requestedPath_ == settings.environmentPath && requestedRevision_ == revision) {
-                    if (!data->error.empty())
+                    if (!data)
+                        environmentError_ = "Environment preparation failed";
+                    else if (!data->error.empty())
                         environmentError_ = data->error;
                     else if (const uint32_t uploaded = Upload(lib, *data)) {
                         lib.api->destroyEnvironment(lib.device, environment_);
@@ -713,10 +710,14 @@ private:
             requestedPath_ = attemptedPath_ = settings.environmentPath;
             requestedRevision_ = attemptedRevision_ = revision;
             hasAttempt_ = true;
-            auto job = std::make_shared<EnvironmentJob>();
             try {
+                auto job = std::make_shared<EnvironmentJob>();
                 std::thread([job, path = requestedPath_] {
-                    auto prepared = EnvironmentData::Prepare(path);
+                    std::shared_ptr<EnvironmentData> prepared;
+                    try {
+                        prepared = EnvironmentData::Prepare(path);
+                    } catch (...) {
+                    }
                     std::lock_guard lock(job->mutex);
                     job->data = std::move(prepared);
                     job->done = true;
@@ -730,12 +731,13 @@ private:
     }
 
     // Same fallback as the Vulkan backend: the meshes with the plain lit pipeline.
-    bool Fallback(const PerspectiveCamera& camera, float exposure) {
-        const Mat4 viewProjection = camera.GetViewProjectionMatrix();
-        for (const auto& d : draws_) {
-            Mat4 model;
-            for (size_t index = 0; index < 16; ++index)
-                model.elements[index] = d.model[index];
+    bool Fallback(Vec3 origin, const Mat4& viewProjection, float exposure) {
+        const Mat4 relative = Mat4::Translate(origin * -1);
+        for (size_t index = 0; index < draws_.size(); ++index) {
+            const auto& d = draws_[index];
+            if (d.shadowOnly)
+                continue;
+            const Mat4 model = relative * models_[index];
             const Vec4 albedo(d.albedo[0] * exposure, d.albedo[1] * exposure,
                               d.albedo[2] * exposure, d.albedo[3]);
             if (!backend_->DrawIndexed(d.vertexBuffer, d.indexBuffer, d.indexCount, viewProjection,

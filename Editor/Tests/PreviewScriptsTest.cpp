@@ -124,6 +124,29 @@ int main(int argc, char** argv) {
                   window.GetRuntimeScene()->GetComponent<TransformComponent>(id).position.y == 10,
               "saving during play writes authored values instead of runtime changes");
         trigger("previewStop");
+        trigger("playWindow");
+        auto* player = window.findChild<LuxUI::Process*>();
+        Check(player, "external player process must be created");
+        const auto arguments = player->arguments();
+        const int scriptOption = arguments.indexOf(LUX_UI_TEXT("--scripts"));
+        const bool hasAssembly = scriptOption >= 0 && scriptOption + 1 < arguments.size() &&
+                                 PathFromUtf8(arguments[scriptOption + 1].toUtf8().toStdString()) ==
+                                     managed / "GameScripts.dll";
+        trigger("playWindowStop");
+        Check(hasAssembly, "external player must receive the project's C# assembly path");
+        actor.AddComponent<BoxCollider3DComponent>();
+        actor.AddComponent<Rigidbody3DComponent>();
+        trigger("previewStep");
+        window.GetRuntimeScene()->GetComponent<Rigidbody3DComponent>(id).mass = -1;
+        trigger("previewStep");
+        Check(view->IsPaused() &&
+                  window.LastLogMessage().contains(LUX_UI_TEXT("Jolt physics entity #")),
+              "runtime physics errors pause with an entity diagnostic");
+        window.GetRuntimeScene()->GetComponent<Rigidbody3DComponent>(id).mass = 1;
+        trigger("previewStep");
+        Check(window.GetRuntimeScene()->GetLastPhysicsError3D().empty(),
+              "runtime physics can recover after repairing an invalid body");
+        trigger("previewStop");
         document.SetDirty(false);
         std::cout << "Generated assembly, fixed-step scripts, repeated play, pause, stop and "
                      "errors passed\n";

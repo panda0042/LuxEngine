@@ -1,6 +1,8 @@
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
+#include <LuxEngine/Scene/SceneManager.hpp>
 #include <LuxEngine/Scripting/ScriptRuntime.hpp>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <iostream>
@@ -19,6 +21,85 @@ void Check(bool value, const char* message) {
 void CheckRuntime(bool success, const ScriptRuntime& runtime) {
     if (!success)
         throw std::runtime_error(runtime.GetLastError());
+}
+
+void TestStreamingAndAnimatedFields(const ScriptRuntimeConfig& config,
+                                    const std::filesystem::path& directory) {
+    Scene region;
+    region.CreateEntity("Region script").AddComponent<ScriptComponent>() = {
+        "ScriptTests.LiveFields", true};
+    const auto path = directory / "region.lux";
+    Check(region.Serialize(path.string()), "Stream region did not save");
+    Scene scene;
+    SceneManager manager;
+    std::string error;
+    const auto root = manager.AddSceneInstance(scene, path, SceneReferenceMode::Additive, error);
+    Check(root && manager.ConfigureStreaming(scene, root, {0, 0}, 5, 8, error),
+          "Stream region could not be configured");
+
+    auto actor = scene.CreateEntity("Persistent script");
+    const auto actorId = actor.GetId();
+
+    struct RuntimeState {
+        int value;
+    };
+
+    actor.AddComponent<RuntimeState>(42);
+    auto& fields = actor.AddComponent<ScriptComponent>("ScriptTests.LiveFields", true).fields;
+    fields = {{"Amount", 3.0f}, {"Other", 7.0f}};
+    auto& clip = actor.AddComponent<AnimationComponent>().clip;
+    AnimationTrack track;
+    track.property = AnimationProperty::Float;
+    track.field = "Amount";
+    track.SetKey({0, {3, 0, 0, 0}});
+    track.SetKey({1, {13, 0, 0, 0}});
+    clip.tracks.push_back(track);
+
+    ScriptRuntime runtime;
+    CheckRuntime(runtime.Initialize(scene, config), runtime);
+    CheckRuntime(runtime.Update(.1), runtime);
+    scene.OnUpdate(.1);
+    CheckRuntime(runtime.Update(.1), runtime);
+    const auto live = actor.GetComponent<TransformComponent>();
+    Check(live.position.x == 2 && live.position.y == 1 && live.position.z == 0 &&
+              live.scale.x == 4 && live.scale.y == 9,
+          "Animating a C# field must retain the instance and unrelated field values");
+
+    fields.erase("Amount");
+    CheckRuntime(runtime.Update(.1), runtime);
+    Check(actor.GetComponent<TransformComponent>().scale.x == 2,
+          "Removing an authored value restores the instance's field default");
+
+    const auto& initialMap = scene.GetComponent<SceneReferenceComponent>(root).entityMap;
+    Check(initialMap.size() == 1 &&
+              scene.GetComponent<TransformComponent>(initialMap.front().second).position.y == 1,
+          "The original region script starts before unloading");
+    const auto lifetime = scene.Lifetime();
+    bool changed = false;
+    Check(manager.UpdateStreaming(scene, {20, 0}, error, &changed) && changed &&
+              !lifetime.expired() && actor.IsValid(),
+          "Unloading must preserve handles outside the region");
+    CheckRuntime(runtime.Update(.1), runtime);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+        Check(manager.UpdateStreaming(scene, {0, 0}, error, &changed),
+              "Stream region could not reload");
+        if (changed)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < deadline);
+    Check(changed && !lifetime.expired() && actor.IsValid(), "Streaming load replaced the scene");
+    CheckRuntime(runtime.Update(.1), runtime);
+    const auto persistent = actor.GetComponent<TransformComponent>().position;
+    Check(persistent.x == 5 && persistent.y == 1 && persistent.z == 0 &&
+              actor.GetComponent<RuntimeState>().value == 42,
+          "Persistent script must continue running across streaming");
+    const auto& map = scene.GetComponent<SceneReferenceComponent>(root).entityMap;
+    Check(map.size() == 1 && map.front().second != actorId,
+          "Reloaded region has a distinct script entity");
+    const auto streamed = scene.GetComponent<TransformComponent>(map.front().second).position;
+    Check(streamed.x == 1 && streamed.y == 2,
+          "A newly streamed script must start in the existing runtime");
 }
 } // namespace
 
@@ -174,6 +255,7 @@ int main(int argc, char** argv) {
             Check(character.GetComponent<TransformComponent>().scale.z == 2,
                   "Managed animation event callback");
             runtime.Shutdown();
+            TestStreamingAndAnimatedFields(config, root);
             std::filesystem::remove_all(root);
         }
         config.assemblyPath += ".missing";

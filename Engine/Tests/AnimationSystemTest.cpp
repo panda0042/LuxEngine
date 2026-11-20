@@ -162,6 +162,35 @@ void AssetsAndAnimator(const std::filesystem::path& root) {
     Check(child.GetComponent<SpriteRendererComponent>().frame == 3 &&
               std::abs(child.GetComponent<SpriteRendererComponent>().color.w - .2) < 1e-6,
           "descendant color alpha and sprite bindings");
+
+    auto sparse = AnimationClip{};
+    auto spriteClip = Clip(120);
+    spriteClip.tracks.push_back(Track(AnimationProperty::SpriteFrame, 6, 6));
+    spriteClip.spriteSheet = "sheet.png";
+    spriteClip.spriteColumns = 4;
+    spriteClip.spriteRows = 2;
+    Check(sparse.Save(a, error) && spriteClip.Save(b, error), error.c_str());
+    controller->layers.front().transitions = {
+        {"Idle", "Run", 1, -1, {{"speed", AnimationComparison::Greater, .5}}}};
+    Check(controller->Save(path, error), error.c_str());
+    Scene sparseScene;
+    auto sparseActor = sparseScene.CreateEntity("Sparse animator");
+    sparseActor.GetComponent<TransformComponent>().position.x = 100;
+    auto& sprite = sparseActor.AddComponent<SpriteRendererComponent>();
+    sprite.texturePath = "authored.png";
+    sparseActor.AddComponent<AnimatorComponent>().controllerPath = path;
+    sparseScene.UpdateAnimations(0);
+    auto& boundAnimator = sparseActor.GetComponent<AnimatorComponent>().player;
+    Check(boundAnimator && boundAnimator->SetParameter("speed", 1), "sparse animator starts");
+    sparseScene.UpdateAnimations(.3);
+    Check(Near(sparseActor.GetComponent<TransformComponent>().position.x, 106) &&
+              sprite.texturePath == "authored.png",
+          "incoming-only channels blend from the scene and leave the previous sprite intact");
+    sparseScene.UpdateAnimations(.3);
+    Check(Near(sparseActor.GetComponent<TransformComponent>().position.x, 112) &&
+              sprite.texturePath.ends_with("sheet.png") && sprite.frame == 6 &&
+              sprite.columns == 4 && sprite.rows == 2,
+          "crossfade holds the captured origin and switches sprite frame and sheet together");
 }
 
 void MutedEvents(const std::filesystem::path& root) {

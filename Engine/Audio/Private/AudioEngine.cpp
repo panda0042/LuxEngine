@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <list>
 #include <memory>
@@ -65,6 +66,8 @@ std::vector<std::unique_ptr<Voice>> sounds;
 struct CacheEntry {
     std::shared_ptr<CachedAudio> audio;
     std::list<std::string>::iterator lruIt;
+    std::filesystem::file_time_type modified;
+    uintmax_t fileSize = 0;
 };
 
 std::list<std::string> s_LruList;
@@ -135,28 +138,50 @@ void EvictAudioCacheIfNeeded(uint64 incomingBytes) {
     }
 }
 
-std::shared_ptr<CachedAudio> LoadBuffer(const std::string& file) {
-    if (file.empty())
+std::shared_ptr<CachedAudio> LoadBuffer(const std::string& file, bool reload = false) {
+    if (file.empty() || file.find('\0') != std::string::npos)
         return nullptr;
-
-    // Check existing cache
-    if (auto it = audioCache.find(file); it != audioCache.end()) {
-        // Move to front of LRU list
+    namespace fs = std::filesystem;
+    fs::path input;
+    try {
+        input = fs::path(std::u8string(file.begin(), file.end()));
+    } catch (const fs::filesystem_error&) {
+        return nullptr;
+    }
+    std::error_code error;
+    const auto path = fs::canonical(input, error);
+    if (error || !fs::is_regular_file(path, error) || error)
+        return nullptr;
+    const auto fileSize = fs::file_size(path, error);
+    if (error)
+        return nullptr;
+    const auto modified = fs::last_write_time(path, error);
+    if (error)
+        return nullptr;
+    const auto encoded = path.generic_u8string();
+    const std::string key(encoded.begin(), encoded.end());
+    if (auto it = audioCache.find(key); it != audioCache.end()) {
+        if (!reload && it->second.fileSize == fileSize && it->second.modified == modified) {
+            s_LruList.splice(s_LruList.begin(), s_LruList, it->second.lruIt);
+            return it->second.audio;
+        }
+        s_CurrentCacheBytes -= it->second.audio->length;
         s_LruList.erase(it->second.lruIt);
-        s_LruList.push_front(file);
-        it->second.lruIt = s_LruList.begin();
-        return it->second.audio;
+        audioCache.erase(it);
     }
 
     auto cached = std::make_shared<CachedAudio>();
-    cached->filepath = file;
-    if (!SDL_LoadWAV(file.c_str(), &cached->spec, &cached->bytes, &cached->length) ||
+    cached->filepath = key;
+    if (!SDL_LoadWAV(key.c_str(), &cached->spec, &cached->bytes, &cached->length) ||
         !cached->bytes || cached->length == 0 || cached->length > MaxSingleAudioBytes ||
         cached->length > static_cast<Uint32>(std::numeric_limits<int>::max())) {
         return nullptr;
     }
 
     // Evict older unreferenced items to respect memory budget
+    if (fs::file_size(path, error) != fileSize || error ||
+        fs::last_write_time(path, error) != modified || error)
+        return nullptr;
     EvictAudioCacheIfNeeded(cached->length);
 
     // If adding this buffer would still exceed budget because active voices hold existing cache
@@ -164,11 +189,13 @@ std::shared_ptr<CachedAudio> LoadBuffer(const std::string& file) {
     // playback.
     if (s_CurrentCacheBytes + cached->length <= MaxAudioCacheBytes &&
         audioCache.size() < MaxCachedAudioFiles) {
-        s_LruList.push_front(file);
+        s_LruList.push_front(key);
         CacheEntry entry;
         entry.audio = cached;
         entry.lruIt = s_LruList.begin();
-        audioCache.emplace(file, std::move(entry));
+        entry.modified = modified;
+        entry.fileSize = fileSize;
+        audioCache.emplace(key, std::move(entry));
         s_CurrentCacheBytes += cached->length;
     }
 
@@ -263,6 +290,11 @@ void AudioEngine::SetMasterVolume(float volume) {
 float AudioEngine::GetMasterVolume() {
     std::lock_guard<std::mutex> lock(s_AudioMutex);
     return master;
+}
+
+bool AudioEngine::ReloadClip(const std::string& file) {
+    std::lock_guard lock(s_AudioMutex);
+    return initialized && bool(LoadBuffer(file, true));
 }
 
 bool AudioEngine::PlaySound(const std::string& file, float volume) {

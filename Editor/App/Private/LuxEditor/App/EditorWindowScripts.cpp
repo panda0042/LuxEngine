@@ -238,7 +238,10 @@ void EditorWindow::RefreshScriptDetails() {
                                            .arg(candidate.GetId()),
                                        candidate.GetId());
                     }
-                    int selected = field->findData(item.id);
+                    const auto target = document_.GetScene().ResolveScriptEntityReference(item);
+                    int selected = field->findData(target);
+                    if (!target && (item.id || item.identity))
+                        selected = -1;
                     if (selected < 0) {
                         field->addItem(LUX_UI_TEXT("없는 엔티티 #%1").arg(item.id), item.id);
                         selected = field->count() - 1;

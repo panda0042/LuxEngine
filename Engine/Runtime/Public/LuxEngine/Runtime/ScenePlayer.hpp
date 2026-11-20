@@ -7,6 +7,7 @@
 #include <LuxEngine/Scene/Scene.hpp>
 #include <LuxEngine/Scene/SceneManager.hpp>
 #include <LuxEngine/Scripting/ScriptRuntime.hpp>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -49,6 +50,7 @@ struct ScenePlayerCameras {
     bool perspective = false;
     OrthographicCamera camera2D;
     PerspectiveCamera camera3D;
+    uint32 cameraEntity = 0;
 };
 
 // Shared by the editor Game View and standalone player. Authored primary cameras take
@@ -69,6 +71,7 @@ public:
     explicit ScenePlayer(ScenePlayerOptions options);
 
     bool LoadedScene() const;
+    bool RuntimeFailed() const;
 
 protected:
     void OnInit() override;
@@ -78,12 +81,13 @@ protected:
 
 private:
     bool LoadScene();
+    bool EnsureScripts(Scene& scene, ScriptRuntime& scripts);
     void FindPlayer();
     void UpdateCamera();
 
     ScenePlayerOptions options_;
     SceneManager sceneManager_;
-    ScriptRuntime scripts_;
+    std::unique_ptr<ScriptRuntime> scripts_ = std::make_unique<ScriptRuntime>();
     std::shared_ptr<Scene> scene_ = std::make_shared<Scene>();
     Entity player_;
     OrthographicCamera camera_;
@@ -91,6 +95,7 @@ private:
     bool perspective_ = false;
     ScenePlayerView view_;
     bool loaded_ = false;
+    bool runtimeFailed_ = false;
     uint32 frames_ = 0;
     double streamingAccumulator_ = 0;
     std::string lastStreamingError_;
@@ -98,5 +103,6 @@ private:
 
 // Computes a view that frames every entity with a transform; used when no view is given.
 ScenePlayerView FitSceneView(Scene& scene);
+Vec3 ResolveSceneStreamingObserver(Scene& scene, const ScenePlayerView& view, uint32 playerId = 0);
 
 } // namespace LuxEngine

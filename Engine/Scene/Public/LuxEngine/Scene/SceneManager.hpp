@@ -48,8 +48,8 @@ public:
                             float unloadRadius, std::string& error);
     // A zero load radius disables streaming. Center and observer are absolute world XY coordinates;
     // a wider unload radius supplies hysteresis. Source loading runs asynchronously; changed is set
-    // only after a ready result or an unload is atomically applied. Unchanged ticks do not clone
-    // scenes.
+    // for committed changes, including ticks that also report a failure in another region.
+    // Unchanged ticks do not clone scenes.
     bool UpdateStreaming(Scene& target, Vec2 observer, std::string& error, bool* changed = nullptr);
 
     // Canonical absolute paths are kept in memory. Disk copies use paths relative to their scene
@@ -59,6 +59,15 @@ public:
                      const std::filesystem::path& previousPath, std::string& error);
 
 private:
+    friend class Scene;
+    static void RebaseSuspended(Scene& target, SceneReferenceComponent& reference, uint32 root,
+                                const std::unordered_map<uint32, uint32>& anchors,
+                                std::unordered_map<uint64, uint64>* identities, uint32 outer = 0,
+                                size_t depth = 0);
+    static void RestoreSubtree(Scene& target, uint32 root);
+    static void UnloadSubtree(Scene& target, uint32 root);
+    void ApplyStreaming(Scene& target, const std::vector<uint32>& unloads,
+                        const std::vector<std::pair<uint32, std::shared_ptr<Scene>>>& loads);
     struct State;
     std::shared_ptr<State> state_;
 };

@@ -17,6 +17,7 @@
 #include <locale>
 #include <map>
 #include <mutex>
+#include <random>
 #include <sstream>
 #include <thread>
 #include <tuple>
@@ -27,6 +28,10 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace LuxEngine {
@@ -54,10 +59,16 @@ Entity Scene::CreateEntity(const std::string& name) {
 void Scene::DestroyEntity(Entity entity) {
     if (entity.GetScene() != this || !entity.IsValid())
         return;
+    DestroySubtrees({entity.GetId()});
+}
+
+void Scene::DestroySubtrees(const std::vector<uint32>& roots) {
+    if (roots.empty())
+        return;
     std::unordered_map<uint32, std::vector<uint32>> children;
-    for (const uint32 id : entities_)
+    for (const auto id : GetComponentEntityIds<HierarchyComponent>())
         children[GetParent(id)].push_back(id);
-    std::vector<uint32> pending{entity.GetId()};
+    auto pending = roots;
     std::unordered_set<uint32> removed;
     while (!pending.empty()) {
         const auto id = pending.back();
@@ -70,6 +81,7 @@ void Scene::DestroyEntity(Entity entity) {
     }
     for (const auto id : removed) {
         RemovePhysicsBody(id);
+        EraseReferenceIdentity(id);
         for (auto& [type, pool] : pools_)
             pool->Erase(id);
         entities_.erase(id);
@@ -109,6 +121,8 @@ std::vector<Entity> Scene::GetEntitiesIn2DLayerOrder() {
 }
 
 void Scene::OnUpdate(double dt) {
+    collisionEvents2D_.clear();
+    collisionEvents3D_.clear();
     if (!std::isfinite(dt) || dt <= 0.0)
         return;
     updateBuffer_.assign(entities_.begin(), entities_.end());
@@ -186,12 +200,12 @@ void Scene::OnUpdate(double dt) {
         physics2D_.reset();
     if (!has3D)
         physics3D_.reset();
-    collisionEvents2D_.clear();
-    collisionEvents3D_.clear();
     physicsAccumulator_ += std::min(dt, .25);
     const double fixedStep = settings_.fixedStep;
     while (physicsAccumulator_ + 1e-8 >= fixedStep) {
         physicsAccumulator_ = std::max(0.0, physicsAccumulator_ - fixedStep);
+        if (!has2D && !has3D)
+            continue;
         const double substep = fixedStep / settings_.physicsSubsteps;
         for (uint32 index = 0; index < settings_.physicsSubsteps; ++index) {
             if (has2D && !physics2D_)
@@ -200,7 +214,7 @@ void Scene::OnUpdate(double dt) {
                 physics3D_ = std::make_unique<ScenePhysicsWorld>(false);
             const auto hierarchy = GetEntitiesInHierarchyOrder();
             if (physics2D_) {
-                physics2D_->Step(*this, substep);
+                physics2D_->Step(*this, substep, index, settings_.physicsSubsteps);
                 for (const auto& contact : physics2D_->BeganContacts())
                     collisionEvents2D_.push_back({contact.entityA,
                                                   contact.entityB,
@@ -208,7 +222,7 @@ void Scene::OnUpdate(double dt) {
                                                   contact.isTrigger});
             }
             if (physics3D_) {
-                physics3D_->Step(*this, substep);
+                physics3D_->Step(*this, substep, index, settings_.physicsSubsteps);
                 const auto& contacts = physics3D_->BeganContacts();
                 collisionEvents3D_.insert(collisionEvents3D_.end(), contacts.begin(),
                                           contacts.end());
@@ -243,6 +257,71 @@ void Scene::RemovePhysicsBody(uint32 id) {
         body->isGrounded = false;
     std::erase_if(collisionEvents2D_,
                   [id](const auto& event) { return event.entityA == id || event.entityB == id; });
+}
+
+bool Scene::Raycast3D(Vec3 origin, Vec3 direction, float maxDistance, RaycastHit3D& hit,
+                      uint32 ignoreEntity, bool includeTriggers) const {
+    hit = {};
+    return physics3D_ &&
+           physics3D_->Raycast(origin, direction, maxDistance, hit, ignoreEntity, includeTriggers);
+}
+
+bool Scene::GetVelocity3D(uint32 entity, Vec3& velocity) const {
+    velocity = {};
+    const auto* body = TryGetComponent<Rigidbody3DComponent>(entity);
+    if (!body || body->type < BodyType::Static || body->type > BodyType::Kinematic)
+        return false;
+    if (body->type == BodyType::Static)
+        return true;
+    if (!std::isfinite(body->velocity.x) || !std::isfinite(body->velocity.y) ||
+        !std::isfinite(body->velocity.z) || std::abs(body->velocity.x) > 100000 ||
+        std::abs(body->velocity.y) > 100000 || std::abs(body->velocity.z) > 100000)
+        return false;
+    velocity = body->velocity;
+    return true;
+}
+
+bool Scene::SetVelocity3D(uint32 entity, Vec3 velocity) {
+    auto* body = TryGetComponent<Rigidbody3DComponent>(entity);
+    if (!body || (body->type != BodyType::Dynamic && body->type != BodyType::Kinematic) ||
+        !std::isfinite(velocity.x) || !std::isfinite(velocity.y) || !std::isfinite(velocity.z) ||
+        std::abs(velocity.x) > 100000 || std::abs(velocity.y) > 100000 ||
+        std::abs(velocity.z) > 100000)
+        return false;
+    body->velocity = velocity;
+    return true;
+}
+
+bool Scene::AddImpulse3D(uint32 entity, Vec3 impulse) {
+    const auto* body = TryGetComponent<Rigidbody3DComponent>(entity);
+    if (!body || body->type != BodyType::Dynamic || !std::isfinite(body->mass) ||
+        body->mass < .001f || body->mass > 1000000 || !std::isfinite(impulse.x) ||
+        !std::isfinite(impulse.y) || !std::isfinite(impulse.z))
+        return false;
+    const double x = body->velocity.x + static_cast<double>(impulse.x) / body->mass;
+    const double y = body->velocity.y + static_cast<double>(impulse.y) / body->mass;
+    const double z = body->velocity.z + static_cast<double>(impulse.z) / body->mass;
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || std::abs(x) > 100000 ||
+        std::abs(y) > 100000 || std::abs(z) > 100000)
+        return false;
+    return SetVelocity3D(entity,
+                         {static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)});
+}
+
+bool Scene::IsGrounded3D(uint32 entity) const {
+    const auto* body = TryGetComponent<Rigidbody3DComponent>(entity);
+    return body && (body->type == BodyType::Dynamic || body->type == BodyType::Kinematic) &&
+           physics3D_ && physics3D_->IsGrounded(entity);
+}
+
+const std::string& Scene::GetLastPhysicsError2D() const {
+    static const std::string empty;
+    return physics2D_ ? physics2D_->GetLastError() : empty;
+}
+
+const std::string& Scene::GetLastPhysicsError3D() const {
+    static const std::string empty;
+    return physics3D_ ? physics3D_->GetLastError() : empty;
 }
 
 namespace {
@@ -304,12 +383,23 @@ void Scene::OnRender() {
                     !std::isfinite(map.tileSize) || map.tileSize <= 0.0f || map.tileSize > 64.0f ||
                     map.tiles.size() != static_cast<size_t>(map.width) * map.height)
                     continue;
-                for (uint32 y = 0; y < map.height; ++y)
-                    for (uint32 x = 0; x < map.width; ++x) {
+                const double size = map.tileSize;
+                uint32 xBegin = 0, yBegin = 0, xEnd = map.width, yEnd = map.height;
+                Vec2 minimum, maximum;
+                if (Renderer2D::GetVisibleLocalBounds(matrix, minimum, maximum)) {
+                    const auto tileIndex = [size](double bound, uint32 limit) {
+                        return static_cast<uint32>(std::clamp(bound / size, 0.0, double(limit)));
+                    };
+                    xBegin = tileIndex(minimum.x - size, map.width);
+                    yBegin = tileIndex(minimum.y - size, map.height);
+                    xEnd = tileIndex(maximum.x + 2 * size, map.width);
+                    yEnd = tileIndex(maximum.y + 2 * size, map.height);
+                }
+                for (uint32 y = yBegin; y < yEnd; ++y)
+                    for (uint32 x = xBegin; x < xEnd; ++x) {
                         const uint8_t tile = map.Get(x, y);
                         if (tile == 0)
                             continue;
-                        const double size = map.tileSize;
                         Renderer2D::DrawQuad(
                             matrix * Mat4::Translate({(x + .5f) * size, (y + .5f) * size, 0}) *
                                 Mat4::Scale({size, size, 1}),
@@ -517,6 +607,22 @@ bool WriteTempFileFlushed(const std::filesystem::path& tempPath, const std::stri
 #endif
 }
 
+#ifndef _WIN32
+std::error_code SyncPath(const std::filesystem::path& path, int flags) {
+    const auto fd = ::open(path.c_str(), flags);
+    if (fd < 0)
+        return {errno, std::generic_category()};
+    int result;
+    do {
+        result = ::fsync(fd);
+    } while (result < 0 && errno == EINTR);
+    const auto syncError = result < 0 ? errno : 0;
+    if (::close(fd) < 0 && !syncError)
+        return {errno, std::generic_category()};
+    return {syncError, std::generic_category()};
+}
+#endif
+
 bool AtomicReplaceFile(const std::filesystem::path& tempPath,
                        const std::filesystem::path& targetPath, [[maybe_unused]] uint64 seq) {
     namespace fs = std::filesystem;
@@ -673,10 +779,22 @@ bool AtomicReplaceFile(const std::filesystem::path& tempPath,
         SetSaveError("Scene save failed: access denied replacing '" + PathToUtf8(targetPath) + "'");
         return false;
     }
+    if (const auto syncError = SyncPath(tempPath, O_RDWR | O_CLOEXEC)) {
+        fs::remove(tempPath, ec);
+        SetSaveError("Scene save failed: could not sync temporary file '" + PathToUtf8(tempPath) +
+                     "': " + syncError.message());
+        return false;
+    }
     fs::rename(tempPath, targetPath, ec);
     if (ec) {
         fs::remove(tempPath, ec);
         SetSaveError("Scene save failed: rename failed for '" + PathToUtf8(targetPath) + "'");
+        return false;
+    }
+    const auto parent = targetPath.has_parent_path() ? targetPath.parent_path() : fs::path(".");
+    if (const auto syncError = SyncPath(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC)) {
+        SetSaveError("Scene saved but parent directory could not be synced for '" +
+                     PathToUtf8(targetPath) + "': " + syncError.message());
         return false;
     }
     return true;
@@ -1209,6 +1327,8 @@ void Scene::AdoptLoadedScene(Scene& parsed) {
     auto nextLifetime = std::make_shared<int>(0);
     pools_.swap(parsed.pools_);
     entities_.swap(parsed.entities_);
+    referenceIdentities_.swap(parsed.referenceIdentities_);
+    entitiesByReferenceIdentity_.swap(parsed.entitiesByReferenceIdentity_);
     nextEntityId_ = parsed.nextEntityId_;
     std::swap(settings_, parsed.settings_);
     physicsAccumulator_ = 0;
@@ -1270,6 +1390,62 @@ uint32 Scene::GetEntityCount() const {
 
 bool Scene::IsAlive(uint32 id) const {
     return entities_.contains(id);
+}
+
+uint32 Scene::ResolveScriptEntityReference(const ScriptEntityReference& reference) const {
+    if (!reference.identity)
+        return IsAlive(reference.id) ? reference.id : 0;
+    const auto found = entitiesByReferenceIdentity_.find(reference.identity);
+    return found != entitiesByReferenceIdentity_.end() ? found->second : 0;
+}
+
+bool Scene::SetReferenceIdentity(uint32 id, uint64 identity) {
+    if (!IsAlive(id) || !identity || entitiesByReferenceIdentity_.contains(identity))
+        return false;
+    auto [entry, added] = referenceIdentities_.emplace(id, identity);
+    if (!added)
+        return false;
+    try {
+        entitiesByReferenceIdentity_.emplace(identity, id);
+    } catch (...) {
+        referenceIdentities_.erase(entry);
+        throw;
+    }
+    return true;
+}
+
+uint64 Scene::NewReferenceIdentity() {
+    static std::atomic<uint64> nextIdentity([] {
+        std::random_device random;
+        return (static_cast<uint64>(random()) << 32) | random();
+    }());
+    uint64 candidate;
+    do {
+        candidate = nextIdentity.fetch_add(1);
+    } while (!candidate);
+    return candidate;
+}
+
+void Scene::EraseReferenceIdentity(uint32 id) {
+    if (const auto found = referenceIdentities_.find(id); found != referenceIdentities_.end()) {
+        entitiesByReferenceIdentity_.erase(found->second);
+        referenceIdentities_.erase(found);
+    }
+}
+
+void Scene::RefreshScriptReferenceIds() {
+    const auto scripts = pools_.find(typeid(ScriptComponent));
+    if (scripts == pools_.end())
+        return;
+    auto& values = static_cast<Pool<ScriptComponent>&>(*scripts->second).values;
+    for (auto& [id, script] : values) {
+        for (auto& [name, value] : script.fields) {
+            auto* reference = std::get_if<ScriptEntityReference>(&value);
+            if (reference && reference->identity)
+                if (const auto resolved = ResolveScriptEntityReference(*reference))
+                    reference->id = resolved;
+        }
+    }
 }
 
 std::weak_ptr<int> Scene::Lifetime() const {

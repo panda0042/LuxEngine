@@ -1884,6 +1884,53 @@ void MultiDeviceLifetime() {
     Check(second.Initialize(secondWindow, config), "validation peer initialized");
     config.validation = GpuValidation::Synchronization;
     Check(third.Initialize(thirdWindow, config), "synchronization peer initialized");
+    {
+        Files files;
+        const auto path = files.Path("peer-cache.bmp");
+        auto* surface = SDL_CreateSurface(2, 2, SDL_PIXELFORMAT_RGBA32);
+        Check(surface != nullptr, "peer cache fixture surface created");
+        const bool saved = SDL_SaveBMP(surface, path.c_str());
+        SDL_DestroySurface(surface);
+        Check(saved, "peer cache fixture saved");
+        const auto initialCount = AssetManager::GetCachedTextureCount();
+        const auto initialBytes = AssetManager::GetTextureCacheMemoryBytes();
+        const auto local = AssetManager::LoadTexture(path, &first.gpu);
+        const auto peer = AssetManager::LoadTexture(path, &second);
+        Check(local && peer && local != peer, "textures belong to their own device");
+        Check(AssetManager::LoadTexture(path, &first.gpu) == local &&
+                  AssetManager::LoadTexture(path, &second) == peer &&
+                  AssetManager::GetCachedTextureCount() == initialCount + 2 &&
+                  AssetManager::GetTextureCacheMemoryBytes() == initialBytes + 32,
+              "peer requests preserve both cached textures and count both allocations");
+        AssetManager::UnloadTexture(path);
+        Check(!AssetManager::HasTexture(path) && local->IsValid() && peer->IsValid() &&
+                  AssetManager::GetCachedTextureCount() == initialCount &&
+                  AssetManager::GetTextureCacheMemoryBytes() == initialBytes,
+              "unloading a path releases both cache entries while clients keep their textures");
+
+        const auto previousBudget = AssetManager::GetCacheMemoryBudget();
+        const auto initialTotal = AssetManager::GetTotalCacheMemoryBytes();
+        const auto storageBytes = local->GetStorageBytes();
+        AssetManager::SetCacheMemoryBudget(1);
+        const auto oversized = AssetManager::LoadTexture(path, &first.gpu);
+        Check(oversized && oversized->IsValid() && !AssetManager::HasTexture(path),
+              "a texture larger than the cache budget is returned without retention");
+        AssetManager::SetCacheMemoryBudget(initialTotal + storageBytes);
+        auto retained = AssetManager::LoadTexture(path, &first.gpu);
+        const auto excess = AssetManager::LoadTexture(path, &second);
+        Check(retained && excess && excess->IsValid() &&
+                  AssetManager::LoadTexture(path, &first.gpu) == retained &&
+                  AssetManager::GetTotalCacheMemoryBytes() == initialTotal + storageBytes,
+              "a texture that cannot displace a live entry is returned without retention");
+        retained.reset();
+        const auto replacement = AssetManager::LoadTexture(path, &second);
+        Check(replacement && replacement != excess &&
+                  AssetManager::LoadTexture(path, &second) == replacement &&
+                  AssetManager::GetTotalCacheMemoryBytes() == initialTotal + storageBytes,
+              "an unused entry can be evicted to admit a texture from another device");
+        AssetManager::UnloadTexture(path);
+        AssetManager::SetCacheMemoryBudget(previousBudget);
+    }
 #if defined(LUX_GPU_FAULT_INJECTION) && LUX_GPU_FAULT_INJECTION
     const auto cohortInstances = Vk::GetInstanceLifetimeCounters().instances;
     Check(cohortInstances <= 3 && Vk::GetInstanceLifetimeCounters().devices == 3,
@@ -2396,6 +2443,7 @@ void RenderOutput(Graphics& graphics) {
     PointLight red;
     red.position = {0, 0, 2};
     red.color = {1, 0, 0};
+    const float lightRadius = red.radius;
     const auto ambient = Pixel(pointLit({}), 0.5f, 0.5f);
     const auto front = Pixel(pointLit(std::span(&red, 1)), 0.5f, 0.5f);
     red.position = {0, 0, -3};
@@ -2403,16 +2451,17 @@ void RenderOutput(Graphics& graphics) {
     red.position = {0, 0, 2};
     red.radius = 1.0f;
     const auto outOfRange = Pixel(pointLit(std::span(&red, 1)), 0.5f, 0.5f);
-    const auto displayByte = [](double linear) {
-        const double encoded =
-            linear <= .0031308 ? linear * 12.92 : 1.055 * std::pow(linear, 1.0 / 2.4) - .055;
-        return static_cast<int>(std::lround(std::clamp(encoded, 0.0, 1.0) * 255));
+    const auto displayByte = [](float linear) {
+        const float srgb =
+            linear <= .0031308f ? 12.92f * linear : 1.055f * std::pow(linear, 1.f / 2.4f) - .055f;
+        return static_cast<int>(std::lround(std::clamp(srgb, 0.f, 1.f) * 255));
     };
-    const int ambientByte = displayByte(.15);
-    const int litByte = displayByte(.15 + .85 * .85);
-    Check(IsColor(ambient, ambientByte, ambientByte, ambientByte, 2) &&
-              IsColor(front, litByte, ambientByte, ambientByte, 2),
-          "point light in front of a face lights it with its own color");
+    const int expectedAmbient = displayByte(.15f);
+    const float falloff = 1.f - 1.5f / lightRadius;
+    Check(IsColor(ambient, expectedAmbient, expectedAmbient, expectedAmbient, 2) &&
+              IsColor(front, displayByte(.15f + falloff * falloff), expectedAmbient,
+                      expectedAmbient, 2),
+          "point light falloff and ambient are encoded to display sRGB once");
     Check(IsColor(behind, ambient[0], ambient[1], ambient[2], 2) &&
               IsColor(outOfRange, ambient[0], ambient[1], ambient[2], 2),
           "point light behind a face or beyond its radius adds nothing");
@@ -2986,11 +3035,11 @@ void VulkanSystems() {
         Check(gpu.GetFrameStats().gpuTimeMs >= 0.0, "GPU timestamps measured");
 
     gpu.Shutdown();
-    for (uint32 frames : {0u, 1u, 3u, 9u}) {
+    for (uint32 frames : {0u, 1u, 3u, 8u, 9u}) {
         GpuDeviceConfig config;
         config.framesInFlight = frames;
         Check(gpu.Initialize(graphics.window, config), "device reinitializes");
-        Check(gpu.GetInfo().framesInFlight == std::clamp(frames, 1u, 3u),
+        Check(gpu.GetInfo().framesInFlight == std::clamp(frames, 1u, 8u),
               "frames in flight clamped");
         for (int frame = 0; frame < 5; ++frame)
             Check(graphics.Begin() && gpu.EndFrame(), "frames with configured depth");

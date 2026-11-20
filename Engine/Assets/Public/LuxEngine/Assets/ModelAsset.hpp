@@ -112,6 +112,8 @@ struct ModelPoseLayer {
 class LUX_API ModelAsset {
 public:
     static Ref<ModelAsset> LoadFbx(const std::string& filepath, std::string& error);
+    static Ref<ModelAsset> ReloadFbx(const std::string& filepath, std::string& error,
+                                     int32 requiredSubmesh = -1, bool requireUv = false);
     ~ModelAsset();
 
     // Seconds are clip-relative and clamped. clip == -1 evaluates the default/rest scene.
@@ -132,6 +134,8 @@ public:
     std::vector<std::string> warnings{};
 
 private:
+    static Ref<ModelAsset> ReadFbx(const std::string& filepath, std::string& error, bool reload,
+                                   int32 requiredSubmesh, bool requireUv);
     struct Impl;
     ModelAsset();
     std::shared_ptr<Impl> impl_;

@@ -184,8 +184,8 @@ bool EditorDocument::SaveAs(const std::string& path) {
     std::string nextPath = AnchoredPath(path);
     auto sourcePath = SourcePath(nextPath);
     auto& active = Active();
-    if (!SaveAuthoredScene(*active.scene, PathFromUtf8(nextPath), PathFromUtf8(active.path),
-                           error_))
+    if (!SaveAuthoredScene(*active.scene, PathFromUtf8(nextPath), PathFromUtf8(active.path), error_,
+                           true))
         return false;
     active.path.swap(nextPath);
     active.scene->SetSourcePath(std::move(sourcePath));
@@ -217,12 +217,16 @@ bool EditorDocument::ReplaceSceneFromData(const std::string& serializedData,
 }
 
 bool EditorDocument::ReplaceSceneFromData(TabId tab, const std::string& serializedData,
-                                          std::optional<LuxEngine::uint32> selectedId) {
+                                          std::optional<LuxEngine::uint32> selectedId,
+                                          const std::string& previousSourcePath) {
     auto* state = Find(tab);
     if (!state)
         return false;
     auto replacement = std::make_shared<LuxEngine::Scene>();
     if (!replacement->DeserializeFromString(serializedData))
+        return false;
+    if (!previousSourcePath.empty() && previousSourcePath != state->scene->GetSourcePath() &&
+        !NormalizeAuthoredScenePaths(*replacement, PathFromUtf8(previousSourcePath), error_))
         return false;
     replacement->SetSourcePath(state->scene->GetSourcePath());
     state->scene = std::move(replacement);

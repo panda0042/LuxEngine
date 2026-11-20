@@ -17,6 +17,7 @@
 namespace LuxEngine {
 class Entity;
 class ScenePhysicsWorld;
+class SceneManager;
 class ModelAsset;
 
 struct SceneSettings {
@@ -40,6 +41,14 @@ public:
     Scene(Scene&&) = delete;
     Scene& operator=(Scene&&) = delete;
     std::vector<Entity> GetEntities();
+    bool Raycast3D(Vec3 origin, Vec3 direction, float maxDistance, RaycastHit3D& hit,
+                   uint32 ignoreEntity = 0, bool includeTriggers = false) const;
+    bool GetVelocity3D(uint32 entity, Vec3& velocity) const;
+    bool SetVelocity3D(uint32 entity, Vec3 velocity);
+    bool AddImpulse3D(uint32 entity, Vec3 impulse);
+    bool IsGrounded3D(uint32 entity) const;
+    const std::string& GetLastPhysicsError2D() const;
+    const std::string& GetLastPhysicsError3D() const;
     std::vector<Entity> GetEntitiesInHierarchyOrder();
     // Stable ascending Z order within each 2D pass: tilemaps, then sprites.
     std::vector<Entity> GetEntitiesIn2DLayerOrder();
@@ -100,6 +109,7 @@ public:
     uint32 GetEntityCount() const;
 
     bool IsAlive(uint32 id) const;
+    uint32 ResolveScriptEntityReference(const ScriptEntityReference& reference) const;
 
     std::weak_ptr<int> Lifetime() const;
 
@@ -121,6 +131,11 @@ public:
     template <class T> void RemoveComponent(uint32 id);
 
 private:
+    friend class SceneManager;
+    class AnimationBindings;
+    void ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, double dt, bool rootMotion,
+                             AnimationBindings& bindings);
+
     struct PoolBase {
         LUX_API virtual ~PoolBase();
         virtual void Erase(uint32 id) = 0;
@@ -141,16 +156,40 @@ private:
     template <class T> Pool<T>& GetPool();
 
     void RequireAlive(uint32 id) const;
+    static uint64 NewReferenceIdentity();
+    bool SetReferenceIdentity(uint32 id, uint64 identity);
+    void EraseReferenceIdentity(uint32 id);
+    void RefreshScriptReferenceIds();
+    std::unordered_map<uint32, uint32> ImportEntitiesInternal(const Scene& source,
+                                                              const std::vector<uint32>& roots,
+                                                              uint32 parent, bool preserveIds,
+                                                              bool restoreLocal);
 
     bool DeserializeStream(std::istream& in); // Legacy scene versions 1–6, read only.
     bool DeserializeJson(const std::string& data);
     bool ValidateForSerialization();
     void AdoptLoadedScene(Scene& parsed);
+    void StageRegion(Scene& staged, const std::vector<uint32>& roots,
+                     std::unordered_set<uint32>& anchors) const;
+
+    struct RegionReferences {
+        std::unordered_map<uint32, uint64> identities;
+        std::unordered_map<uint64, uint32> entitiesByIdentity;
+        std::vector<std::pair<ScriptEntityReference*, ScriptEntityReference>> fields;
+    };
+
+    RegionReferences PrepareRegionReferences(Scene& staged,
+                                             const std::unordered_set<uint32>& affected);
+    bool CommitRegion(Scene& staged, const std::unordered_set<uint32>& anchors,
+                      const std::unordered_set<uint32>& affected, RegionReferences& references);
+    void DestroySubtrees(const std::vector<uint32>& roots);
     void RepairReferenceLinks();
     void RemovePhysicsBody(uint32 id);
     uint32 nextEntityId_ = 1;
     std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
     std::unordered_set<uint32> entities_;
+    std::unordered_map<uint32, uint64> referenceIdentities_;
+    std::unordered_map<uint64, uint32> entitiesByReferenceIdentity_;
     std::unordered_map<std::type_index, std::unique_ptr<PoolBase>> pools_;
     std::unique_ptr<ScenePhysicsWorld> physics2D_;
     std::unique_ptr<ScenePhysicsWorld> physics3D_;

@@ -134,6 +134,11 @@
             "minimum": 1,
             "maximum": 4294967294
           },
+          "reference_identity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 18446744073709551615
+          },
           "components": {
             "type": "object",
             "properties": {
@@ -825,9 +830,30 @@
                     "const": 7
                   },
                   "value": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 4294967295
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4294967295
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 4294967295
+                          },
+                          "identity": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 18446744073709551615
+                          }
+                        },
+                        "required": ["id", "identity"],
+                        "additionalProperties": false
+                      }
+                    ]
                   }
                 },
                 "required": [

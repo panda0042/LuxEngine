@@ -5,34 +5,121 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <string_view>
 
 namespace LuxEngine {
-namespace {
-uint32 Bind(Scene& scene, uint32 owner, const std::string& path) {
-    if (path.empty())
-        return owner;
-    size_t start = 0;
-    uint32 current = owner;
-    while (start < path.size()) {
-        const auto end = path.find('/', start);
-        const auto name = path.substr(start, end == std::string::npos ? end : end - start);
+class Scene::AnimationBindings {
+public:
+    explicit AnimationBindings(Scene& scene, bool shared = true) : scene_(scene), shared_(shared) {}
+
+    uint32 Resolve(uint32 owner, std::string_view path) {
+        if (path.empty())
+            return owner;
+        if (shared_ && !indexed_) {
+            indexed_ = true;
+            const auto pool = scene_.pools_.find(typeid(HierarchyComponent));
+            if (pool != scene_.pools_.end())
+                for (const auto& [id, hierarchy] :
+                     static_cast<const Pool<HierarchyComponent>&>(*pool->second).values) {
+                    const auto* tag = scene_.TryGetComponent<TagComponent>(id);
+                    if (!tag || !hierarchy.parent)
+                        continue;
+                    auto [child, added] = children_[hierarchy.parent].try_emplace(tag->tag, id);
+                    if (!added)
+                        child->second = 0;
+                }
+        }
+        auto current = owner;
+        while (!path.empty()) {
+            const auto end = path.find('/');
+            current = FindChild(current, path.substr(0, end));
+            if (!current)
+                return 0;
+            if (end == std::string_view::npos)
+                break;
+            path.remove_prefix(end + 1);
+        }
+        return current;
+    }
+
+private:
+    uint32 FindChild(uint32 parent, std::string_view name) const {
+        if (shared_) {
+            const auto children = children_.find(parent);
+            if (children == children_.end())
+                return 0;
+            const auto match = children->second.find(name);
+            return match != children->second.end() ? match->second : 0;
+        }
         uint32 match = 0;
-        for (auto child : scene.GetChildren(current)) {
-            auto* tag = scene.TryGetComponent<TagComponent>(child);
+        for (const auto child : scene_.GetChildren(parent)) {
+            const auto* tag = scene_.TryGetComponent<TagComponent>(child);
             if (tag && tag->tag == name) {
                 if (match)
                     return 0;
                 match = child;
             }
         }
-        if (!match)
-            return 0;
-        current = match;
-        if (end == std::string::npos)
-            break;
-        start = end + 1;
+        return match;
     }
-    return current;
+
+    Scene& scene_;
+    bool shared_;
+    bool indexed_ = false;
+    std::unordered_map<uint32, std::unordered_map<std::string_view, uint32>> children_;
+};
+
+namespace {
+std::optional<std::array<double, 4>> ReadAnimatedValue(Scene& scene, uint32 id,
+                                                       const AnimationSample& sample) {
+    if (!id)
+        return std::nullopt;
+    using Value = std::array<double, 4>;
+    const auto vector = [](const Vec3& v) { return Value{v.x, v.y, v.z, 0}; };
+    if (const auto* transform = scene.TryGetComponent<TransformComponent>(id)) {
+        if (sample.property == AnimationProperty::Position)
+            return vector(transform->position);
+        if (sample.property == AnimationProperty::Rotation)
+            return vector(transform->rotation);
+        if (sample.property == AnimationProperty::Scale)
+            return vector(transform->scale);
+    }
+    const auto* mesh = scene.TryGetComponent<MeshRendererComponent>(id);
+    if (sample.property == AnimationProperty::Color ||
+        sample.property == AnimationProperty::Opacity) {
+        const auto* sprite = scene.TryGetComponent<SpriteRendererComponent>(id);
+        if (!mesh && !sprite)
+            return std::nullopt;
+        const auto& color = sprite ? sprite->color : mesh->material.albedoColor;
+        if (sample.property == AnimationProperty::Opacity)
+            return Value{color.w, 0, 0, 0};
+        return Value{color.x, color.y, color.z, color.w};
+    }
+    if (sample.property == AnimationProperty::Float) {
+        if (const auto* script = scene.TryGetComponent<ScriptComponent>(id)) {
+            const auto field = script->fields.find(sample.field);
+            if (field != script->fields.end())
+                if (const auto* value = std::get_if<float>(&field->second))
+                    return Value{*value, 0, 0, 0};
+        }
+        if (const auto* camera = scene.TryGetComponent<CameraComponent>(id)) {
+            if (sample.field == "camera.fov")
+                return Value{camera->fov, 0, 0, 0};
+            if (sample.field == "camera.orthoSize")
+                return Value{camera->orthoSize, 0, 0, 0};
+            if (sample.field == "camera.nearClip")
+                return Value{camera->nearClip, 0, 0, 0};
+            if (sample.field == "camera.farClip")
+                return Value{camera->farClip, 0, 0, 0};
+        }
+        if (mesh) {
+            if (sample.field == "material.metallic")
+                return Value{mesh->material.metallic, 0, 0, 0};
+            if (sample.field == "material.roughness")
+                return Value{mesh->material.roughness, 0, 0, 0};
+        }
+    }
+    return std::nullopt;
 }
 
 void Fail(const std::string& error) {
@@ -42,6 +129,12 @@ void Fail(const std::string& error) {
 
 void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, double dt,
                                 bool rootMotion) {
+    AnimationBindings bindings(*this, false);
+    ApplyAnimationFrame(owner, frame, dt, rootMotion, bindings);
+}
+
+void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, double dt,
+                                bool rootMotion, AnimationBindings& bindings) {
     if (!IsAlive(owner))
         return;
     for (auto id : GetComponentEntityIds<ModelAnimationComponent>()) {
@@ -64,7 +157,7 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
             transform->position += transform->GetTransform().TransformDirection(delta);
     };
     for (const auto& sample : frame.samples) {
-        const uint32 target = Bind(*this, owner, sample.target);
+        const uint32 target = bindings.Resolve(owner, sample.target);
         if (!target)
             continue;
         const auto& v = sample.value;
@@ -94,9 +187,13 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
             }
         } else if (sample.property == AnimationProperty::SpriteFrame) {
             if (auto* sprite = TryGetComponent<SpriteRendererComponent>(target)) {
-                sprite->columns = frame.spriteColumns;
-                sprite->rows = frame.spriteRows;
-                sprite->texturePath = frame.spriteSheet;
+                if (!frame.spriteSheet.empty())
+                    sprite->texturePath = frame.spriteSheet;
+                if (!frame.spriteSheet.empty() || frame.spriteColumns != 1 ||
+                    frame.spriteRows != 1) {
+                    sprite->columns = frame.spriteColumns;
+                    sprite->rows = frame.spriteRows;
+                }
                 sprite->frame = static_cast<uint32>(
                     std::clamp(std::floor(v[0]), 0.0, double(sprite->columns) * sprite->rows - 1));
             }
@@ -268,6 +365,7 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
 }
 
 void Scene::UpdateAnimations(double dt, bool emitEvents) {
+    AnimationBindings bindings(*this);
     for (auto id : GetComponentEntityIds<ModelAnimationComponent>()) {
         auto& model = GetComponent<ModelAnimationComponent>(id);
         if (model.poseOwner && !HasComponent<AnimationComponent>(model.poseOwner) &&
@@ -320,7 +418,7 @@ void Scene::UpdateAnimations(double dt, bool emitEvents) {
             sample.rootMotionTarget = clip.rootMotionTarget;
             frame.models.push_back(sample);
         }
-        ApplyAnimationFrame(id, frame, dt, animation->rootMotion);
+        ApplyAnimationFrame(id, frame, dt, animation->rootMotion, bindings);
         if (emitEvents)
             animation->pendingEvents = std::move(events);
     }
@@ -346,11 +444,13 @@ void Scene::UpdateAnimations(double dt, bool emitEvents) {
             for (const auto& parameter : animation->parameters)
                 animation->player->SetParameter(parameter.name, parameter.value);
             if (animation->rootMotion)
-                ApplyAnimationFrame(id, animation->player->Update(0, false), 0, true);
+                ApplyAnimationFrame(id, animation->player->Update(0, false), 0, true, bindings);
         }
         animation->player->SetPlaying(animation->playing);
-        auto frame = animation->player->Update(dt, emitEvents);
-        ApplyAnimationFrame(id, frame, dt, animation->rootMotion);
+        auto frame = animation->player->Update(dt, emitEvents, [&](const auto& sample) {
+            return ReadAnimatedValue(*this, bindings.Resolve(id, sample.target), sample);
+        });
+        ApplyAnimationFrame(id, frame, dt, animation->rootMotion, bindings);
         if (emitEvents)
             animation->pendingEvents = std::move(frame.events);
     }

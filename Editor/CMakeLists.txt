@@ -249,6 +249,7 @@ if(LUX_BUILD_TESTS)
     add_test(NAME Editor_scene_documents COMMAND LuxEditorSceneDocumentTests)
     set_tests_properties(Editor_scene_documents PROPERTIES LABELS "headless;editor;scene" TIMEOUT 90)
     add_executable(LuxEditorDocumentTests
+        Scene/Private/LuxEditor/Scene/SceneDependencies.cpp
         Scene/Private/LuxEditor/Scene/EditorDocument.cpp
         Scene/Private/LuxEditor/Scene/SceneAuthoringIO.cpp
         Project/Private/LuxEditor/Project/ProjectJson.cpp

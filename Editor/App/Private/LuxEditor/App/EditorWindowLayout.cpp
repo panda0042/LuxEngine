@@ -8,6 +8,7 @@
 #include <LuxEditor/Viewport/SceneViewport2D.hpp>
 #include <LuxEditor/Viewport/SceneViewport3D.hpp>
 #include <LuxEngine/Assets/AssetManager.hpp>
+#include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/ECS/ECS.hpp>
 #include <LuxEngine/Physics/PhysicsWorld.hpp>
 #include <LuxUI/AssetList.hpp>
@@ -636,14 +637,18 @@ void EditorWindow::BuildLayout() {
         bool requested = false;
         if (!mesh.meshPath.empty()) {
             requested = true;
-            if (!LuxEngine::AssetManager::ReloadMesh(
-                    document_.GetScene().ResolveAssetPath(mesh.meshPath), error,
-                    !mesh.material.baseColorTexture.empty() ||
-                        !mesh.material.normalTexture.empty() ||
-                        !mesh.material.metallicTexture.empty() ||
-                        !mesh.material.roughnessTexture.empty() ||
-                        !mesh.material.occlusionTexture.empty()))
-                errors << LuxUI::String::fromUtf8(error);
+            const auto path = document_.GetScene().ResolveAssetPath(mesh.meshPath);
+            const bool needsUv =
+                !mesh.material.baseColorTexture.empty() || !mesh.material.normalTexture.empty() ||
+                !mesh.material.metallicTexture.empty() || !mesh.material.roughnessTexture.empty() ||
+                !mesh.material.occlusionTexture.empty();
+            if (mesh.modelSubmesh < 0) {
+                if (!LuxEngine::AssetManager::ReloadMesh(path, error, needsUv))
+                    errors << LuxUI::String::fromUtf8(error);
+            } else {
+                if (!LuxEngine::ModelAsset::ReloadFbx(path, error, mesh.modelSubmesh, needsUv))
+                    errors << LuxUI::String::fromUtf8(error);
+            }
         }
         for (const auto* path : {&mesh.material.baseColorTexture, &mesh.material.normalTexture,
                                  &mesh.material.metallicTexture, &mesh.material.roughnessTexture,

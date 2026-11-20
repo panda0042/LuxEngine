@@ -282,7 +282,7 @@ struct DotnetHost {
             error = "C# 스크립트 코어 진입점을 찾을 수 없습니다.";
             return false;
         }
-        const Managed::NativeApi native = {4,
+        const Managed::NativeApi native = {6,
                                            sizeof(Managed::NativeApi),
                                            IsAlive,
                                            GetTransform,
@@ -290,7 +290,7 @@ struct DotnetHost {
                                            IsKeyPressed,
                                            AnimationCommand,
                                            AnimationEventNext};
-        if (!getApi(&native, &api) || api.version != 4 || api.size != sizeof(api)) {
+        if (!getApi(&native, &api) || api.version != 6 || api.size != sizeof(api)) {
             api = {};
             error = "C# 스크립트 ABI가 엔진과 일치하지 않습니다.";
             return false;
@@ -305,6 +305,14 @@ DotnetHost& Host() {
     return host;
 }
 
+bool SerializeRuntimeFields(const Scene& scene, const ScriptFieldMap& fields, std::string& output) {
+    ScriptFieldMap resolved = fields;
+    for (auto& [name, value] : resolved)
+        if (auto* reference = std::get_if<ScriptEntityReference>(&value))
+            *reference = {scene.ResolveScriptEntityReference(*reference)};
+    return SerializeScriptFields(resolved, output);
+}
+
 std::string ManagedError() {
     std::vector<char> message(16384);
     Host().api.lastError(message.data(), static_cast<int>(message.size()));
@@ -316,6 +324,7 @@ struct ScriptRuntime::Impl {
     std::shared_ptr<WorldState> world;
     uint64 nativeId = 0;
     uint64 context = 0;
+    bool isolateUpdateFailures = false;
     std::map<uint32, std::pair<std::string, std::string>> instances;
     std::string error;
 };
@@ -353,6 +362,7 @@ bool ScriptRuntime::Initialize(Scene& scene, const ScriptRuntimeConfig& config) 
             std::lock_guard registryLock(registryMutex);
             worlds[impl_->nativeId] = impl_->world;
         }
+        impl_->isolateUpdateFailures = config.isolateUpdateFailures;
         impl_->context =
             Host().api.load(impl_->nativeId, assembly.data(), static_cast<int>(assembly.size()));
         if (!impl_->context) {
@@ -368,8 +378,8 @@ bool ScriptRuntime::Initialize(Scene& scene, const ScriptRuntimeConfig& config) 
     }
 }
 
-bool ScriptRuntime::Update(double deltaTime) {
-    if (!IsRunning() || !std::isfinite(deltaTime) || deltaTime < 0)
+bool ScriptRuntime::PrepareInstances() {
+    if (!IsRunning())
         return false;
     if (impl_->world->owner != std::this_thread::get_id()) {
         impl_->error = "C# 스크립트는 씬을 소유한 스레드에서 실행해야 합니다.";
@@ -381,24 +391,32 @@ bool ScriptRuntime::Update(double deltaTime) {
         return false;
     }
     std::lock_guard lock(managedMutex);
+    impl_->error.clear();
     auto& scene = *impl_->world->scene;
     for (auto iterator = impl_->instances.begin(); iterator != impl_->instances.end();) {
         const auto* component = scene.TryGetComponent<ScriptComponent>(iterator->first);
-        std::string fields;
-        if (component && !SerializeScriptFields(component->fields, fields)) {
-            impl_->error = "Invalid serialized C# fields";
-            return false;
-        }
-        if (!component || !component->enabled || component->typeName != iterator->second.first ||
-            fields != iterator->second.second) {
+        if (!component || !component->enabled || component->typeName != iterator->second.first) {
             if (!Host().api.detach(impl_->context, iterator->first)) {
                 impl_->error = ManagedError();
                 return false;
             }
             iterator = impl_->instances.erase(iterator);
-        } else {
-            ++iterator;
+            continue;
         }
+        std::string fields;
+        if (!SerializeRuntimeFields(scene, component->fields, fields)) {
+            impl_->error = "Invalid serialized C# fields";
+            return false;
+        }
+        if (fields != iterator->second.second) {
+            if (!Host().api.setFields(impl_->context, iterator->first, fields.data(),
+                                      static_cast<int>(fields.size()))) {
+                impl_->error = ManagedError();
+                return false;
+            }
+            iterator->second.second = std::move(fields);
+        }
+        ++iterator;
     }
     for (const uint32 entity : scene.GetComponentEntityIds<ScriptComponent>()) {
         const auto& component = scene.GetComponent<ScriptComponent>(entity);
@@ -409,7 +427,7 @@ bool ScriptRuntime::Update(double deltaTime) {
             return false;
         }
         std::string fields;
-        if (!SerializeScriptFields(component.fields, fields)) {
+        if (!SerializeRuntimeFields(scene, component.fields, fields)) {
             impl_->error = "Invalid serialized C# fields";
             return false;
         }
@@ -421,11 +439,17 @@ bool ScriptRuntime::Update(double deltaTime) {
         }
         impl_->instances.emplace(entity, std::make_pair(component.typeName, fields));
     }
-    if (!Host().api.update(impl_->context, deltaTime)) {
-        impl_->error = ManagedError();
-        return false;
-    }
     return true;
+}
+
+bool ScriptRuntime::Update(double deltaTime) {
+    if (!std::isfinite(deltaTime) || deltaTime < 0 || !PrepareInstances())
+        return false;
+    std::lock_guard lock(managedMutex);
+    const int result = Host().api.update(impl_->context, deltaTime, impl_->isolateUpdateFailures);
+    if (result != 1)
+        impl_->error = ManagedError();
+    return result != 0;
 }
 
 bool ScriptRuntime::DescribeFields(const std::string& typeName,

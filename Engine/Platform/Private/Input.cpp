@@ -17,11 +17,15 @@ struct Action {
     bool released = false;
 };
 
+struct WindowButtons {
+    std::unordered_set<int32> keys;
+    std::unordered_set<int32> mouse;
+};
+
 struct InputState {
     std::unordered_map<std::string, Action> actions;
-    std::unordered_set<int32> keys;
+    std::unordered_map<SDL_WindowID, WindowButtons> windows;
     std::unordered_set<int32> externalKeys;
-    std::unordered_set<int32> mouseButtons;
     std::unordered_set<int32> externalMouseButtons;
     std::optional<std::pair<float, float>> externalMousePosition;
     std::unordered_map<SDL_JoystickID, std::unordered_set<int32>> gamepadButtons;
@@ -49,10 +53,17 @@ bool Valid(InputBinding binding) {
 bool PhysicalDown(const InputState& state, InputBinding binding) {
     switch (binding.device) {
     case InputDevice::Keyboard:
-        return state.keys.contains(binding.code) || state.externalKeys.contains(binding.code);
+        if (state.externalKeys.contains(binding.code))
+            return true;
+        return std::any_of(state.windows.begin(), state.windows.end(), [&](const auto& window) {
+            return window.second.keys.contains(binding.code);
+        });
     case InputDevice::MouseButton:
-        return state.mouseButtons.contains(binding.code) ||
-               state.externalMouseButtons.contains(binding.code);
+        if (state.externalMouseButtons.contains(binding.code))
+            return true;
+        return std::any_of(state.windows.begin(), state.windows.end(), [&](const auto& window) {
+            return window.second.mouse.contains(binding.code);
+        });
     case InputDevice::GamepadButton:
         for (const auto& [id, buttons] : state.gamepadButtons)
             if (buttons.contains(binding.code))
@@ -181,16 +192,19 @@ void Input::ProcessEvent(const SDL_Event& event) {
     bool changed = false;
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN:
-        changed = state.keys.insert(static_cast<int32>(event.key.key)).second;
+        changed =
+            state.windows[event.key.windowID].keys.insert(static_cast<int32>(event.key.key)).second;
         break;
     case SDL_EVENT_KEY_UP:
-        changed = state.keys.erase(static_cast<int32>(event.key.key)) != 0;
+        if (auto found = state.windows.find(event.key.windowID); found != state.windows.end())
+            changed = found->second.keys.erase(static_cast<int32>(event.key.key)) != 0;
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
-        changed = state.mouseButtons.insert(event.button.button).second;
+        changed = state.windows[event.button.windowID].mouse.insert(event.button.button).second;
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
-        changed = state.mouseButtons.erase(event.button.button) != 0;
+        if (auto found = state.windows.find(event.button.windowID); found != state.windows.end())
+            changed = found->second.mouse.erase(event.button.button) != 0;
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
         changed = OpenGamepad(state, event.gdevice.which);
@@ -211,9 +225,7 @@ void Input::ProcessEvent(const SDL_Event& event) {
             changed = it->second.erase(event.gbutton.button) != 0;
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
-        changed = !state.keys.empty() || !state.mouseButtons.empty();
-        state.keys.clear();
-        state.mouseButtons.clear();
+        changed = state.windows.erase(event.window.windowID) != 0;
         break;
     default:
         break;

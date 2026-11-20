@@ -204,6 +204,36 @@ void Renderer2D::Context::AbortScene() {
     impl_->usedBatches = 0;
 }
 
+bool Renderer2D::Context::GetVisibleLocalBounds(const Mat4& transform, Vec2& minimum,
+                                                Vec2& maximum) const {
+    if (!impl_ || !impl_->active)
+        return false;
+    const auto projection =
+        impl_->viewProjection * (Mat4::Translate(impl_->origin * -1) * transform);
+    const auto& m = projection.elements;
+    if (m[3] != 0 || m[7] != 0 || m[15] != 1)
+        return false;
+    const double determinant = m[0] * m[5] - m[4] * m[1];
+    const double scale = std::hypot(m[0], m[1]) * std::hypot(m[4], m[5]);
+    if (!(std::abs(determinant) > scale * 1e-12))
+        return false;
+    bool first = true;
+    for (const double x : {-1.0, 1.0})
+        for (const double y : {-1.0, 1.0}) {
+            const auto dx = x - m[12], dy = y - m[13];
+            const Vec2 local{(m[5] * dx - m[4] * dy) / determinant,
+                             (m[0] * dy - m[1] * dx) / determinant};
+            if (!std::isfinite(local.x) || !std::isfinite(local.y))
+                return false;
+            minimum =
+                first ? local : Vec2{std::min(minimum.x, local.x), std::min(minimum.y, local.y)};
+            maximum =
+                first ? local : Vec2{std::max(maximum.x, local.x), std::max(maximum.y, local.y)};
+            first = false;
+        }
+    return true;
+}
+
 void Renderer2D::Context::DrawQuad(const Vec2& p, const Vec2& size, const Vec4& color) {
     if (impl_)
         impl_->Quad({p.x, p.y, 0}, size, 0, {}, 0, color);
@@ -348,6 +378,13 @@ void Renderer2D::DrawQuad(const Vec2& p, const Vec2& size, const Vec4& color) {
     }
     std::lock_guard<std::recursive_mutex> lock(s_DefaultContext2DMutex);
     DefaultContext2D().DrawQuad(p, size, color);
+}
+
+bool Renderer2D::GetVisibleLocalBounds(const Mat4& transform, Vec2& minimum, Vec2& maximum) {
+    if (t_ActiveContext2D)
+        return t_ActiveContext2D->GetVisibleLocalBounds(transform, minimum, maximum);
+    std::lock_guard<std::recursive_mutex> lock(s_DefaultContext2DMutex);
+    return DefaultContext2D().GetVisibleLocalBounds(transform, minimum, maximum);
 }
 
 void Renderer2D::DrawQuad(const Vec3& p, const Vec2& size, const Vec4& color) {

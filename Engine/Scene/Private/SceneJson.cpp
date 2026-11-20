@@ -1,10 +1,12 @@
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <set>
 #include <type_traits>
+#include <unordered_set>
 
 namespace LuxEngine {
 namespace {
@@ -165,21 +167,81 @@ void ReadJsonValue(const Json& json, std::vector<std::pair<uint32, uint32>>& map
     }
 }
 
-Json ParseSceneJson(const std::string& data) {
-    // Bound nesting before building the DOM and reject duplicate keys instead of silently losing
-    // data.
-    std::vector<std::set<std::string>> objectKeys;
-    return Json::parse(data, [&](int depth, Json::parse_event_t event, Json& parsed) {
-        RequireValidScene(depth <= 64);
-        if (event == Json::parse_event_t::object_start)
-            objectKeys.emplace_back();
-        else if (event == Json::parse_event_t::key)
-            RequireValidScene(!objectKeys.empty() &&
-                              objectKeys.back().insert(parsed.get<std::string>()).second);
-        else if (event == Json::parse_event_t::object_end)
-            objectKeys.pop_back();
+class SceneJsonValidator final : public nlohmann::json_sax<Json> {
+public:
+    bool null() override {
+        return WithinDepth();
+    }
+
+    bool boolean(bool) override {
+        return WithinDepth();
+    }
+
+    bool number_integer(number_integer_t) override {
+        return WithinDepth();
+    }
+
+    bool number_unsigned(number_unsigned_t) override {
+        return WithinDepth();
+    }
+
+    bool number_float(number_float_t, const string_t&) override {
+        return WithinDepth();
+    }
+
+    bool string(string_t&) override {
+        return WithinDepth();
+    }
+
+    bool binary(binary_t&) override {
+        return false;
+    }
+
+    bool start_object(std::size_t) override {
+        return StartContainer();
+    }
+
+    bool start_array(std::size_t) override {
+        return StartContainer();
+    }
+
+    bool key(string_t& value) override {
+        return WithinDepth() && keys_.back().insert(std::move(value)).second;
+    }
+
+    bool end_object() override {
+        keys_.pop_back();
         return true;
-    });
+    }
+
+    bool end_array() override {
+        keys_.pop_back();
+        return true;
+    }
+
+    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override {
+        return false;
+    }
+
+private:
+    bool WithinDepth() const {
+        return keys_.size() <= 64;
+    }
+
+    bool StartContainer() {
+        if (!WithinDepth())
+            return false;
+        keys_.emplace_back();
+        return true;
+    }
+
+    std::vector<std::unordered_set<std::string>> keys_;
+};
+
+Json ParseSceneJson(const std::string& data) {
+    SceneJsonValidator validator;
+    RequireValidScene(Json::sax_parse(data, &validator));
+    return Json::parse(data);
 }
 } // namespace
 
@@ -218,6 +280,12 @@ bool Scene::SerializeToString(std::string& output) {
         root["entities"] = Json::array();
         std::vector<uint32> ids(entities_.begin(), entities_.end());
         std::sort(ids.begin(), ids.end());
+        const auto firstFreeId = ids.empty() ? 1u : ids.back() + 1;
+        if (nextEntityId_ > firstFreeId && std::any_of(ids.begin(), ids.end(), [&](const auto id) {
+                const auto* reference = TryGetComponent<SceneReferenceComponent>(id);
+                return reference && !reference->suspended.empty();
+            }))
+            root["next_entity_id"] = nextEntityId_;
         for (auto id : ids) {
             Json components = Json::object();
             if (const auto* component = TryGetComponent<ScriptComponent>(id)) {
@@ -382,7 +450,11 @@ bool Scene::SerializeToString(std::string& output) {
                 value["entity"] = ToJson(component->sourceEntity);
                 components["instance_source"] = std::move(value);
             }
-            root["entities"].push_back({{"id", id}, {"components", std::move(components)}});
+            Json entity = {{"id", id}, {"components", std::move(components)}};
+            if (const auto identity = referenceIdentities_.find(id);
+                identity != referenceIdentities_.end())
+                entity["reference_identity"] = identity->second;
+            root["entities"].push_back(std::move(entity));
         }
         auto serialized = root.dump(2) + '\n';
         if (serialized.size() > MaxSceneBytes)
@@ -439,6 +511,11 @@ bool Scene::DeserializeJson(const std::string& data) {
                               ids.insert(id).second);
             parsed.nextEntityId_ = id;
             auto entity = parsed.CreateEntity();
+            if (item.contains("reference_identity")) {
+                uint64 identity = 0;
+                ReadJsonValue(item.at("reference_identity"), identity);
+                RequireValidScene(parsed.SetReferenceIdentity(id, identity));
+            }
             entity.RemoveComponent<TagComponent>();
             entity.RemoveComponent<TransformComponent>();
             const auto& components = item.at("components");
@@ -663,6 +740,12 @@ bool Scene::DeserializeJson(const std::string& data) {
             }
         }
         parsed.nextEntityId_ = ids.empty() ? 1 : *ids.rbegin() + 1;
+        if (root.contains("next_entity_id")) {
+            uint32 nextId = 0;
+            ReadJsonValue(root.at("next_entity_id"), nextId);
+            RequireValidScene(nextId >= parsed.nextEntityId_);
+            parsed.nextEntityId_ = nextId;
+        }
         if (!parsed.ValidateForSerialization())
             return false;
         AdoptLoadedScene(parsed);

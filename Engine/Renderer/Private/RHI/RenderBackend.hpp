@@ -29,6 +29,7 @@ struct SceneDrawDesc {
     uint64 normalTexture = 0, metallicTexture = 0, roughnessTexture = 0, occlusionTexture = 0;
     float normalScale = 1.f, occlusionStrength = 1.f;
     uint32 sampling = 0;
+    bool shadowOnly = false;
 };
 
 // HDR scene path (PBR, shadows, image-based lighting) owned by a backend.

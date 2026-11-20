@@ -38,7 +38,7 @@ int RunPlayer(int argc, char* argv[]) {
         return player.LoadedScene() ? 1 : 3;
     const int result = player.Run();
     player.Shutdown();
-    return result;
+    return player.RuntimeFailed() ? 1 : result;
 }
 
 LUX_ENGINE_MAIN(RunPlayer)

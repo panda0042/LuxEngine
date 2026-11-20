@@ -1,5 +1,7 @@
 #pragma once
 
+#include <filesystem>
+#include <functional>
 #include <string>
 
 namespace LuxEngine {
@@ -14,5 +16,7 @@ bool ValidateProjectSceneReferences(const EditorProject& project, LuxEngine::Sce
                                     std::string& error);
 // Validates authored .lux files and their composed runtime state; metadata/build folders are
 // skipped.
-bool ValidateProjectScenes(const EditorProject& project, std::string& error);
+using ExternalImageHandler = std::function<void(const std::filesystem::path&)>;
+bool ValidateProjectScenes(const EditorProject& project, std::string& error,
+                           const ExternalImageHandler& externalImage = {});
 } // namespace LuxEditor

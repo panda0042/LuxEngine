@@ -75,6 +75,7 @@ private:
     void PollDevelopmentWorkspace();
     void LoadProjectTools();
     void SelectPlayAssembly();
+    std::filesystem::path ResolvePlayAssembly() const;
     void BuildAssetBrowserCommands();
     void ImportAssetsDialog();
     void CreateAssetFolder();
@@ -166,6 +167,7 @@ private:
     void ExportCurrentProject();
     void BackupCurrentProject();
     void RestoreCurrentProject();
+    void OpenPreRestoreAutosave();
     void RescanProjectResources();
     bool ConfirmDiscardChanges();
     bool SaveScene(bool choosePath);
@@ -203,6 +205,7 @@ private:
     void TogglePreviewPause();
     void StepPreview();
     void TickPreview();
+    bool EnsurePreviewScripts(LuxEngine::Scene& scene);
     // Saves the current scene and runs it in a separate LuxPlayer window.
     void RunSceneInWindow();
     void StartScriptDebug();
@@ -421,6 +424,7 @@ private:
     EditorSnapshot timelineBefore_;
     std::optional<LuxEngine::uint32> viewportEditSelected_;
     uint64_t previewFrame_ = 0;
+    double previewStreamingElapsed_ = 0;
     bool previewActive_ = false;
     std::unique_ptr<LuxEngine::Scene> runtimeScene_;
     LuxEngine::ScriptRuntime previewScripts_;

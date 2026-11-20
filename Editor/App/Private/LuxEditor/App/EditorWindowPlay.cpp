@@ -4,6 +4,7 @@
 #include <LuxEditor/Scripting/ToolProtocol.hpp>
 #include <LuxEditor/Viewport/SceneViewport2D.hpp>
 #include <LuxUI/Widgets.hpp>
+#include <algorithm>
 
 namespace LuxEditor {
 namespace {
@@ -44,6 +45,21 @@ void EditorWindow::RunSceneInWindow() {
         return;
     }
     StopSceneWindow();
+    const auto scripts = document_.GetScene().GetComponentEntityIds<LuxEngine::ScriptComponent>();
+    const bool hasScripts = std::any_of(scripts.begin(), scripts.end(), [this](auto id) {
+        const auto& script = document_.GetScene().GetComponent<LuxEngine::ScriptComponent>(id);
+        return script.enabled && !script.typeName.empty();
+    });
+    const auto assembly = ResolvePlayAssembly();
+    std::error_code assemblyError;
+    const bool canLoadAssembly =
+        !assembly.empty() && std::filesystem::is_regular_file(assembly, assemblyError);
+    if (hasScripts && !canLoadAssembly) {
+        ShowError(LUX_UI_TEXT("게임 실행"),
+                  LUX_UI_TEXT("C# 실행 어셈블리가 없습니다. 프로젝트를 빌드하거나 플레이용 C# "
+                              "어셈블리를 선택하세요."));
+        return;
+    }
     // Run what is on screen, including unsaved edits, without touching the user's scene file.
     {
         LuxUI::TemporaryFile temporary(LuxUI::Dir::tempPath() +
@@ -66,10 +82,8 @@ void EditorWindow::RunSceneInWindow() {
     }
     LuxUI::StringList arguments{playerScenePath_, LUX_UI_TEXT("--title"),
                                 LUX_UI_TEXT("LuxEngine - %1").arg(windowTitle())};
-    if (project_)
-        arguments << LUX_UI_TEXT("--scripts")
-                  << LuxUI::String::fromUtf8(PathUtf8(project_->GetFile().parent_path() /
-                                                      ".lux/managed/GameScripts.dll"));
+    if (canLoadAssembly)
+        arguments << LUX_UI_TEXT("--scripts") << LuxUI::String::fromUtf8(PathUtf8(assembly));
     if (canvas_) {
         double centerX = 0, centerY = 0, halfHeight = 0;
         canvas_->GetView(centerX, centerY, halfHeight);
@@ -158,12 +172,15 @@ void EditorWindow::StopSceneWindow() {
     if (process->property("scriptDebugger").toBool())
         scriptWorkspace_->StopDebugger();
     process->disconnect(this);
-    if (process->state() != LuxUI::Process::NotRunning) {
+    if (process->state() == LuxUI::Process::Starting)
+        process->waitForStarted(1000);
+    if (process->state() == LuxUI::Process::Running) {
         process->terminate();
-        if (!process->waitForFinished(1500)) {
-            process->kill();
-            process->waitForFinished(1000);
-        }
+        process->waitForFinished(1500);
+    }
+    if (process->state() != LuxUI::Process::NotRunning) {
+        process->kill();
+        process->waitForFinished(1000);
     }
     process->deleteLater();
     LuxUI::File::remove(playerScenePath_);

@@ -1,4 +1,5 @@
 #include "RHI/RenderBackend.hpp"
+#include "ShadowProjection.hpp"
 #include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/Core/Log.hpp>
@@ -10,6 +11,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -17,7 +19,34 @@
 namespace LuxEngine {
 namespace {
 constexpr size_t MaxSubmitVertices = 3 * 16384;
+constexpr size_t MaxSceneSubmissions = 65536;
+constexpr size_t MaxShadowOnlySubmissions = 16384;
 constexpr size_t MaxPointLights = 16;
+
+void ExtendBounds(Vec3& minimum, Vec3& maximum, const Vec3& position) {
+    minimum = {std::min(minimum.x, position.x), std::min(minimum.y, position.y),
+               std::min(minimum.z, position.z)};
+    maximum = {std::max(maximum.x, position.x), std::max(maximum.y, position.y),
+               std::max(maximum.z, position.z)};
+}
+
+bool OutsideClipVolume(const Mat4& clip, const Vec3& minimum, const Vec3& maximum) {
+    const Vec3 center = minimum * .5 + maximum * .5;
+    const Vec3 extent = maximum * .5 - minimum * .5;
+    const auto outside = [&](int row, double sign, double w) {
+        const auto& m = clip.elements;
+        const double x = sign * m[row] + w * m[3];
+        const double y = sign * m[row + 4] + w * m[7];
+        const double z = sign * m[row + 8] + w * m[11];
+        const double d = sign * m[row + 12] + w * m[15];
+        const double distance = x * center.x + y * center.y + z * center.z + d;
+        const double radius =
+            std::abs(x) * extent.x + std::abs(y) * extent.y + std::abs(z) * extent.z;
+        return distance + radius < -1e-6 * (std::abs(distance) + radius + 1);
+    };
+    return outside(0, 1, 1) || outside(0, -1, 1) || outside(1, 1, 1) || outside(1, -1, 1) ||
+           outside(2, 1, 0) || outside(2, -1, 1);
+}
 
 // Entry cap of the mesh and texture caches. The 256 MiB byte budgets do the real limiting; a
 // small cap (it was 32) made scenes with more unique assets evict and re-upload every frame (#35).
@@ -69,6 +98,7 @@ struct Renderer3D::Context::Impl {
     Render3DSettings settings;
     float exposure = 1;
     PerspectiveCamera sceneCamera;
+    std::optional<Mat4> shadowProjection;
     std::unique_ptr<Rhi::Scene3DRenderer> modern;
 
     struct CachedMesh {
@@ -184,6 +214,7 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
         if (index >= vertices.size())
             return false;
     const Vec3 origin = vertices.front().position;
+    Vec3 minimum, maximum;
     std::vector<RenderVertex> data;
     data.reserve(vertices.size());
     for (const auto& vertex : vertices) {
@@ -194,7 +225,9 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
             !std::isfinite(normal.z) || !std::isfinite(vertex.texCoords.x) ||
             !std::isfinite(vertex.texCoords.y))
             return false;
-        data.push_back({position - origin, {1, 1, 1, 1}, vertex.texCoords, normal});
+        const auto relative = position - origin;
+        ExtendBounds(minimum, maximum, relative);
+        data.push_back({relative, {1, 1, 1, 1}, vertex.texCoords, normal});
     }
     const auto vertexBytes = static_cast<uint32>(data.size() * sizeof(RenderVertex));
     const auto indexBytes = static_cast<uint32>(indices.size_bytes());
@@ -206,6 +239,8 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
         return false;
     }
     origin_ = origin;
+    minimum_ = minimum;
+    maximum_ = maximum;
     indexCount_ = static_cast<uint32>(indices.size());
     return true;
 }
@@ -225,6 +260,7 @@ bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
         vertices.size_bytes() / sizeof(Vertex3D) != vertices_.GetSize() / sizeof(RenderVertex))
         return false;
     const Vec3 origin = vertices.front().position;
+    Vec3 minimum, maximum;
     std::vector<RenderVertex> data;
     data.reserve(vertices.size());
     for (const auto& vertex : vertices) {
@@ -234,12 +270,17 @@ bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
             !std::isfinite(n.x) || !std::isfinite(n.y) || !std::isfinite(n.z) ||
             !std::isfinite(vertex.texCoords.x) || !std::isfinite(vertex.texCoords.y))
             return false;
-        data.push_back({p - origin, {1, 1, 1, 1}, vertex.texCoords, n});
+        const auto relative = p - origin;
+        ExtendBounds(minimum, maximum, relative);
+        data.push_back({relative, {1, 1, 1, 1}, vertex.texCoords, n});
     }
     const bool updated =
         vertices_.SetData(data.data(), static_cast<uint32>(data.size() * sizeof(RenderVertex)));
-    if (updated)
+    if (updated) {
         origin_ = origin;
+        minimum_ = minimum;
+        maximum_ = maximum;
+    }
     return updated;
 }
 
@@ -339,6 +380,7 @@ void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera, const Dire
     impl_->exposure = 1.0f;
     impl_->camera = camera.GetPosition();
     impl_->sceneCamera = camera;
+    impl_->shadowProjection.reset();
     if (impl_->modern)
         impl_->modern->ClearDraws();
     impl_->lastError.clear();
@@ -396,6 +438,8 @@ void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera,
     impl_->settings = settings;
     impl_->exposure = exposure;
     impl_->pbr = settings.mode == Render3DMode::Pbr;
+    if (impl_->pbr && settings.shadows)
+        impl_->shadowProjection = SceneShadowProjection(camera, settings);
     if (impl_->pbr && impl_->LockValidState()) {
         std::array<GpuPointLight, MaxPointLights> gpuPoints{};
         for (size_t i = 0; i < impl_->pointLights.size(); ++i) {
@@ -489,8 +533,24 @@ void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
         return;
     if (texture && !texture->BelongsTo(*impl_->device))
         return;
+    const auto model = transform * Mat4::Translate(mesh.origin_);
+    const auto relativeModel = Mat4::Translate(impl_->camera * -1) * model;
+    const bool shadowOnly =
+        OutsideClipVolume(impl_->viewProjection * relativeModel, mesh.minimum_, mesh.maximum_);
+    if (shadowOnly && (!impl_->shadowProjection || material.alphaMode == MaterialAlphaMode::Blend ||
+                       OutsideClipVolume(*impl_->shadowProjection * relativeModel, mesh.minimum_,
+                                         mesh.maximum_))) {
+        ++impl_->stats.meshCount;
+        return;
+    }
     if (!impl_->modern)
         impl_->modern = lockedState->CreateScene3DRenderer();
+    if (!impl_->modern || impl_->modern->DrawCount() >= MaxSceneSubmissions)
+        return;
+    if (shadowOnly && impl_->modern->DrawCount() >= MaxShadowOnlySubmissions) {
+        ++impl_->stats.meshCount;
+        return;
+    }
     auto normalSampling = material.textureSampling;
     normalSampling.normalMap = true;
     std::array<Ref<GpuTexture>, 4> maps;
@@ -506,13 +566,26 @@ void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
     const uint32 sampling =
         (material.textureSampling.addressMode == TextureAddressMode::Repeat ? 1u : 0u) |
         (material.textureSampling.anisotropic ? 2u : 0u);
-    if (!impl_->modern || impl_->modern->DrawCount() >= 65536 ||
-        !impl_->modern->AddDraw(
-            {mesh.vertices_.handle_, mesh.indices_.handle_, texture ? texture->handle_ : 0,
-             mesh.indexCount_, transform * Mat4::Translate(mesh.origin_), material.albedoColor,
-             material.metallic, material.roughness, static_cast<uint32>(material.alphaMode),
-             material.alphaCutoff, material.doubleSided, !impl_->pbr, normal, metallic, roughness,
-             occlusion, material.normalScale, material.occlusionStrength, sampling}))
+    if (!impl_->modern->AddDraw({mesh.vertices_.handle_,
+                                 mesh.indices_.handle_,
+                                 texture ? texture->handle_ : 0,
+                                 mesh.indexCount_,
+                                 model,
+                                 material.albedoColor,
+                                 material.metallic,
+                                 material.roughness,
+                                 static_cast<uint32>(material.alphaMode),
+                                 material.alphaCutoff,
+                                 material.doubleSided,
+                                 !impl_->pbr,
+                                 normal,
+                                 metallic,
+                                 roughness,
+                                 occlusion,
+                                 material.normalScale,
+                                 material.occlusionStrength,
+                                 sampling,
+                                 shadowOnly}))
         return;
     ++impl_->stats.meshCount;
     ++impl_->stats.drawCalls;
@@ -801,7 +874,7 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
         DrawMesh(CubePositions, CubeIndices, transform, placeholder);
         return false;
     }
-    const auto previous = impl_->stats.drawCalls;
+    const auto previous = impl_->stats.meshCount;
     auto drawable = material;
     if (!cached.hasUvs) {
         drawable.baseColorTexture.clear();
@@ -812,7 +885,7 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
     }
     impl_->frameMeshes.push_back(cached.mesh);
     DrawMesh(*cached.mesh, transform, drawable);
-    return impl_->stats.drawCalls > previous;
+    return impl_->stats.meshCount > previous;
 }
 
 const std::string& Renderer3D::Context::GetLastAssetError() const {

@@ -1,6 +1,7 @@
 #include "ScenePhysicsWorld.hpp"
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
+#include <LuxEngine/Scene/SceneManager.hpp>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -83,6 +84,9 @@ using AuthoredComponents =
                BoxCollider3DComponent, TilemapComponent, AnimationComponent, AnimatorComponent,
                ModelAnimationComponent, ScriptComponent, SceneReferenceComponent>;
 
+using SceneComponents = decltype(std::tuple_cat(
+    AuthoredComponents{}, std::tuple<HierarchyComponent, InstanceSourceComponent>{}));
+
 template <typename Tuple, typename Callback, size_t... Indices>
 void ForEachType(Callback&& callback, std::index_sequence<Indices...>) {
     (callback.template operator()<std::tuple_element_t<Indices, Tuple>>(), ...);
@@ -91,6 +95,15 @@ void ForEachType(Callback&& callback, std::index_sequence<Indices...>) {
 template <typename Tuple, typename Callback> void ForEachType(Callback&& callback) {
     ForEachType<Tuple>(std::forward<Callback>(callback),
                        std::make_index_sequence<std::tuple_size_v<Tuple>>{});
+}
+
+const std::unordered_set<std::type_index>& SceneComponentTypes() {
+    static const auto types = [] {
+        std::unordered_set<std::type_index> result;
+        ForEachType<SceneComponents>([&]<typename T> { result.emplace(typeid(T)); });
+        return result;
+    }();
+    return types;
 }
 } // namespace
 
@@ -123,11 +136,20 @@ uint32 Scene::GetParent(uint32 child) const {
 
 std::vector<uint32> Scene::GetChildren(uint32 parent) const {
     std::vector<uint32> children;
-    if (parent && !IsAlive(parent))
-        return children;
-    for (const uint32 id : entities_)
-        if (GetParent(id) == parent)
-            children.push_back(id);
+    if (parent) {
+        if (!IsAlive(parent))
+            return children;
+        const auto pool = pools_.find(typeid(HierarchyComponent));
+        if (pool != pools_.end())
+            for (const auto& [id, hierarchy] :
+                 static_cast<const Pool<HierarchyComponent>&>(*pool->second).values)
+                if (hierarchy.parent == parent && IsAlive(id))
+                    children.push_back(id);
+    } else {
+        for (const auto id : entities_)
+            if (!GetParent(id))
+                children.push_back(id);
+    }
     std::sort(children.begin(), children.end());
     return children;
 }
@@ -297,9 +319,7 @@ bool Scene::CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 ta
         return false;
     if (&source == this && sourceId == targetId)
         return true;
-    std::unordered_set<std::type_index> supported{typeid(HierarchyComponent),
-                                                  typeid(InstanceSourceComponent)};
-    ForEachType<AuthoredComponents>([&]<typename T> { supported.emplace(typeid(T)); });
+    const auto& supported = SceneComponentTypes();
     for (const auto& [type, pool] : source.pools_)
         if (pool->Contains(sourceId) && !supported.contains(type))
             return false;
@@ -361,6 +381,8 @@ bool Scene::ApplyState(Scene& prepared) {
                                settings_.physicsSubsteps != prepared.settings_.physicsSubsteps;
     pools_.swap(prepared.pools_);
     entities_.swap(prepared.entities_);
+    referenceIdentities_.swap(prepared.referenceIdentities_);
+    entitiesByReferenceIdentity_.swap(prepared.entitiesByReferenceIdentity_);
     std::swap(nextEntityId_, prepared.nextEntityId_);
     std::swap(settings_, prepared.settings_);
     for (const auto id : removedBodies)
@@ -388,9 +410,267 @@ bool Scene::ApplyState(Scene& prepared) {
     return true;
 }
 
+void Scene::StageRegion(Scene& staged, const std::vector<uint32>& roots,
+                        std::unordered_set<uint32>& anchors) const {
+    const std::unordered_set<uint32> selected(roots.begin(), roots.end());
+    std::unordered_map<uint32, std::vector<uint32>> children;
+    for (const auto id : GetComponentEntityIds<HierarchyComponent>())
+        children[GetParent(id)].push_back(id);
+    for (const auto root : roots) {
+        std::vector<uint32> chain{root};
+        auto parent = GetParent(root);
+        while (parent && !selected.contains(parent)) {
+            if (!IsAlive(parent) || chain.size() >= entities_.size())
+                throw std::logic_error("Invalid scene hierarchy");
+            chain.push_back(parent);
+            parent = GetParent(parent);
+        }
+        if (!parent)
+            anchors.insert(chain.begin(), chain.end());
+    }
+    auto pending = roots;
+    std::unordered_set<uint32> visited;
+    while (!pending.empty()) {
+        const auto id = pending.back();
+        pending.pop_back();
+        if (!visited.insert(id).second)
+            continue;
+        if (const auto found = children.find(id); found != children.end())
+            pending.insert(pending.end(), found->second.begin(), found->second.end());
+    }
+    visited.insert(anchors.begin(), anchors.end());
+    staged.entities_ = std::move(visited);
+    for (const auto id : staged.entities_)
+        ForEachType<SceneComponents>([&]<typename T> {
+            if (const auto* component = TryGetComponent<T>(id))
+                staged.AddComponent<T>(id, *component);
+        });
+    for (const auto id : staged.entities_)
+        if (const auto identity = referenceIdentities_.find(id);
+            identity != referenceIdentities_.end())
+            staged.SetReferenceIdentity(id, identity->second);
+    staged.nextEntityId_ = nextEntityId_;
+    staged.settings_ = settings_;
+    staged.sourcePath_ = sourcePath_;
+    staged.RepairReferenceLinks();
+}
+
+Scene::RegionReferences Scene::PrepareRegionReferences(Scene& staged,
+                                                       const std::unordered_set<uint32>& affected) {
+    RegionReferences references;
+    const auto scripts = pools_.find(typeid(ScriptComponent));
+    if (scripts == pools_.end())
+        return references;
+
+    const auto identityFor = [&](uint32 target) {
+        if (const auto existing = referenceIdentities_.find(target);
+            existing != referenceIdentities_.end())
+            return existing->second;
+        if (const auto prepared = references.identities.find(target);
+            prepared != references.identities.end())
+            return prepared->second;
+        uint64 identity;
+        do {
+            identity = NewReferenceIdentity();
+        } while (entitiesByReferenceIdentity_.contains(identity) ||
+                 references.entitiesByIdentity.contains(identity));
+        references.identities.emplace(target, identity);
+        references.entitiesByIdentity.emplace(identity, target);
+        if (staged.IsAlive(target) && !staged.SetReferenceIdentity(target, identity))
+            throw std::runtime_error("씬 스트리밍 참조 ID가 중복되었습니다.");
+        return identity;
+    };
+
+    auto& values = static_cast<Pool<ScriptComponent>&>(*scripts->second).values;
+    for (auto& [id, script] : values) {
+        auto* stagedScript = staged.TryGetComponent<ScriptComponent>(id);
+        for (auto& [name, value] : script.fields) {
+            auto* reference = std::get_if<ScriptEntityReference>(&value);
+            if (!reference)
+                continue;
+            auto updated = *reference;
+            if (updated.identity) {
+                if (const auto resolved = ResolveScriptEntityReference(updated))
+                    updated.id = resolved;
+            } else if (IsAlive(updated.id)) {
+                updated.identity = identityFor(updated.id);
+            }
+            if (updated == *reference)
+                continue;
+            if (stagedScript)
+                stagedScript->fields.at(name) = updated;
+            if (!affected.contains(id))
+                references.fields.emplace_back(reference, updated);
+        }
+    }
+    std::erase_if(references.identities, [&](const auto& entry) {
+        if (!affected.contains(entry.first))
+            return false;
+        references.entitiesByIdentity.erase(entry.second);
+        return true;
+    });
+    return references;
+}
+
+bool Scene::CommitRegion(Scene& staged, const std::unordered_set<uint32>& anchors,
+                         const std::unordered_set<uint32>& affected, RegionReferences& references) {
+    const auto inRegion = [&](uint32 id) { return !anchors.contains(id); };
+    const auto regionSize = staged.entities_.size() - anchors.size();
+    const auto newSize = entities_.size() - affected.size() + regionSize;
+    if (newSize > 100000 || !staged.ValidateForSerialization())
+        return false;
+
+    const auto& supported = SceneComponentTypes();
+    for (const auto& [type, pool] : pools_)
+        if (!pool->Empty() && !supported.contains(type))
+            for (const auto id : affected)
+                if (!staged.IsAlive(id) && pool->Contains(id))
+                    throw std::runtime_error(
+                        "직렬화할 수 없는 컴포넌트가 있는 구역을 제거할 수 없습니다.");
+
+    std::vector<std::pair<SceneReferenceComponent*, SceneReferenceComponent*>> changedAnchors;
+    unsigned referenceCount = 0, inheritanceCount = 0;
+    size_t referenceBytes = 0;
+    const auto countReference = [&](const Scene& owner, uint32 id,
+                                    const SceneReferenceComponent& reference) {
+        ++referenceCount;
+        referenceBytes +=
+            reference.path.size() + reference.baseline.size() + reference.suspended.size();
+        if (reference.mode == SceneReferenceMode::Inherited) {
+            for (auto parent = owner.GetParent(id); parent; parent = owner.GetParent(parent))
+                if (owner.HasComponent<SceneReferenceComponent>(parent))
+                    return;
+            ++inheritanceCount;
+        }
+    };
+    for (const auto id : GetComponentEntityIds<SceneReferenceComponent>())
+        if (!affected.contains(id) && !anchors.contains(id))
+            countReference(*this, id, GetComponent<SceneReferenceComponent>(id));
+    for (const auto id : staged.GetComponentEntityIds<SceneReferenceComponent>()) {
+        auto& reference = staged.GetComponent<SceneReferenceComponent>(id);
+        countReference(staged, id, reference);
+        if (auto* current = TryGetComponent<SceneReferenceComponent>(id);
+            current && !inRegion(id)) {
+            std::unordered_set<uint32> sources;
+            for (const auto& [source, local] : reference.entityMap)
+                sources.insert(source);
+            for (const auto& [source, local] : current->entityMap)
+                if (!affected.contains(local) && sources.insert(source).second)
+                    reference.entityMap.emplace_back(source, local);
+            std::sort(reference.entityMap.begin(), reference.entityMap.end());
+            changedAnchors.emplace_back(current, &reference);
+        }
+    }
+    if (referenceCount > 128 || inheritanceCount > 1 || referenceBytes > 64u * 1024u * 1024u)
+        return false;
+
+    const auto reserveFor = [](auto& container, size_t size) {
+        if (size > static_cast<double>(container.bucket_count()) * container.max_load_factor())
+            container.reserve(size);
+    };
+    size_t incomingIdentities = references.identities.size();
+    for (const auto& [id, identity] : staged.referenceIdentities_) {
+        if (!inRegion(id))
+            continue;
+        if (const auto current = entitiesByReferenceIdentity_.find(identity);
+            current != entitiesByReferenceIdentity_.end() && !affected.contains(current->second))
+            return false;
+        if (references.entitiesByIdentity.contains(identity))
+            return false;
+        ++incomingIdentities;
+    }
+    reserveFor(referenceIdentities_, referenceIdentities_.size() + incomingIdentities);
+    reserveFor(entitiesByReferenceIdentity_,
+               entitiesByReferenceIdentity_.size() + incomingIdentities);
+    reserveFor(entities_, newSize);
+    ForEachType<SceneComponents>([&]<typename T> {
+        const auto found = staged.pools_.find(typeid(T));
+        if (found == staged.pools_.end())
+            return;
+        const auto& values = static_cast<const Pool<T>&>(*found->second).values;
+        const auto added = std::count_if(values.begin(), values.end(), [&](const auto& entry) {
+            return inRegion(entry.first) && !affected.contains(entry.first);
+        });
+        auto& destination = GetPool<T>().values;
+        reserveFor(destination, destination.size() + added);
+    });
+
+    for (const auto id : affected) {
+        EraseReferenceIdentity(id);
+        if (!staged.IsAlive(id)) {
+            RemovePhysicsBody(id);
+            for (auto& [type, pool] : pools_)
+                pool->Erase(id);
+            entities_.erase(id);
+        } else {
+            const auto uses2D = [id](const Scene& scene) {
+                return scene.HasComponent<BoxCollider2DComponent>(id) &&
+                       (scene.HasComponent<Rigidbody2DComponent>(id) ||
+                        !scene.HasComponent<BoxCollider3DComponent>(id));
+            };
+            if (!staged.HasComponent<TransformComponent>(id) || uses2D(*this) != uses2D(staged) ||
+                (!uses2D(staged) && !staged.HasComponent<BoxCollider3DComponent>(id))) {
+                RemovePhysicsBody(id);
+                if (auto* body = staged.TryGetComponent<Rigidbody2DComponent>(id))
+                    body->isGrounded = false;
+            }
+        }
+    }
+    for (auto [current, replacement] : changedAnchors)
+        *current = std::move(*replacement);
+    ForEachType<SceneComponents>([&]<typename T> {
+        const auto destination = pools_.find(typeid(T));
+        if (destination == pools_.end())
+            return;
+        auto& values = static_cast<Pool<T>&>(*destination->second).values;
+        for (const auto id : affected)
+            values.erase(id);
+        const auto found = staged.pools_.find(typeid(T));
+        if (found == staged.pools_.end())
+            return;
+        auto& incoming = static_cast<Pool<T>&>(*found->second).values;
+        for (auto it = incoming.begin(); it != incoming.end();) {
+            const auto current = it++;
+            if (inRegion(current->first))
+                values.insert(incoming.extract(current));
+        }
+    });
+    for (auto it = staged.entities_.begin(); it != staged.entities_.end();) {
+        const auto current = it++;
+        if (inRegion(*current) && !affected.contains(*current))
+            entities_.insert(staged.entities_.extract(current));
+    }
+    for (auto it = staged.referenceIdentities_.begin(); it != staged.referenceIdentities_.end();) {
+        const auto current = it++;
+        if (inRegion(current->first)) {
+            entitiesByReferenceIdentity_.insert(
+                staged.entitiesByReferenceIdentity_.extract(current->second));
+            referenceIdentities_.insert(staged.referenceIdentities_.extract(current));
+        }
+    }
+    entitiesByReferenceIdentity_.merge(references.entitiesByIdentity);
+    referenceIdentities_.merge(references.identities);
+    for (const auto& [field, updated] : references.fields)
+        *field = updated;
+    RefreshScriptReferenceIds();
+    nextEntityId_ = staged.nextEntityId_;
+    if (settings_.fixedStep != staged.settings_.fixedStep ||
+        settings_.physicsSubsteps != staged.settings_.physicsSubsteps)
+        physicsAccumulator_ = 0;
+    settings_ = std::move(staged.settings_);
+    return true;
+}
+
 std::unordered_map<uint32, uint32> Scene::ImportEntities(const Scene& source,
                                                          const std::vector<uint32>& roots,
                                                          uint32 parent, bool preserveIds) {
+    return ImportEntitiesInternal(source, roots, parent, preserveIds, false);
+}
+
+std::unordered_map<uint32, uint32> Scene::ImportEntitiesInternal(const Scene& source,
+                                                                 const std::vector<uint32>& roots,
+                                                                 uint32 parent, bool preserveIds,
+                                                                 bool restoreLocal) {
     std::unordered_map<uint32, uint32> mapping;
     if (preserveIds && (!entities_.empty() || parent != 0))
         return mapping;
@@ -442,7 +722,7 @@ std::unordered_map<uint32, uint32> Scene::ImportEntities(const Scene& source,
             hierarchy.parent = parentIncluded ? mapping.at(originalParent) : parent;
             if (hierarchy.parent || hierarchy.group || source.HasComponent<HierarchyComponent>(id))
                 AddComponent<HierarchyComponent>(destination, hierarchy);
-            if (!parentIncluded && originalParent &&
+            if (!restoreLocal && !parentIncluded && originalParent &&
                 HasComponent<TransformComponent>(destination)) {
                 TransformComponent world;
                 if (!Decompose(source.GetWorldMatrix(id), world, true))
@@ -455,12 +735,29 @@ std::unordered_map<uint32, uint32> Scene::ImportEntities(const Scene& source,
                         destination, InstanceSourceComponent{mapping.at(origin->instanceRoot),
                                                              origin->sourceEntity});
         }
+        std::unordered_map<uint64, uint64> identities;
+        if (!restoreLocal) {
+            for (const auto& [old, local] : mapping)
+                if (auto* reference = TryGetComponent<SceneReferenceComponent>(local))
+                    SceneManager::RebaseSuspended(*this, *reference, old, mapping, &identities);
+            for (const auto& [old, local] : mapping)
+                if (const auto sourceIdentity = source.referenceIdentities_.find(old);
+                    sourceIdentity != source.referenceIdentities_.end())
+                    if (const auto identity = identities.find(sourceIdentity->second);
+                        identity != identities.end() &&
+                        !SetReferenceIdentity(local, identity->second))
+                        throw std::runtime_error("Duplicate imported reference identity");
+        }
         for (const auto id : created)
             if (auto* script = TryGetComponent<ScriptComponent>(id))
                 for (auto& [name, value] : script->fields)
-                    if (auto* reference = std::get_if<ScriptEntityReference>(&value))
-                        reference->id =
-                            mapping.contains(reference->id) ? mapping.at(reference->id) : 0;
+                    if (auto* reference = std::get_if<ScriptEntityReference>(&value)) {
+                        const auto target =
+                            mapping.find(source.ResolveScriptEntityReference(*reference));
+                        const auto identity = identities.find(reference->identity);
+                        *reference = {target == mapping.end() ? 0 : target->second,
+                                      identity == identities.end() ? 0 : identity->second};
+                    }
         for (const auto id : created)
             if (auto* reference = TryGetComponent<SceneReferenceComponent>(id)) {
                 std::erase_if(reference->entityMap,
@@ -470,6 +767,7 @@ std::unordered_map<uint32, uint32> Scene::ImportEntities(const Scene& source,
             }
     } catch (...) {
         for (const auto id : created) {
+            EraseReferenceIdentity(id);
             for (auto& [type, pool] : pools_)
                 pool->Erase(id);
             entities_.erase(id);
