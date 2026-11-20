@@ -420,12 +420,8 @@ bool ScriptRuntime::PrepareInstances() {
     }
     for (const uint32 entity : scene.GetComponentEntityIds<ScriptComponent>()) {
         const auto& component = scene.GetComponent<ScriptComponent>(entity);
-        if (!component.enabled || impl_->instances.contains(entity))
+        if (!component.enabled || component.typeName.empty() || impl_->instances.contains(entity))
             continue;
-        if (component.typeName.empty()) {
-            impl_->error = "C# 스크립트 클래스 이름이 비어 있습니다.";
-            return false;
-        }
         std::string fields;
         if (!SerializeRuntimeFields(scene, component.fields, fields)) {
             impl_->error = "Invalid serialized C# fields";

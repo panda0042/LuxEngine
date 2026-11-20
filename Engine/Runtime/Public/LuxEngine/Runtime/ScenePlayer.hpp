@@ -94,6 +94,7 @@ private:
     PerspectiveCamera camera3D_;
     bool perspective_ = false;
     ScenePlayerView view_;
+    double fittedAspect_ = 0;
     bool loaded_ = false;
     bool runtimeFailed_ = false;
     uint32 frames_ = 0;
@@ -103,6 +104,7 @@ private:
 
 // Computes a view that frames every entity with a transform; used when no view is given.
 ScenePlayerView FitSceneView(Scene& scene);
+ScenePlayerView FitSceneView(Scene& scene, double aspect);
 Vec3 ResolveSceneStreamingObserver(Scene& scene, const ScenePlayerView& view, uint32 playerId = 0);
 
 } // namespace LuxEngine

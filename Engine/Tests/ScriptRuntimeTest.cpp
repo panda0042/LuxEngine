@@ -123,6 +123,7 @@ int main(int argc, char** argv) {
         entity.AddComponent<CustomComponent>(42);
         Check(entity.GetComponent<CustomComponent>().value == 42,
               "Custom ECS types were restricted");
+        scene.CreateEntity("Unassigned script").AddComponent<ScriptComponent>();
         ScriptRuntime runtime;
         ScriptRuntimeConfig config;
         config.assemblyPath = argv[1];

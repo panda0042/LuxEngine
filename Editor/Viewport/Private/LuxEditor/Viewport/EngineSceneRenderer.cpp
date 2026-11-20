@@ -168,7 +168,7 @@ void EngineSceneRenderer::ClearMeshPreview() {
 GameViewCamera ResolveGameViewCamera(LuxEngine::Scene& scene, int width, int height) {
     const double aspect = static_cast<double>(std::max(1, width)) / std::max(1, height);
     const auto cameras =
-        LuxEngine::ResolveScenePlayerCameras(scene, aspect, LuxEngine::FitSceneView(scene));
+        LuxEngine::ResolveScenePlayerCameras(scene, aspect, LuxEngine::FitSceneView(scene, aspect));
     return {cameras.perspective, cameras.camera2D, cameras.camera3D};
 }
 
