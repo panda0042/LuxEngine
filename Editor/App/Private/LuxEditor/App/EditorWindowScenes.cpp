@@ -693,7 +693,7 @@ void EditorWindow::ConfigureSceneStreaming() {
     LuxUI::Dialog dialog(this);
     dialog.setWindowTitle(LUX_UI_TEXT("씬 스트리밍"));
     auto* layout = new LuxUI::FormLayout(&dialog);
-    auto number = [&](const LuxUI::String& label, float value, float minimum, float maximum) {
+    auto number = [&](const LuxUI::String& label, double value, double minimum, double maximum) {
         auto* field = new LuxUI::DoubleSpinBox(&dialog);
         field->setDecimals(2);
         field->setRange(minimum, maximum);
@@ -705,18 +705,20 @@ void EditorWindow::ConfigureSceneStreaming() {
     enabled->setChecked(reference.streamLoadRadius > 0);
     layout->addRow(enabled);
     const auto position = document_.GetScene().GetWorldTransform(selected.GetId()).position;
-    auto* x = number(LUX_UI_TEXT("중심 X"),
-                     reference.streamLoadRadius > 0 ? reference.streamCenter.x : position.x,
-                     -100000, 100000);
-    auto* y = number(LUX_UI_TEXT("중심 Y"),
-                     reference.streamLoadRadius > 0 ? reference.streamCenter.y : position.y,
-                     -100000, 100000);
+    auto* x =
+        number(LUX_UI_TEXT("중심 X"),
+               reference.streamLoadRadius > 0 ? reference.streamCenter.x : position.x, -1e15, 1e15);
+    auto* y =
+        number(LUX_UI_TEXT("중심 Y"),
+               reference.streamLoadRadius > 0 ? reference.streamCenter.y : position.y, -1e15, 1e15);
     auto* load =
         number(LUX_UI_TEXT("로드 반경"),
-               reference.streamLoadRadius > 0 ? reference.streamLoadRadius : 30, .1f, 100000);
+               reference.streamLoadRadius > 0 ? reference.streamLoadRadius : 30, .01, 1000000);
     auto* unload =
         number(LUX_UI_TEXT("언로드 반경"),
-               reference.streamUnloadRadius > 0 ? reference.streamUnloadRadius : 40, .1f, 100000);
+               reference.streamUnloadRadius > 0 ? reference.streamUnloadRadius : 40, .01, 1000000);
+    const auto initialX = x->value(), initialY = y->value();
+    const auto initialLoad = load->value(), initialUnload = unload->value();
     auto* buttons = new LuxUI::DialogButtonBox(
         LuxUI::DialogButtonBox::Ok | LuxUI::DialogButtonBox::Cancel, &dialog);
     layout->addRow(buttons);
@@ -725,9 +727,16 @@ void EditorWindow::ConfigureSceneStreaming() {
     if (dialog.exec() != LuxUI::Dialog::Accepted)
         return;
     const auto id = selected.GetId();
-    const LuxEngine::Vec2 center{static_cast<float>(x->value()), static_cast<float>(y->value())};
-    const float radius = enabled->isChecked() ? static_cast<float>(load->value()) : 0;
-    const float outer = enabled->isChecked() ? static_cast<float>(unload->value()) : 0;
+    const bool wasEnabled = reference.streamLoadRadius > 0;
+    const auto picked = [wasEnabled](const auto* field, double initial, double original) {
+        return wasEnabled && field->value() == initial ? original : field->value();
+    };
+    const LuxEngine::Vec2 center{picked(x, initialX, reference.streamCenter.x),
+                                 picked(y, initialY, reference.streamCenter.y)};
+    const float radius =
+        enabled->isChecked() ? picked(load, initialLoad, reference.streamLoadRadius) : 0;
+    const float outer =
+        enabled->isChecked() ? picked(unload, initialUnload, reference.streamUnloadRadius) : 0;
     RecordEdit(LUX_UI_TEXT("씬 스트리밍 설정"), [this, id, center, radius, outer] {
         std::string error;
         if (!sceneManager_.ConfigureStreaming(document_.GetScene(), id, center, radius, outer,
@@ -746,20 +755,17 @@ void EditorWindow::TickSceneStreaming() {
     canvas_->GetView(x, y, height);
     bool changed = false;
     std::string error;
-    if (!sceneManager_.UpdateStreaming(document_.GetScene(),
-                                       {static_cast<float>(x), static_cast<float>(y)}, error,
-                                       &changed)) {
+    if (!sceneManager_.UpdateStreaming(document_.GetScene(), {x, y}, error, &changed)) {
         // A failing source is reported once for its current configuration, never once per frame.
         if (Q(error) != property("streamingError").toString()) {
             setProperty("streamingError", Q(error));
             Log(Q(error), true);
         }
-        return;
-    }
-    if (changed) {
+    } else if (changed) {
         setProperty("streamingError", LuxUI::String());
-        RefreshAll();
     }
+    if (changed)
+        RefreshAll();
 }
 
 void EditorWindow::ReparentSelection(const std::vector<LuxEngine::uint32>& children,

@@ -12,8 +12,15 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <zip.h>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 using namespace LuxEditor;
@@ -66,6 +73,154 @@ bool Run(const fs::path& program, const LuxUI::StringList& arguments,
 void PrintTail(const std::string& text) {
     constexpr size_t Limit = 6000;
     std::cerr << (text.size() > Limit ? text.substr(text.size() - Limit) : text) << '\n';
+}
+
+bool CheckContentFailureKeepsPrevious(const fs::path& projectDir, const BuildTools& tools) {
+    const auto fixture = projectDir / ".lux/content-failure";
+    const auto source = fixture / "source";
+    const auto content = fixture / "content";
+    const auto managed = fixture / "managed";
+    const auto manifest = fixture / "manifest.txt";
+    const auto read = [](const fs::path& path) {
+        std::ifstream input(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(input), {});
+    };
+    fs::create_directories(source / "Assets");
+    fs::create_directories(managed);
+    std::ofstream(source / "project.luxproject") << "project";
+    std::ofstream(source / "Assets/stale.txt") << "previous build";
+    const auto option = [](const char* name, const fs::path& path) {
+        return LuxUI::String::fromUtf8(std::string("-D") + name + "=" + GenericPathUtf8(path));
+    };
+    const LuxUI::StringList arguments{option("SOURCE_ROOT", source),
+                                      option("PROJECT_MANIFEST", source / "project.luxproject"),
+                                      option("CONTENT_ROOT", content),
+                                      option("MANAGED_ROOT", managed),
+                                      option("MANIFEST", manifest),
+                                      LUX_UI_TEXT("-P"),
+                                      ToQString(projectDir / "SyncContent.cmake")};
+    std::string output;
+    if (!Run(tools.cmake, arguments, fixture, 30000, output)) {
+        PrintTail(output);
+        return false;
+    }
+    fs::remove(source / "Assets/stale.txt");
+    std::ofstream(source / "Assets/blocked.txt") << "new asset";
+    fs::create_directory(content / "Assets/blocked.txt");
+    const auto userFile = content / "Assets/blocked.txt/local.txt";
+    std::ofstream(userFile) << "local file";
+    if (Run(tools.cmake, arguments, fixture, 30000, output) ||
+        output.find("Unmanaged directory blocks generated content") == std::string::npos ||
+        !fs::is_regular_file(content / "Assets/stale.txt") || !fs::is_regular_file(userFile)) {
+        PrintTail(output);
+        return false;
+    }
+    fs::rename(content / "Assets/blocked.txt", fixture / "relocated-local-directory");
+    std::ofstream(content / "Assets/blocked.txt") << "unmanaged file";
+    const auto beforeBlockedFile = read(manifest);
+    if (Run(tools.cmake, arguments, fixture, 30000, output) ||
+        output.find("Unmanaged file blocks generated content") == std::string::npos ||
+        read(content / "Assets/blocked.txt") != "unmanaged file" ||
+        read(manifest) != beforeBlockedFile || !fs::is_regular_file(content / "Assets/stale.txt")) {
+        PrintTail(output);
+        return false;
+    }
+    fs::rename(content / "Assets/blocked.txt", fixture / "relocated-local-file");
+    std::ofstream(source / "Assets/adopted.txt") << "unchanged";
+    std::ofstream(content / "Assets/adopted.txt") << "unchanged";
+    if (!Run(tools.cmake, arguments, fixture, 30000, output)) {
+        PrintTail(output);
+        return false;
+    }
+    if (!fs::is_regular_file(content / "Assets/blocked.txt") ||
+        fs::exists(content / "Assets/stale.txt") ||
+        !fs::is_regular_file(fixture / "relocated-local-directory/local.txt") ||
+        read(fixture / "relocated-local-file") != "unmanaged file" ||
+        read(manifest).find("Assets/adopted.txt") == std::string::npos)
+        return false;
+    fs::rename(source / "Assets/blocked.txt", fixture / "previous-name");
+    std::ofstream(source / "Assets/BLOCKED.txt") << "new case";
+    if (!Run(tools.cmake, arguments, fixture, 30000, output)) {
+        PrintTail(output);
+        return false;
+    }
+    bool caseRenamed = false;
+    for (const auto& entry : fs::directory_iterator(content / "Assets"))
+        if (entry.path().filename() == "BLOCKED.txt" && entry.is_regular_file())
+            caseRenamed = true;
+    if (!caseRenamed)
+        return false;
+
+    const auto sourceAssets = source / "Assets";
+    const auto outputAssets = content / "Assets";
+    std::ofstream(sourceAssets / "a-stale.txt") << "first previous file";
+    std::ofstream(sourceAssets / "z-stale.txt") << "locked previous file";
+    std::ofstream(sourceAssets / "replace.txt") << "before overwrite";
+    std::ofstream(sourceAssets / "shape") << "before file to directory";
+    fs::create_directory(sourceAssets / "reverse");
+    std::ofstream(sourceAssets / "reverse/child.txt") << "before directory to file";
+    std::ofstream(outputAssets / "keep.txt") << "unmanaged output";
+    if (!Run(tools.cmake, arguments, fixture, 30000, output)) {
+        PrintTail(output);
+        return false;
+    }
+    const auto oldManifest = read(manifest);
+    fs::remove(sourceAssets / "a-stale.txt");
+    fs::remove(sourceAssets / "z-stale.txt");
+    std::ofstream(sourceAssets / "replace.txt") << "after overwrite";
+    fs::remove(sourceAssets / "shape");
+    fs::create_directory(sourceAssets / "shape");
+    std::ofstream(sourceAssets / "shape/child.txt") << "after file to directory";
+    fs::remove(sourceAssets / "reverse/child.txt");
+    fs::remove(sourceAssets / "reverse");
+    std::ofstream(sourceAssets / "reverse") << "after directory to file";
+
+#ifdef _WIN32
+    for (const auto& lockedPath :
+         {outputAssets / "z-stale.txt", outputAssets / "replace.txt", manifest}) {
+        const auto handle = CreateFileW(lockedPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            std::cerr << "Could not lock generated content fixture\n";
+            return false;
+        }
+        const bool succeeded = Run(tools.cmake, arguments, fixture, 30000, output);
+        CloseHandle(handle);
+        if (succeeded || output.find("Previous generated content restored") == std::string::npos ||
+            read(manifest) != oldManifest ||
+            read(outputAssets / "a-stale.txt") != "first previous file" ||
+            read(outputAssets / "z-stale.txt") != "locked previous file" ||
+            read(outputAssets / "replace.txt") != "before overwrite" ||
+            read(outputAssets / "shape") != "before file to directory" ||
+            read(outputAssets / "reverse/child.txt") != "before directory to file" ||
+            read(outputAssets / "keep.txt") != "unmanaged output") {
+            std::cerr << "Generated content rollback failed for " << PathUtf8(lockedPath) << '\n';
+            PrintTail(output);
+            return false;
+        }
+    }
+#endif
+
+    if (!Run(tools.cmake, arguments, fixture, 30000, output)) {
+        PrintTail(output);
+        return false;
+    }
+    if (read(manifest) == oldManifest || fs::exists(outputAssets / "a-stale.txt") ||
+        fs::exists(outputAssets / "z-stale.txt") ||
+        read(outputAssets / "replace.txt") != "after overwrite" ||
+        read(outputAssets / "shape/child.txt") != "after file to directory" ||
+        read(outputAssets / "reverse") != "after directory to file" ||
+        read(outputAssets / "keep.txt") != "unmanaged output")
+        return false;
+
+    const auto recovery = fixture / "content.lux-sync.dir";
+    fs::create_directory(recovery);
+    std::ofstream(recovery / "previous.txt") << "interrupted backup";
+    const auto committedManifest = read(manifest);
+    return !Run(tools.cmake, arguments, fixture, 30000, output) &&
+           output.find("Unfinished content synchronization") != std::string::npos &&
+           read(recovery / "previous.txt") == "interrupted backup" &&
+           read(manifest) == committedManifest;
 }
 
 bool BuildRunAndPackage(const fs::path& projectDir, BuildConfiguration configuration,
@@ -129,10 +284,13 @@ bool BuildRunAndPackage(const fs::path& projectDir, BuildConfiguration configura
     const bool hasEnvironment =
         packaged &&
         zip_name_locate(packaged, "LuxGame/Content/Assets/한글 환경.HdR", ZIP_FL_ENC_UTF_8) >= 0;
+    const bool hasAnimation =
+        packaged &&
+        zip_name_locate(packaged, "LuxGame/Content/Animations/Move.luxanim", ZIP_FL_ENC_UTF_8) >= 0;
     if (packaged)
         zip_close(packaged);
-    if (!hasMesh || !hasTexture || !hasEnvironment) {
-        std::cerr << "distribution ZIP is missing its OBJ mesh\n";
+    if (!hasMesh || !hasTexture || !hasEnvironment || !hasAnimation) {
+        std::cerr << "distribution ZIP is missing a referenced asset\n";
         return false;
     }
     const auto unpack = projectDir / ".lux" / (std::string("package-check-") + config);
@@ -203,7 +361,17 @@ int main(int argc, char* argv[]) {
     // The selected start scene must survive building and packaging even outside Scenes/.
     // Removing the default catches a runner that silently keeps using Scenes/Main.lux.
     LuxEngine::Scene alternate;
-    alternate.CreateEntity("플레이어"); // A named player without an optional rigidbody is valid.
+    auto player = alternate.CreateEntity("플레이어");
+    const auto animation = root / "Animations/Move.luxanim";
+    fs::create_directories(animation.parent_path());
+    LuxEngine::AnimationClip clip;
+    clip.AddKeyframe({0, {0, 0, 0}});
+    clip.AddKeyframe({1, {1, 0, 0}});
+    if (!clip.Save(PathUtf8(animation), error)) {
+        std::cerr << "animation fixture failed: " << error << '\n';
+        return 1;
+    }
+    player.AddComponent<LuxEngine::AnimationComponent>().assetPath = "../Animations/Move.luxanim";
     const auto meshFile = root / "Assets" / PathFromUtf8("한글 메시.obj");
     fs::create_directories(meshFile.parent_path());
     {
@@ -244,7 +412,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "default scene removal failed: " << ec.message() << '\n';
         return 1;
     }
-    bool ok = BuildRunAndPackage(root, BuildConfiguration::Debug, tools);
+    bool ok = CheckContentFailureKeepsPrevious(root, tools) &&
+              BuildRunAndPackage(root, BuildConfiguration::Debug, tools);
     ok = BuildRunAndPackage(root, BuildConfiguration::Release, tools) && ok;
     if (ok)
         fs::remove_all(root, ec);

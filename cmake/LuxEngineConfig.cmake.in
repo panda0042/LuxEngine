@@ -85,12 +85,15 @@ function(lux_copy_runtime target)
             endif()
         endforeach()
     endif()
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/project.luxproject" OR
-       EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/project.luxproj")
+    if(NOT "NO_PROJECT_CONTENT" IN_LIST ARGN AND
+       (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/project.luxproject" OR
+        EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/project.luxproj"))
         file(GLOB_RECURSE _lux_mesh_files CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
             "${CMAKE_CURRENT_SOURCE_DIR}/*.[oO][bB][jJ]"
             "${CMAKE_CURRENT_SOURCE_DIR}/*.[fF][bB][xX]"
             "${CMAKE_CURRENT_SOURCE_DIR}/*.[lL][uU][xX][pP][rR][eE][fF][aA][bB]"
+            "${CMAKE_CURRENT_SOURCE_DIR}/*.[lL][uU][xX][aA][nN][iI][mM]"
+            "${CMAKE_CURRENT_SOURCE_DIR}/*.[lL][uU][xX][aA][nN][iI][mM][aA][tT][oO][rR]"
             "${CMAKE_CURRENT_SOURCE_DIR}/*.[pP][nN][gG]"
             "${CMAKE_CURRENT_SOURCE_DIR}/*.[jJ][pP][gG]"
             "${CMAKE_CURRENT_SOURCE_DIR}/*.[jJ][pP][eE][gG]"
