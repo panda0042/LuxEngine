@@ -66,3 +66,92 @@ function Copy-LuxWindowsRuntime {
     }
     Assert-LuxWindowsRuntime -Directory $Destination
 }
+
+function New-LuxPackageOutput {
+    param([string]$OutputDir, [string]$Name)
+
+    if ($Name -notmatch '\A[A-Za-z0-9][A-Za-z0-9._+-]*\z') {
+        throw "Invalid package name: $Name"
+    }
+    $directory = [IO.Path]::GetFullPath((Join-Path $OutputDir '.'))
+    [IO.Directory]::CreateDirectory($directory) | Out-Null
+    $suffix = [guid]::NewGuid().ToString('N')
+    $package = @{
+        Directory = $directory
+        Staging = Join-Path $directory "$Name.writing-$suffix"
+        Zip = Join-Path $directory "$Name.writing-$suffix.zip"
+        PublishedStaging = Join-Path $directory $Name
+        PublishedZip = Join-Path $directory "$Name.zip"
+        PreviousStaging = Join-Path $directory "$Name.previous-$suffix"
+        Lock = Join-Path $directory ".$Name.lock"
+    }
+    [IO.Directory]::CreateDirectory($package.Staging) | Out-Null
+    return $package
+}
+
+function Remove-LuxPackageDirectory {
+    param([string]$Path, [string]$OutputDir)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $entry = Get-Item -LiteralPath $Path -Force
+    if ([IO.Path]::GetDirectoryName($entry.FullName) -ne $OutputDir -or
+        ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "Refusing to remove package directory: $Path"
+    }
+    Remove-Item -LiteralPath $entry.FullName -Recurse -Force
+}
+
+function Publish-LuxPackageOutput {
+    param([hashtable]$Package)
+
+    $lock = [IO.File]::Open($Package.Lock, 'OpenOrCreate', 'ReadWrite', 'None')
+    $oldMoved = $false
+    $newMoved = $false
+    try {
+        if (Test-Path -LiteralPath $Package.PublishedZip) {
+            $existingZip = Get-Item -LiteralPath $Package.PublishedZip -Force
+            if ($existingZip.PSIsContainer -or
+                ($existingZip.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw "Cannot replace package ZIP: $($Package.PublishedZip)"
+            }
+        }
+        if (Test-Path -LiteralPath $Package.PublishedStaging) {
+            $old = Get-Item -LiteralPath $Package.PublishedStaging -Force
+            if (-not $old.PSIsContainer -or ($old.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw "Cannot replace package directory: $($Package.PublishedStaging)"
+            }
+            [IO.Directory]::Move($Package.PublishedStaging, $Package.PreviousStaging)
+            $oldMoved = $true
+        }
+        [IO.Directory]::Move($Package.Staging, $Package.PublishedStaging)
+        $newMoved = $true
+        if ([IO.File]::Exists($Package.PublishedZip)) {
+            [IO.File]::Replace($Package.Zip, $Package.PublishedZip, [NullString]::Value)
+        } else {
+            [IO.File]::Move($Package.Zip, $Package.PublishedZip)
+        }
+    } catch {
+        if ($newMoved) {
+            [IO.Directory]::Move($Package.PublishedStaging, $Package.Staging)
+        }
+        if ($oldMoved) {
+            [IO.Directory]::Move($Package.PreviousStaging, $Package.PublishedStaging)
+        }
+        throw
+    } finally {
+        $lock.Dispose()
+    }
+    if ($oldMoved) {
+        try { Remove-LuxPackageDirectory -Path $Package.PreviousStaging -OutputDir $Package.Directory }
+        catch { Write-Warning "Previous package directory retained: $($Package.PreviousStaging)" }
+    }
+}
+
+function Remove-LuxPackageWork {
+    param([hashtable]$Package)
+
+    Remove-LuxPackageDirectory -Path $Package.Staging -OutputDir $Package.Directory
+    if ([IO.File]::Exists($Package.Zip)) {
+        [IO.File]::Delete($Package.Zip)
+    }
+}

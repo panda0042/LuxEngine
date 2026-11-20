@@ -222,6 +222,12 @@ std::optional<ScenePlayerOptions> ParseScenePlayerArguments(const std::vector<st
 }
 
 ScenePlayerView FitSceneView(Scene& scene) {
+    return FitSceneView(scene, 16.0 / 9.0);
+}
+
+ScenePlayerView FitSceneView(Scene& scene, double aspect) {
+    if (!std::isfinite(aspect) || aspect <= 0)
+        aspect = 16.0 / 9.0;
     double minX = std::numeric_limits<double>::max(), minY = minX;
     double maxX = std::numeric_limits<double>::lowest(), maxY = maxX;
     for (Entity entity : scene.GetEntities()) {
@@ -260,9 +266,7 @@ ScenePlayerView FitSceneView(Scene& scene) {
         return view;
     view.centerX = (minX + maxX) * 0.5f;
     view.centerY = (minY + maxY) * 0.5f;
-    // Fit both axes for a 16:9 window with a small margin.
-    view.halfHeight =
-        std::max<double>({(maxY - minY) * 0.5f, (maxX - minX) * 0.5f * 9.0f / 16.0f, 1.0f}) * 1.1f;
+    view.halfHeight = std::max({(maxY - minY) * 0.5, (maxX - minX) * 0.5 / aspect, 1.0}) * 1.1;
     return view;
 }
 
@@ -300,6 +304,7 @@ bool ScenePlayer::LoadScene() {
     scripts_.swap(preparedScripts);
     preparedScripts->Shutdown();
     scene_ = std::move(loaded.scene);
+    fittedAspect_ = 0;
     streamingAccumulator_ = 0;
     lastStreamingError_.clear();
     FindPlayer();
@@ -311,7 +316,8 @@ bool ScenePlayer::EnsureScripts(Scene& scene, ScriptRuntime& scripts) {
         return true;
     const auto ids = scene.GetComponentEntityIds<ScriptComponent>();
     const bool hasActiveScripts = std::any_of(ids.begin(), ids.end(), [&scene](uint32 id) {
-        return scene.GetComponent<ScriptComponent>(id).enabled;
+        const auto& script = scene.GetComponent<ScriptComponent>(id);
+        return script.enabled && !script.typeName.empty();
     });
     if (hasActiveScripts) {
         ScriptRuntimeConfig config;
@@ -353,7 +359,6 @@ void ScenePlayer::OnInit() {
         return;
     }
     loaded_ = true;
-    view_ = options_.view ? *options_.view : FitSceneView(*scene_);
     Input::BindAction("Left", LuxKey::A);
     Input::BindAction("Left", LuxKey::Left);
     Input::BindAction("Right", LuxKey::D);
@@ -375,6 +380,12 @@ void ScenePlayer::UpdateCamera() {
     double aspect = 16.0f / 9.0f;
     if (GetWindow().GetFramebufferSize(width, height) && width > 0 && height > 0)
         aspect = static_cast<double>(width) / static_cast<double>(height);
+    if (options_.view) {
+        view_ = *options_.view;
+    } else if (aspect != fittedAspect_) {
+        view_ = FitSceneView(*scene_, aspect);
+        fittedAspect_ = aspect;
+    }
     const auto cameras = ResolveScenePlayerCameras(*scene_, aspect, view_);
     camera_ = cameras.camera2D;
     camera3D_ = cameras.camera3D;
@@ -387,8 +398,9 @@ void ScenePlayer::OnUpdate(double dt) {
         return;
     }
     if (Input::WasActionPressed("Reload") && LoadScene())
-        view_ = options_.view ? *options_.view : FitSceneView(*scene_);
-    if (player_ && !player_.HasComponent<ScriptComponent>() &&
+        UpdateCamera();
+    const auto* script = player_.TryGetComponent<ScriptComponent>();
+    if (player_ && (!script || !script->enabled || script->typeName.empty()) &&
         player_.HasComponent<TransformComponent>()) {
         const double horizontal = (Input::IsActionDown("Right") ? 1.0f : 0.0f) -
                                   (Input::IsActionDown("Left") ? 1.0f : 0.0f);

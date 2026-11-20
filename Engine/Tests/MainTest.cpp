@@ -1272,6 +1272,26 @@ void Audio() {
     std::this_thread::sleep_for(std::chrono::milliseconds(1400));
     Check(!AudioEngine::IsMusicPlaying(), "music ends naturally");
 
+    const auto reloadPath = files.Path("reload.wav");
+    Wav(reloadPath);
+    Check(AudioEngine::PlayMusic(reloadPath), "reload fixture plays");
+    const auto cachedCount = AudioEngine::GetCachedFileCount();
+    const auto cachedBytes = AudioEngine::GetCacheUsageBytes();
+    std::ofstream(reloadPath, std::ios::binary | std::ios::trunc) << "partial save";
+    Check(!AudioEngine::ReloadClip(reloadPath) && AudioEngine::IsMusicPlaying() &&
+              AudioEngine::GetCachedFileCount() == cachedCount &&
+              AudioEngine::GetCacheUsageBytes() == cachedBytes,
+          "failed audio reload preserves the last decoded clip and its voice");
+    Wav(reloadPath);
+    Check(AudioEngine::ReloadClip(reloadPath), "a repaired file can replace the cached clip");
+    std::filesystem::resize_file(reloadPath, 16ull * 1024 * 1024 + 1);
+    Check(
+        !AudioEngine::ReloadClip(reloadPath) && AudioEngine::IsMusicPlaying() &&
+            AudioEngine::GetCachedFileCount() == cachedCount &&
+            AudioEngine::GetCacheUsageBytes() == cachedBytes,
+        "oversized WAV files are rejected before their small audio payload can replace the cache");
+    AudioEngine::StopMusic();
+
     // Phase 2: Audio Safety, Callback Lifecycle & Cache Stress Tests
     // 1. Abnormal volume rejection (NaN, Inf, negative)
     AudioEngine::SetMasterVolume(std::numeric_limits<float>::quiet_NaN());
@@ -2411,6 +2431,27 @@ void RenderOutput(Graphics& graphics) {
     Check(IsColor(Pixel(capture, 0.75f, 0.25f), 255, 255, 0) &&
               IsColor(Pixel(capture, 0.25f, 0.75f), 0, 0, 0),
           "orthographic camera maps +X right and +Y up");
+
+    Files files;
+    const auto whiteSprite = files.Path("renderer-white.ppm");
+    {
+        std::ofstream image(whiteSprite, std::ios::binary);
+        image << "P6\n1 1\n255\n\xff\xff\xff";
+        Check(bool(image), "sprite fixture is writable");
+    }
+    Check(AssetManager::ValidateTextureFile(whiteSprite), "sprite fixture is valid");
+    capture = graphics.Capture([&] {
+        graphics.gpu.Clear(0, 0, 0, 1);
+        Renderer2D::BeginScene(OrthographicCamera(-2, 2, -2, 2));
+        Renderer2D::DrawQuad(Mat4::Translate({-1, 0, 0}), {1, 0, 0, 1});
+        Check(!Renderer2D::DrawSpriteAsset(Mat4::Translate({1, 0, 0}), whiteSprite, 0, 1, 1,
+                                           {std::numeric_limits<float>::infinity(), 1, 1, 1}),
+              "asset sprite with invalid tint is rejected");
+        Renderer2D::EndScene();
+    });
+    Check(IsColor(Pixel(capture, 0.25f, 0.5f), 255, 0, 0) &&
+              IsColor(Pixel(capture, 0.75f, 0.5f), 0, 0, 0),
+          "a rejected asset sprite leaves the preceding quad unchanged");
 
     Renderer3D::Init(&graphics.gpu);
     capture = graphics.Capture([&] {

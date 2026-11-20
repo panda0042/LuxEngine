@@ -8,6 +8,7 @@
 #include <array>
 #include <charconv>
 #include <chrono>
+#include <cstdint>
 #include <fstream>
 #include <iomanip>
 #include <string_view>
@@ -26,15 +27,75 @@ bool WithinProject(const std::filesystem::path& relative) {
             return false;
     return true;
 }
+
+uint32_t IcnsLength(const std::array<unsigned char, 8>& header) {
+    return (uint32_t(header[4]) << 24) | (uint32_t(header[5]) << 16) | (uint32_t(header[6]) << 8) |
+           uint32_t(header[7]);
+}
+
+bool ValidateIcns(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    const auto size = input.tellg();
+    std::array<unsigned char, 8> header{};
+    input.seekg(0);
+    const auto readHeader = [&] {
+        return bool(input.read(reinterpret_cast<char*>(header.data()), header.size()));
+    };
+    if (!readHeader() ||
+        std::string_view(reinterpret_cast<const char*>(header.data()), 4) != "icns")
+        return false;
+    const auto declared = IcnsLength(header);
+    if (declared < 16 || size != static_cast<std::streamoff>(declared))
+        return false;
+
+    LuxUI::ImageReader reader(LuxUI::String::fromUtf8(PathUtf8(path)));
+    reader.setDecideFormatFromContent(true);
+    bool hasImage = !reader.read().isNull();
+    constexpr std::array imageChunks{"icp4", "icp5", "icp6", "ic07", "ic08", "ic09",
+                                     "ic10", "ic11", "ic12", "ic13", "ic14"};
+    uint32_t remaining = declared - 8;
+    while (remaining) {
+        if (remaining < 8 || !readHeader())
+            return false;
+        const auto chunk = IcnsLength(header);
+        if (chunk < 8 || chunk > remaining)
+            return false;
+        remaining -= chunk;
+        const auto payload = chunk - 8;
+        const std::string_view type(reinterpret_cast<const char*>(header.data()), 4);
+        if (!hasImage &&
+            ((type == "ICON" && payload == 128) || (type == "ICN#" && payload == 256) ||
+             (type == "ics#" && payload == 64) || (type == "ich#" && payload == 576)))
+            hasImage = true;
+        if (!hasImage && payload > 8 && payload <= 16 * 1024 * 1024 &&
+            std::find(imageChunks.begin(), imageChunks.end(), type) != imageChunks.end()) {
+            LuxUI::ByteArray encoded(payload, '\0');
+            if (!input.read(encoded.data(), payload))
+                return false;
+            hasImage = !LuxUI::Image::fromData(encoded).isNull();
+        } else {
+            input.seekg(payload, std::ios::cur);
+        }
+        if (!input)
+            return false;
+    }
+    return hasImage;
+}
 } // namespace
 
 bool EditorProject::SetIcon(const std::filesystem::path& image, std::string& error) {
-    error.clear();
     auto settings = settings_;
-    if (image.empty()) {
+    if (image.empty())
         settings.icon.clear();
-        return UpdateSettings(settings, error);
-    }
+    return UpdateSettings(settings, image, error);
+}
+
+bool EditorProject::UpdateSettings(const ProjectSettings& requested,
+                                   const std::filesystem::path& image, std::string& error) {
+    if (image.empty())
+        return UpdateSettings(requested, error);
+    auto settings = requested;
+    error.clear();
     std::error_code ec;
     if (!std::filesystem::is_regular_file(image, ec)) {
         error = "아이콘 이미지 파일을 찾을 수 없습니다.";
@@ -45,20 +106,6 @@ bool EditorProject::SetIcon(const std::filesystem::path& image, std::string& err
         extension != ".icns") {
         error = "PNG, JPEG, ICO 또는 ICNS 이미지를 선택해 주세요.";
         return false;
-    }
-    LuxUI::ImageReader reader(LuxUI::String::fromUtf8(PathUtf8(image)));
-    if (extension != ".icns" && !reader.canRead()) {
-        error = "아이콘 이미지 파일을 읽을 수 없습니다.";
-        return false;
-    }
-    if (extension == ".icns") {
-        std::ifstream input(image, std::ios::binary);
-        char signature[4]{};
-        input.read(signature, sizeof(signature));
-        if (!input || std::string_view(signature, sizeof(signature)) != "icns") {
-            error = "ICNS 아이콘 파일 형식이 올바르지 않습니다.";
-            return false;
-        }
     }
     const auto destination =
         file_.parent_path() / "Assets" /
@@ -74,11 +121,25 @@ bool EditorProject::SetIcon(const std::filesystem::path& image, std::string& err
     std::filesystem::copy_file(image, temporary, std::filesystem::copy_options::overwrite_existing,
                                ec);
     if (ec) {
+        std::filesystem::remove(temporary, ec);
         error = "아이콘 이미지를 프로젝트에 복사할 수 없습니다.";
+        return false;
+    }
+    const bool valid = [&] {
+        if (extension == ".icns")
+            return ValidateIcns(temporary);
+        LuxUI::ImageReader reader(LuxUI::String::fromUtf8(PathUtf8(temporary)));
+        reader.setDecideFormatFromContent(true);
+        return !reader.read().isNull();
+    }();
+    if (!valid) {
+        std::filesystem::remove(temporary, ec);
+        error = "아이콘 이미지 파일을 읽을 수 없습니다.";
         return false;
     }
     std::filesystem::rename(temporary, destination, ec);
     if (ec) {
+        std::filesystem::remove(temporary, ec);
         error = "아이콘 이미지를 프로젝트에 저장할 수 없습니다.";
         return false;
     }

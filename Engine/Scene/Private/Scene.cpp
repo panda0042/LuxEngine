@@ -126,7 +126,8 @@ void Scene::OnUpdate(double dt) {
     if (!std::isfinite(dt) || dt <= 0.0)
         return;
     updateBuffer_.assign(entities_.begin(), entities_.end());
-    UpdateAnimations(dt);
+    RootMotionDeltas frameMotion;
+    UpdateAnimations(dt, true, &frameMotion);
     std::unordered_map<std::string, Ref<ModelAsset>> models;
     std::map<std::tuple<std::string, int32, double>, ModelPose> modelPoses;
     for (const auto id : updateBuffer_) {
@@ -200,12 +201,25 @@ void Scene::OnUpdate(double dt) {
         physics2D_.reset();
     if (!has3D)
         physics3D_.reset();
-    physicsAccumulator_ += std::min(dt, .25);
+    double remainingFrameTime = std::min(dt, .25);
+    physicsAccumulator_ += remainingFrameTime;
     const double fixedStep = settings_.fixedStep;
+    const bool stepped = physicsAccumulator_ + 1e-8 >= fixedStep;
+    uint32 failedPose2D = 0, failedPose3D = 0;
+    const auto accumulateMotion = [&](double time) {
+        if (time > 0)
+            for (const auto& [id, delta] : frameMotion)
+                pendingPhysicsMotion_[id] += delta * (time / dt);
+    };
     while (physicsAccumulator_ + 1e-8 >= fixedStep) {
         physicsAccumulator_ = std::max(0.0, physicsAccumulator_ - fixedStep);
-        if (!has2D && !has3D)
+        const double remaining = std::min(remainingFrameTime, physicsAccumulator_);
+        accumulateMotion(remainingFrameTime - remaining);
+        remainingFrameTime = remaining;
+        if (!has2D && !has3D) {
+            pendingPhysicsMotion_.clear();
             continue;
+        }
         const double substep = fixedStep / settings_.physicsSubsteps;
         for (uint32 index = 0; index < settings_.physicsSubsteps; ++index) {
             if (has2D && !physics2D_)
@@ -214,7 +228,8 @@ void Scene::OnUpdate(double dt) {
                 physics3D_ = std::make_unique<ScenePhysicsWorld>(false);
             const auto hierarchy = GetEntitiesInHierarchyOrder();
             if (physics2D_) {
-                physics2D_->Step(*this, substep, index, settings_.physicsSubsteps);
+                physics2D_->Step(*this, substep, index, settings_.physicsSubsteps,
+                                 pendingPhysicsMotion_);
                 for (const auto& contact : physics2D_->BeganContacts())
                     collisionEvents2D_.push_back({contact.entityA,
                                                   contact.entityB,
@@ -222,7 +237,8 @@ void Scene::OnUpdate(double dt) {
                                                   contact.isTrigger});
             }
             if (physics3D_) {
-                physics3D_->Step(*this, substep, index, settings_.physicsSubsteps);
+                physics3D_->Step(*this, substep, index, settings_.physicsSubsteps,
+                                 pendingPhysicsMotion_);
                 const auto& contacts = physics3D_->BeganContacts();
                 collisionEvents3D_.insert(collisionEvents3D_.end(), contacts.begin(),
                                           contacts.end());
@@ -236,16 +252,39 @@ void Scene::OnUpdate(double dt) {
             for (const auto& entity : hierarchy) {
                 const auto id = entity.GetId();
                 if (const auto pose = world3D.find(id); pose != world3D.end()) {
-                    SetWorldTransform(id, pose->second);
+                    if (!SetWorldTransform(id, pose->second) && !failedPose3D)
+                        failedPose3D = id;
                 } else if (const auto pose2D = world2D.find(id); pose2D != world2D.end()) {
-                    SetWorldTransform(id, pose2D->second);
+                    if (!SetWorldTransform(id, pose2D->second) && !failedPose2D)
+                        failedPose2D = id;
                 }
             }
         }
+        pendingPhysicsMotion_.clear();
     }
+    accumulateMotion(remainingFrameTime);
+    if (stepped && physics2D_)
+        physics2D_->SetPoseError(failedPose2D);
+    if (stepped && physics3D_)
+        physics3D_->SetPoseError(failedPose3D);
+}
+
+void Scene::SetRootMotionVelocity(uint32 owner, Vec3 velocity) {
+    if (auto* body = TryGetComponent<Rigidbody3DComponent>(owner);
+        body && body->type == BodyType::Dynamic)
+        body->velocity = velocity;
+    else if (auto* body2D = TryGetComponent<Rigidbody2DComponent>(owner);
+             body2D && body2D->type == BodyType::Dynamic)
+        body2D->velocity = {velocity.x, velocity.y};
+}
+
+void Scene::ResetPhysicsTiming() {
+    physicsAccumulator_ = 0;
+    pendingPhysicsMotion_.clear();
 }
 
 void Scene::RemovePhysicsBody(uint32 id) {
+    pendingPhysicsMotion_.erase(id);
     if (physics2D_)
         physics2D_->Remove(id);
     if (physics3D_)
@@ -1331,7 +1370,7 @@ void Scene::AdoptLoadedScene(Scene& parsed) {
     entitiesByReferenceIdentity_.swap(parsed.entitiesByReferenceIdentity_);
     nextEntityId_ = parsed.nextEntityId_;
     std::swap(settings_, parsed.settings_);
-    physicsAccumulator_ = 0;
+    ResetPhysicsTiming();
     physics2D_.reset();
     physics3D_.reset();
     modelAssets_.clear();

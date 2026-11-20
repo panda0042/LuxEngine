@@ -96,6 +96,14 @@ void Fit() {
     Check(Near(view.centerX, 0) && Near(view.centerY, 2), "view centred on entities");
     // 21 units wide at 16:9 needs a half height of at least 21/2*9/16.
     Check(view.halfHeight >= 21.0f * 0.5f * 9.0f / 16.0f, "view fits width");
+    constexpr double portrait = 9.0 / 16.0;
+    const auto portraitView = LuxEngine::FitSceneView(scene, portrait);
+    const auto portraitCameras =
+        LuxEngine::ResolveScenePlayerCameras(scene, portrait, portraitView);
+    const auto portraitMatrix = portraitCameras.camera2D.GetViewProjectionMatrix();
+    Check(std::abs(portraitMatrix.TransformPoint({-10.5, 0, 0}).x) < 1 &&
+              std::abs(portraitMatrix.TransformPoint({10.5, 4, 0}).x) < 1,
+          "automatic framing includes the scene width in a portrait window");
     auto map = scene.CreateEntity("map");
     map.GetComponent<LuxEngine::TransformComponent>().position = {0, -50, 0};
     map.AddComponent<LuxEngine::TilemapComponent>();

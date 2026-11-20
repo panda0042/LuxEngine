@@ -142,6 +142,9 @@ void TestInheritanceAndInstances(const fs::path& directory) {
     const auto deleted = AddSprite(source, "deleted", 3);
     auto settings = source.GetSettings();
     settings.exposure = .7f;
+    settings.render3D.mode = Render3DMode::Pbr;
+    settings.render3D.sun.direction = {1, 1, 0};
+    settings.render3D.environmentPath = "../Assets/old.hdr";
     Check(source.SetSettings(settings), "source settings are valid");
     const auto file = directory / "Scenes/inherited.lux";
     Save(source, file);
@@ -155,11 +158,22 @@ void TestInheritanceAndInstances(const fs::path& directory) {
     const auto deletedLocal = Mapped(target, root, deleted);
     Check(changedLocal && customLocal && deletedLocal, "all imported entities are mapped");
     target.GetComponent<TransformComponent>(customLocal).position.x = 42;
+    auto localSettings = target.GetSettings();
+    localSettings.render3D.sun.color.x = .4f;
+    localSettings.render3D.sun.direction.x = 0;
+    localSettings.render3D.shadows = false;
+    Check(target.SetSettings(localSettings), "local rendering settings override configures");
     target.DestroyEntity(Entity(deletedLocal, &target));
     source.GetComponent<TransformComponent>(changed).position.x = 8;
     source.GetComponent<TransformComponent>(overridden).position.x = 9;
     const auto added = AddSprite(source, "new", 5);
     settings.exposure = 1.7f;
+    settings.render3D.sun.color.x = .6f;
+    settings.render3D.sun.color.y = .7f;
+    settings.render3D.sun.direction.y = 0;
+    settings.render3D.environmentIntensity = 2.5f;
+    settings.render3D.environmentPath = "../Assets/new.hdr";
+    settings.render3D.showSkybox = true;
     Check(source.SetSettings(settings), "updated settings are valid");
     Save(source, file);
     Check(manager.RefreshInstances(target, error), "inheritance refresh succeeds: " + error);
@@ -170,6 +184,12 @@ void TestInheritanceAndInstances(const fs::path& directory) {
     Check(Mapped(target, root, deleted) == 0, "local deletions remain deleted");
     Check(Mapped(target, root, added) != 0, "new source entities appear");
     Check(target.GetSettings().exposure == 1.7f, "untouched inherited settings receive changes");
+    const auto& render = target.GetSettings().render3D;
+    Check(render.environmentIntensity == 2.5f && render.showSkybox &&
+              fs::path(render.environmentPath).filename() == "new.hdr" &&
+              render.sun.color.x == .4f && render.sun.color.y == .7f &&
+              render.sun.direction.x == 0 && render.sun.direction.y == 1 && !render.shadows,
+          "rendering settings inherit independently while local overrides survive");
     auto overriddenSettings = target.GetSettings();
     overriddenSettings.exposure = .3f;
     Check(target.SetSettings(overriddenSettings), "local settings override configures");
@@ -200,6 +220,46 @@ void TestInheritanceAndInstances(const fs::path& directory) {
     fs::remove(file);
     Check(!manager.RefreshInstances(target, error) && Snapshot(target) == before,
           "missing dependency leaves the existing scene intact");
+}
+
+void TestInheritancePreservesDescendants(const fs::path& directory) {
+    Scene source;
+    const auto parent = AddSprite(source, "parent", 3);
+    const auto middle = AddSprite(source, "middle", 5);
+    const auto leaf = AddSprite(source, "leaf", 7);
+    Check(source.SetParent(middle, parent, false) && source.SetParent(leaf, middle, false),
+          "source hierarchy is valid");
+    const auto path = directory / "Scenes/deleted-ancestors.lux";
+    Save(source, path);
+    SceneManager manager;
+    Scene target;
+    std::string error;
+    const auto root = manager.AddSceneInstance(target, path, SceneReferenceMode::Inherited, error);
+    Check(root != 0, error);
+    const auto localParent = Mapped(target, root, parent);
+    const auto localMiddle = Mapped(target, root, middle);
+    const auto localLeaf = Mapped(target, root, leaf);
+    Check(localParent && localMiddle && localLeaf, "source hierarchy is mapped");
+    target.GetComponent<TransformComponent>(localLeaf).position.x = 42;
+    const auto localOnly = AddSprite(target, "local child", 11);
+    Check(target.SetParent(localOnly, localMiddle, false), "local child is attached");
+    const auto leafX = target.GetWorldTransform(localLeaf).position.x;
+    const auto localX = target.GetWorldTransform(localOnly).position.x;
+
+    source.DestroyEntity(Entity(parent, &source));
+    Save(source, path);
+    Check(manager.RefreshInstance(target, root, error), error);
+    Check(!target.IsAlive(localParent) && !target.IsAlive(localMiddle),
+          "removed source ancestors disappear");
+    Check(target.IsAlive(localLeaf) && target.GetParent(localLeaf) == root &&
+              target.GetWorldTransform(localLeaf).position.x == leafX,
+          "overridden descendants stay at their original world position");
+    Check(target.IsAlive(localOnly) && target.GetParent(localOnly) == root &&
+              target.GetWorldTransform(localOnly).position.x == localX,
+          "locally added descendants survive with their original world position");
+    Check(Mapped(target, root, leaf) == 0 &&
+              !target.HasComponent<InstanceSourceComponent>(localLeaf),
+          "preserved descendants of deleted source entities become local entities");
 }
 
 void TestNestedAndPortablePaths(const fs::path& directory) {
@@ -888,6 +948,7 @@ int RunSceneManagerTests(int, char**) {
         {
             Files files;
             TestInheritanceAndInstances(files.root);
+            TestInheritancePreservesDescendants(files.root);
         }
         {
             Files files;

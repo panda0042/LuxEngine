@@ -68,6 +68,19 @@ bool PrefabLibrary::IsPrefabPath(const fs::path& path) {
     return extension == ".luxprefab";
 }
 
+void PrefabLibrary::Materialize(Scene& staged, uint32 root) {
+    const auto& reference = staged.GetComponent<SceneReferenceComponent>(root);
+    if (reference.loaded)
+        return;
+    if (!reference.suspended.empty()) {
+        SceneManager::RestoreSubtree(staged, root);
+        return;
+    }
+    std::string error;
+    if (!SceneManager().RefreshInstance(staged, root, error))
+        throw std::runtime_error(error);
+}
+
 bool PrefabLibrary::Save(Scene& source, uint32 root, const fs::path& requested,
                          std::string& error) {
     error.clear();
@@ -79,8 +92,14 @@ bool PrefabLibrary::Save(Scene& source, uint32 root, const fs::path& requested,
         if (instance && SourcePath(source, instance) == path)
             throw std::runtime_error(
                 "연결된 프리팹 원본은 인스턴스에서 덮어쓸 수 없습니다. 새 이름으로 저장해 주세요.");
+        std::unique_ptr<Scene> staged;
+        if (const auto* reference = source.TryGetComponent<SceneReferenceComponent>(root);
+            reference && IsPrefabPath(Path(reference->path)) && !reference->loaded) {
+            staged = Clone(source);
+            Materialize(*staged, root);
+        }
         Scene asset;
-        const auto mapping = asset.ImportEntities(source, {root}, 0, true);
+        const auto mapping = asset.ImportEntities(staged ? *staged : source, {root}, 0, true);
         if (!mapping.contains(root))
             throw std::runtime_error("프리팹 계층 또는 컴포넌트를 복사할 수 없습니다.");
         const auto copiedRoot = mapping.at(root);
@@ -155,6 +174,7 @@ bool PrefabLibrary::Unpack(Scene& target, uint32 root, std::string& error) {
     try {
         SourcePath(target, root);
         auto staged = Clone(target);
+        Materialize(*staged, root);
         staged->RemoveComponent<SceneReferenceComponent>(root);
         for (const auto id : staged->GetComponentEntityIds<InstanceSourceComponent>())
             if (staged->GetComponent<InstanceSourceComponent>(id).instanceRoot == root)

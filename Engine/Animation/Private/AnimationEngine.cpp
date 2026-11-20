@@ -42,8 +42,7 @@ TransformComponent AnimationClip::Sample(double time, bool wrapTime) const {
     const auto& kf1 = *it;
 
     const double segmentDuration = kf1.time - kf0.time;
-    const double rawFactor =
-        (segmentDuration > 0.0001f) ? (clampedTime - kf0.time) / segmentDuration : 0.0f;
+    const double rawFactor = segmentDuration > 0 ? (clampedTime - kf0.time) / segmentDuration : 0;
     const double factor = std::clamp(rawFactor, 0.0, 1.0);
 
     result.position = kf0.position + (kf1.position - kf0.position) * factor;
@@ -69,7 +68,7 @@ void AnimationEngine::UpdateClip(const AnimationClip& clip, double& currentTime,
         currentTime = 0.0f;
     if (std::isfinite(dt) && dt > 0.0f)
         currentTime += dt;
-    if (clip.loop && clip.duration > 0.0f && std::isfinite(currentTime)) {
+    if (clip.GetWrap() == AnimationWrap::Loop && clip.duration > 0 && std::isfinite(currentTime)) {
         currentTime = std::fmod(currentTime, clip.duration);
         if (currentTime < 0.0f)
             currentTime += clip.duration;

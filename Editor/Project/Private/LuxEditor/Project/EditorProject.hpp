@@ -47,6 +47,8 @@ public:
     bool UpdateSettings(const ProjectSettings& settings, std::string& error);
     bool SetStartScene(const std::filesystem::path& sceneFile, std::string& error);
     bool SetIcon(const std::filesystem::path& image, std::string& error);
+    bool UpdateSettings(const ProjectSettings& settings, const std::filesystem::path& iconSource,
+                        std::string& error);
     bool BumpVersion(int part, std::string& error);
     std::filesystem::path GetAutosaveFile(const std::filesystem::path& sceneFile) const;
     bool SaveAutosave(const std::filesystem::path& sceneFile, LuxEngine::Scene& scene,

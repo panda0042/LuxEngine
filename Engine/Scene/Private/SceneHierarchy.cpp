@@ -124,8 +124,11 @@ bool Scene::SetSettings(const SceneSettings& value) {
         return false;
     if (!ValidateRender3DSettings(value.render3D))
         return false;
+    const bool timingChanged = settings_.fixedStep != value.fixedStep ||
+                               settings_.physicsSubsteps != value.physicsSubsteps;
     settings_ = value;
-    physicsAccumulator_ = 0;
+    if (timingChanged)
+        ResetPhysicsTiming();
     return true;
 }
 
@@ -391,7 +394,7 @@ bool Scene::ApplyState(Scene& prepared) {
     lifetime_ = std::move(nextLifetime);
     prepared.lifetime_ = std::move(preparedLifetime);
     if (timingChanged)
-        physicsAccumulator_ = 0;
+        ResetPhysicsTiming();
     std::erase_if(collisionEvents2D_, [this](const auto& event) {
         return !IsAlive(event.entityA) || !IsAlive(event.entityB);
     });
@@ -403,7 +406,7 @@ bool Scene::ApplyState(Scene& prepared) {
     prepared.modelAssets_.clear();
     prepared.physics2D_.reset();
     prepared.physics3D_.reset();
-    prepared.physicsAccumulator_ = 0;
+    prepared.ResetPhysicsTiming();
     prepared.collisionEvents2D_.clear();
     prepared.collisionEvents3D_.clear();
     prepared.updateBuffer_.clear();
@@ -656,7 +659,7 @@ bool Scene::CommitRegion(Scene& staged, const std::unordered_set<uint32>& anchor
     nextEntityId_ = staged.nextEntityId_;
     if (settings_.fixedStep != staged.settings_.fixedStep ||
         settings_.physicsSubsteps != staged.settings_.physicsSubsteps)
-        physicsAccumulator_ = 0;
+        ResetPhysicsTiming();
     settings_ = std::move(staged.settings_);
     return true;
 }

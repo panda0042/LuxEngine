@@ -2,6 +2,7 @@
 
 #include <LuxEngine/Core/Core.hpp>
 #include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -34,11 +35,18 @@ struct AnimationEvent {
     std::string payload{};
 };
 
+struct AnimationSpriteSheet {
+    std::string path;
+    uint32 columns = 1;
+    uint32 rows = 1;
+};
+
 struct AnimationSample {
     std::string target{};
     AnimationProperty property;
     std::string field{};
     std::array<double, 4> value;
+    std::optional<AnimationSpriteSheet> spriteSheet{};
 };
 
 struct AnimationPlayback {

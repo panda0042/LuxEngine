@@ -130,11 +130,12 @@ void Fail(const std::string& error) {
 void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, double dt,
                                 bool rootMotion) {
     AnimationBindings bindings(*this, false);
-    ApplyAnimationFrame(owner, frame, dt, rootMotion, bindings);
+    ApplyAnimationFrame(owner, frame, dt, rootMotion, bindings, nullptr);
 }
 
 void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, double dt,
-                                bool rootMotion, AnimationBindings& bindings) {
+                                bool rootMotion, AnimationBindings& bindings,
+                                RootMotionDeltas* physicsMotion) {
     if (!IsAlive(owner))
         return;
     for (auto id : GetComponentEntityIds<ModelAnimationComponent>()) {
@@ -146,13 +147,18 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
         auto* transform = TryGetComponent<TransformComponent>(owner);
         if (!rootMotion || !transform || dt <= 0)
             return;
-        if (auto* body = TryGetComponent<Rigidbody3DComponent>(owner);
-            body && body->type == BodyType::Dynamic)
-            body->velocity = GetWorldMatrix(owner).TransformDirection(delta) * (1 / dt);
-        else if (auto* body = TryGetComponent<Rigidbody2DComponent>(owner);
-                 body && body->type == BodyType::Dynamic) {
-            const auto velocity = GetWorldMatrix(owner).TransformDirection(delta) * (1 / dt);
-            body->velocity = {velocity.x, velocity.y};
+        const auto* body3D = TryGetComponent<Rigidbody3DComponent>(owner);
+        const auto* body2D = TryGetComponent<Rigidbody2DComponent>(owner);
+        const bool dynamic3D = body3D && body3D->type == BodyType::Dynamic;
+        const bool dynamic2D = body2D && body2D->type == BodyType::Dynamic;
+        if (dynamic3D || dynamic2D) {
+            const auto worldDelta = GetWorldMatrix(owner).TransformDirection(delta);
+            const bool simulated = dynamic3D ? HasComponent<BoxCollider3DComponent>(owner)
+                                             : HasComponent<BoxCollider2DComponent>(owner);
+            if (physicsMotion && simulated)
+                (*physicsMotion)[owner] = worldDelta;
+            else
+                SetRootMotionVelocity(owner, worldDelta * (1 / dt));
         } else
             transform->position += transform->GetTransform().TransformDirection(delta);
     };
@@ -187,12 +193,16 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
             }
         } else if (sample.property == AnimationProperty::SpriteFrame) {
             if (auto* sprite = TryGetComponent<SpriteRendererComponent>(target)) {
-                if (!frame.spriteSheet.empty())
-                    sprite->texturePath = frame.spriteSheet;
-                if (!frame.spriteSheet.empty() || frame.spriteColumns != 1 ||
-                    frame.spriteRows != 1) {
-                    sprite->columns = frame.spriteColumns;
-                    sprite->rows = frame.spriteRows;
+                const auto& path =
+                    sample.spriteSheet ? sample.spriteSheet->path : frame.spriteSheet;
+                const auto columns =
+                    sample.spriteSheet ? sample.spriteSheet->columns : frame.spriteColumns;
+                const auto rows = sample.spriteSheet ? sample.spriteSheet->rows : frame.spriteRows;
+                if (!path.empty())
+                    sprite->texturePath = path;
+                if (!path.empty() || columns != 1 || rows != 1) {
+                    sprite->columns = columns;
+                    sprite->rows = rows;
                 }
                 sprite->frame = static_cast<uint32>(
                     std::clamp(std::floor(v[0]), 0.0, double(sprite->columns) * sprite->rows - 1));
@@ -203,8 +213,11 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
                     camera->fov = std::clamp(v[0], .01, 179.99);
                 if (sample.field == "camera.orthoSize")
                     camera->orthoSize = std::max(.0001, v[0]);
-                if (sample.field == "camera.nearClip")
-                    camera->nearClip = std::clamp(v[0], .0001, camera->farClip * .5);
+                if (sample.field == "camera.nearClip") {
+                    const double maximum = camera->farClip * .5;
+                    if (maximum > 0 && std::isfinite(maximum))
+                        camera->nearClip = std::clamp(v[0], std::min(.0001, maximum), maximum);
+                }
                 if (sample.field == "camera.farClip")
                     camera->farClip = std::max(camera->nearClip * 2, v[0]);
             }
@@ -301,6 +314,8 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
                     root = node;
                     break;
                 }
+            if (!model->NodeMatchesMask(root, sample.mask))
+                continue;
             if (!frame.rootDelta) {
                 ModelPose previous;
                 if (!model->Evaluate(sample.previousTime, sample.clip, previous, error)) {
@@ -332,7 +347,8 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
         }
         if (!frame.rootDelta && total > 1)
             delta = delta * (1 / total);
-        applyMotion(delta);
+        if (frame.rootDelta || total > 0)
+            applyMotion(delta);
     }
     auto mixed = CreateRef<ModelPose>();
     if (!model->MixPoses(layers, *mixed, error, overrides)) {
@@ -365,6 +381,10 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
 }
 
 void Scene::UpdateAnimations(double dt, bool emitEvents) {
+    UpdateAnimations(dt, emitEvents, nullptr);
+}
+
+void Scene::UpdateAnimations(double dt, bool emitEvents, RootMotionDeltas* physicsMotion) {
     AnimationBindings bindings(*this);
     for (auto id : GetComponentEntityIds<ModelAnimationComponent>()) {
         auto& model = GetComponent<ModelAnimationComponent>(id);
@@ -381,17 +401,22 @@ void Scene::UpdateAnimations(double dt, bool emitEvents) {
         animation->pendingEvents.clear();
         if (!animation->playing)
             continue;
-        if (!animation->assetPath.empty() &&
-            animation->loadedPath != ResolveAssetPath(animation->assetPath)) {
+        const auto path = ResolveAssetPath(animation->assetPath);
+        if (animation->assetPath.empty()) {
+            if (!animation->loadedPath.empty()) {
+                animation->asset.reset();
+                animation->loadedPath.clear();
+            }
+        } else if (path.empty() || !animation->asset || animation->loadedPath != path) {
             std::string error;
-            auto clip = AnimationClip::Load(ResolveAssetPath(animation->assetPath), error);
+            auto clip = AnimationClip::Load(path, error);
             if (!clip) {
                 animation->playing = false;
                 Fail(error);
                 continue;
             }
             animation->asset = std::move(clip);
-            animation->loadedPath = ResolveAssetPath(animation->assetPath);
+            animation->loadedPath = path;
         }
         const auto& clip = animation->asset ? *animation->asset : animation->clip;
         AnimationPlayback playback{animation->currentTime, animation->speed, animation->playing};
@@ -418,7 +443,7 @@ void Scene::UpdateAnimations(double dt, bool emitEvents) {
             sample.rootMotionTarget = clip.rootMotionTarget;
             frame.models.push_back(sample);
         }
-        ApplyAnimationFrame(id, frame, dt, animation->rootMotion, bindings);
+        ApplyAnimationFrame(id, frame, dt, animation->rootMotion, bindings, physicsMotion);
         if (emitEvents)
             animation->pendingEvents = std::move(events);
     }
@@ -444,13 +469,14 @@ void Scene::UpdateAnimations(double dt, bool emitEvents) {
             for (const auto& parameter : animation->parameters)
                 animation->player->SetParameter(parameter.name, parameter.value);
             if (animation->rootMotion)
-                ApplyAnimationFrame(id, animation->player->Update(0, false), 0, true, bindings);
+                ApplyAnimationFrame(id, animation->player->Update(0, false), 0, true, bindings,
+                                    nullptr);
         }
         animation->player->SetPlaying(animation->playing);
         auto frame = animation->player->Update(dt, emitEvents, [&](const auto& sample) {
             return ReadAnimatedValue(*this, bindings.Resolve(id, sample.target), sample);
         });
-        ApplyAnimationFrame(id, frame, dt, animation->rootMotion, bindings);
+        ApplyAnimationFrame(id, frame, dt, animation->rootMotion, bindings, physicsMotion);
         if (emitEvents)
             animation->pendingEvents = std::move(frame.events);
     }

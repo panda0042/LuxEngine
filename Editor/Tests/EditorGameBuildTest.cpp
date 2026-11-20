@@ -92,13 +92,16 @@ bool CheckContentFailureKeepsPrevious(const fs::path& projectDir, const BuildToo
     const auto option = [](const char* name, const fs::path& path) {
         return LuxUI::String::fromUtf8(std::string("-D") + name + "=" + GenericPathUtf8(path));
     };
-    const LuxUI::StringList arguments{option("SOURCE_ROOT", source),
-                                      option("PROJECT_MANIFEST", source / "project.luxproject"),
-                                      option("CONTENT_ROOT", content),
-                                      option("MANAGED_ROOT", managed),
-                                      option("MANIFEST", manifest),
-                                      LUX_UI_TEXT("-P"),
-                                      ToQString(projectDir / "SyncContent.cmake")};
+    const auto syncArguments = [&](const fs::path& outputRoot, const fs::path& manifestPath) {
+        return LuxUI::StringList{option("SOURCE_ROOT", source),
+                                 option("PROJECT_MANIFEST", source / "project.luxproject"),
+                                 option("CONTENT_ROOT", outputRoot),
+                                 option("MANAGED_ROOT", managed),
+                                 option("MANIFEST", manifestPath),
+                                 LUX_UI_TEXT("-P"),
+                                 ToQString(projectDir / "SyncContent.cmake")};
+    };
+    const auto arguments = syncArguments(content, manifest);
     std::string output;
     if (!Run(tools.cmake, arguments, fixture, 30000, output)) {
         PrintTail(output);
@@ -151,10 +154,56 @@ bool CheckContentFailureKeepsPrevious(const fs::path& projectDir, const BuildToo
     if (!caseRenamed)
         return false;
 
+    fs::create_directory(source / "Scripts");
+    const auto sourceLogo = source / "Scripts/Logo.png";
+    const auto managedLogo = managed / "Logo.png";
+    const auto outputLogo = content / "Scripts/Logo.png";
+    std::ofstream(sourceLogo) << "shared";
+    std::ofstream(managedLogo) << "shared";
+    const auto specialDirectory = fs::path("Assets/stage;[new]");
+    const auto specialFile = specialDirectory / "tile;%3B.txt";
+    fs::create_directory(source / specialDirectory);
+    std::ofstream(source / specialFile) << "first version";
+    if (!Run(tools.cmake, arguments, fixture, 30000, output) || read(outputLogo) != "shared" ||
+        read(content / specialFile) != "first version") {
+        PrintTail(output);
+        return false;
+    }
+    const auto sharedManifest = read(manifest);
+    const auto logoEntry = std::string("Scripts/Logo.png");
+    const auto entryPosition = sharedManifest.find(logoEntry);
+    if (entryPosition == std::string::npos ||
+        sharedManifest.find(logoEntry, entryPosition + logoEntry.size()) != std::string::npos)
+        return false;
+    std::ofstream(managedLogo) << "different";
+    if (Run(tools.cmake, arguments, fixture, 30000, output) ||
+        output.find("Conflicting generated content for Scripts/Logo.png") == std::string::npos ||
+        output.find("source/Scripts/Logo.png") == std::string::npos ||
+        output.find("managed/Logo.png") == std::string::npos || read(outputLogo) != "shared" ||
+        read(manifest) != sharedManifest) {
+        PrintTail(output);
+        return false;
+    }
+    fs::remove(sourceLogo);
+    std::ofstream(source / specialFile) << "updated";
+    if (!Run(tools.cmake, arguments, fixture, 30000, output) || read(outputLogo) != "different" ||
+        read(content / specialFile) != "updated") {
+        PrintTail(output);
+        return false;
+    }
+    fs::remove(source / specialFile);
+    fs::remove(source / specialDirectory);
+    std::ofstream(source / specialDirectory) << "now a file";
+    if (!Run(tools.cmake, arguments, fixture, 30000, output) ||
+        read(content / specialDirectory) != "now a file") {
+        PrintTail(output);
+        return false;
+    }
+
     const auto sourceAssets = source / "Assets";
     const auto outputAssets = content / "Assets";
     std::ofstream(sourceAssets / "a-stale.txt") << "first previous file";
-    std::ofstream(sourceAssets / "z-stale.txt") << "locked previous file";
+    std::ofstream(sourceAssets / "z;stale[1].txt") << "locked previous file";
     std::ofstream(sourceAssets / "replace.txt") << "before overwrite";
     std::ofstream(sourceAssets / "shape") << "before file to directory";
     fs::create_directory(sourceAssets / "reverse");
@@ -166,7 +215,7 @@ bool CheckContentFailureKeepsPrevious(const fs::path& projectDir, const BuildToo
     }
     const auto oldManifest = read(manifest);
     fs::remove(sourceAssets / "a-stale.txt");
-    fs::remove(sourceAssets / "z-stale.txt");
+    fs::remove(sourceAssets / "z;stale[1].txt");
     std::ofstream(sourceAssets / "replace.txt") << "after overwrite";
     fs::remove(sourceAssets / "shape");
     fs::create_directory(sourceAssets / "shape");
@@ -177,7 +226,7 @@ bool CheckContentFailureKeepsPrevious(const fs::path& projectDir, const BuildToo
 
 #ifdef _WIN32
     for (const auto& lockedPath :
-         {outputAssets / "z-stale.txt", outputAssets / "replace.txt", manifest}) {
+         {outputAssets / "z;stale[1].txt", outputAssets / "replace.txt", manifest}) {
         const auto handle = CreateFileW(lockedPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (handle == INVALID_HANDLE_VALUE) {
@@ -189,7 +238,7 @@ bool CheckContentFailureKeepsPrevious(const fs::path& projectDir, const BuildToo
         if (succeeded || output.find("Previous generated content restored") == std::string::npos ||
             read(manifest) != oldManifest ||
             read(outputAssets / "a-stale.txt") != "first previous file" ||
-            read(outputAssets / "z-stale.txt") != "locked previous file" ||
+            read(outputAssets / "z;stale[1].txt") != "locked previous file" ||
             read(outputAssets / "replace.txt") != "before overwrite" ||
             read(outputAssets / "shape") != "before file to directory" ||
             read(outputAssets / "reverse/child.txt") != "before directory to file" ||
@@ -206,7 +255,7 @@ bool CheckContentFailureKeepsPrevious(const fs::path& projectDir, const BuildToo
         return false;
     }
     if (read(manifest) == oldManifest || fs::exists(outputAssets / "a-stale.txt") ||
-        fs::exists(outputAssets / "z-stale.txt") ||
+        fs::exists(outputAssets / "z;stale[1].txt") ||
         read(outputAssets / "replace.txt") != "after overwrite" ||
         read(outputAssets / "shape/child.txt") != "after file to directory" ||
         read(outputAssets / "reverse") != "after directory to file" ||
@@ -217,10 +266,31 @@ bool CheckContentFailureKeepsPrevious(const fs::path& projectDir, const BuildToo
     fs::create_directory(recovery);
     std::ofstream(recovery / "previous.txt") << "interrupted backup";
     const auto committedManifest = read(manifest);
-    return !Run(tools.cmake, arguments, fixture, 30000, output) &&
-           output.find("Unfinished content synchronization") != std::string::npos &&
-           read(recovery / "previous.txt") == "interrupted backup" &&
-           read(manifest) == committedManifest;
+    if (Run(tools.cmake, arguments, fixture, 30000, output) ||
+        output.find("Unfinished content synchronization") == std::string::npos ||
+        read(recovery / "previous.txt") != "interrupted backup" ||
+        read(manifest) != committedManifest)
+        return false;
+
+    const auto inSourceContent = source / "Debug/Content";
+    const auto inSourceManifest = source / "lux-content-Debug.txt";
+    auto inSourceArguments = syncArguments(inSourceContent, inSourceManifest);
+    inSourceArguments.prepend(option("BINARY_ROOT", source));
+    std::ofstream(source / "Assets/fixture.png") << "in-source build asset";
+    std::string initialManifest;
+    for (int run = 0; run < 3; ++run) {
+        if (!Run(tools.cmake, inSourceArguments, fixture, 30000, output)) {
+            PrintTail(output);
+            return false;
+        }
+        const auto contents = read(inSourceManifest);
+        if (run == 0)
+            initialManifest = contents;
+        if (contents != initialManifest || contents.find("Debug/Content/") != std::string::npos ||
+            read(inSourceContent / "Assets/fixture.png") != "in-source build asset")
+            return false;
+    }
+    return true;
 }
 
 bool BuildRunAndPackage(const fs::path& projectDir, BuildConfiguration configuration,
@@ -410,6 +480,11 @@ int main(int argc, char* argv[]) {
     fs::remove(root / "Scenes/Main.lux", ec);
     if (ec) {
         std::cerr << "default scene removal failed: " << ec.message() << '\n';
+        return 1;
+    }
+    fs::rename(project->GetFile(), root / "NamedGame.luxproject", ec);
+    if (ec) {
+        std::cerr << "project manifest rename failed: " << ec.message() << '\n';
         return 1;
     }
     bool ok = CheckContentFailureKeepsPrevious(root, tools) &&

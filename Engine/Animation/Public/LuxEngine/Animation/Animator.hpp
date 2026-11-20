@@ -56,6 +56,7 @@ public:
     std::vector<AnimatorLayer> layers{};
     std::string sourcePath{};
     bool Validate(std::string& error) const;
+    bool SerializeForFile(const std::string& path, std::string& output, std::string& error) const;
     bool Save(const std::string& path, std::string& error) const;
     static Ref<AnimatorController> Load(const std::string& path, std::string& error);
 };

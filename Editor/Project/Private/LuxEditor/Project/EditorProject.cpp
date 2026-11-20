@@ -4,6 +4,7 @@
 #include <LuxEditor/Project/ProjectJson.hpp>
 #include <LuxEditor/Project/ProjectTemplates.hpp>
 
+#include <LuxEngine/Runtime/ProjectManifest.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
 #include <LuxEngine/Scene/SceneManager.hpp>
@@ -48,19 +49,6 @@ bool ParseVersion(std::string_view text, std::array<unsigned, 3>& parts) {
     return true;
 }
 
-bool ValidDependency(const ProjectDependency& dependency) {
-    if (dependency.package.empty() || dependency.package.size() > 64 ||
-        !std::isalpha(static_cast<unsigned char>(dependency.package[0])))
-        return false;
-    for (unsigned char c : dependency.package)
-        if (!std::isalnum(c) && c != '_')
-            return false;
-    if (dependency.version.empty())
-        return true;
-    return std::all_of(dependency.version.begin(), dependency.version.end(),
-                       [](unsigned char c) { return std::isdigit(c) || c == '.'; });
-}
-
 bool ReadField(std::istream& input, const char* expected, std::string& value) {
     std::string key;
     return static_cast<bool>(input >> key >> std::quoted(value)) && key == expected;
@@ -103,7 +91,7 @@ bool ValidSettings(const ProjectSettings& settings) {
             return false;
     }
     for (const auto& dependency : settings.dependencies)
-        if (!ValidDependency(dependency))
+        if (!LuxEngine::IsValidProjectDependency(dependency.package, dependency.version))
             return false;
     return true;
 }
@@ -332,25 +320,32 @@ std::optional<EditorProject> EditorProject::Read(const std::filesystem::path& fi
                                                  std::string& error, bool allowRecovery) {
     error.clear();
     std::error_code ec;
-    if (std::filesystem::file_size(file, ec) > 65536 || ec) {
+    const auto size = std::filesystem::file_size(file, ec);
+    if (ec || size == 0 || size > 65536) {
         error = "프로젝트 파일을 읽을 수 없거나 크기가 너무 큽니다.";
         return std::nullopt;
     }
-    std::ifstream input(file, std::ios::binary);
+    std::ifstream source(file, std::ios::binary);
+    std::string data(static_cast<size_t>(size), '\0');
+    if (!source.read(data.data(), static_cast<std::streamsize>(data.size())) ||
+        source.peek() != std::char_traits<char>::eof()) {
+        error = "프로젝트 파일을 읽을 수 없습니다.";
+        return std::nullopt;
+    }
+    source.close();
+    const auto content = LuxEngine::ProjectManifestContent(data);
+    const bool json = content.starts_with('{');
+    std::istringstream input{json ? std::string{} : std::string(content)};
     EditorProject project;
     std::string projectTemplate;
     std::string scene;
     int legacyVersion = 0;
-    input >> std::ws;
-    if (input.peek() == '{') {
-        const std::string data((std::istreambuf_iterator<char>(input)),
-                               std::istreambuf_iterator<char>());
+    if (json) {
         if (!DeserializeProjectJson(data, project.settings_, project.engineVersion_,
                                     projectTemplate, scene)) {
             error = "프로젝트 JSON 형식 또는 메타데이터가 올바르지 않습니다.";
             return std::nullopt;
         }
-        input.peek();
     } else {
         std::string magic;
         if (!(input >> magic >> legacyVersion) || magic != "LUXPROJECT" ||
@@ -405,8 +400,6 @@ std::optional<EditorProject> EditorProject::Read(const std::filesystem::path& fi
         error = "프로젝트 메타데이터 값이 올바르지 않습니다.";
         return std::nullopt;
     }
-    // Windows cannot replace a file that is still open, and the v1 migration below rewrites it.
-    input.close();
     if (fileVersion[0] != currentVersion[0] || fileVersion[1] != currentVersion[1]) {
         error = "프로젝트와 현재 엔진의 주·부 버전이 다릅니다. 호환되는 엔진으로 열어 주세요.";
         return std::nullopt;
@@ -512,10 +505,14 @@ bool EditorProject::UpdateSettings(const ProjectSettings& settings, std::string&
         error = "프로젝트 파일을 저장할 수 없습니다.";
         return false;
     }
-    if (!WriteDependencies(*this)) {
+    const auto dependencies = file_.parent_path() / "Dependencies.cmake";
+    if ((settings_.dependencies != previous.dependencies ||
+         !std::filesystem::is_regular_file(dependencies, ec)) &&
+        !WriteDependencies(*this)) {
         settings_ = previous;
-        WriteProjectFile(*this, scene_);
-        error = "종속성 파일을 저장할 수 없습니다.";
+        error = WriteProjectFile(*this, scene_)
+                    ? "종속성 파일을 저장할 수 없습니다."
+                    : "종속성 파일 저장과 이전 프로젝트 설정 복원에 실패했습니다.";
         return false;
     }
     return true;

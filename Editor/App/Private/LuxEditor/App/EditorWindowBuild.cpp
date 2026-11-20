@@ -83,8 +83,8 @@ void EditorWindow::StartBuild(BuildConfiguration configuration, bool clean,
         ShowError(LUX_UI_TEXT("씬 의존성 오류"), LuxUI::String::fromUtf8(error));
         return;
     }
-    auto plan =
-        PlanBuild(project_->GetFile().parent_path(), configuration, tools, GameExecutable, error);
+    auto plan = PlanBuild(project_->GetFile().parent_path(), configuration, tools, GameExecutable,
+                          error, project_->GetFile());
     if (!plan) {
         ShowError(LUX_UI_TEXT("빌드"), LuxUI::String::fromUtf8(error));
         return;

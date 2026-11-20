@@ -39,6 +39,7 @@ public:
 
     bool Validate(std::string& error) const;
     bool SerializeToString(std::string& output, std::string& error) const;
+    bool SerializeForFile(const std::string& path, std::string& output, std::string& error) const;
     static Ref<AnimationClip> DeserializeFromString(const std::string& data, std::string& error);
     bool Save(const std::string& path, std::string& error) const;
     static Ref<AnimationClip> Load(const std::string& path, std::string& error);
@@ -48,6 +49,10 @@ public:
     void AddKeyframe(const Keyframe& kf);
 
     TransformComponent Sample(double time, bool wrapTime = true) const;
+
+private:
+    friend class Scene;
+    static Ref<AnimationClip> DeserializeData(const std::string& data, std::string& error);
 };
 
 struct AnimationComponent {

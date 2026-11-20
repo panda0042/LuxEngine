@@ -112,13 +112,7 @@ void EditorWindow::EditProjectSettings() {
     if (!request)
         return;
     std::string error;
-    if (!request->iconSource.empty() && !project_->SetIcon(request->iconSource, error)) {
-        ShowError(LUX_UI_TEXT("프로젝트 설정 저장 실패"), Q(error));
-        return;
-    }
-    if (!request->iconSource.empty())
-        request->settings.icon = project_->GetIcon();
-    if (!project_->UpdateSettings(request->settings, error)) {
+    if (!project_->UpdateSettings(request->settings, request->iconSource, error)) {
         ShowError(LUX_UI_TEXT("프로젝트 설정 저장 실패"), Q(error));
         return;
     }

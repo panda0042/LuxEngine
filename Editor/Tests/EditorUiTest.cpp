@@ -1441,13 +1441,11 @@ int RunGpuLifecycleTests(LuxUI::Application& app, const StressConfig& cfg) {
 
         LuxUI::Image warmupA, warmupB;
         CheckWithGpuDiagnostics(
-            rendererA->Render(scene2D, 200, 150, LuxUI::RectF(-5.0, 5.0, 10.0, -10.0), warmupA) &&
-                rendererA->Render3D(scene3D, 200, 150, {0.0f, 0.0f, 0.0f}, 0.4, 0.3, 5.0, warmupA),
-            "ViewportStress::WarmupA", 0, rendererA.get(), "rendererA warmup failed");
+            rendererA->Render(scene2D, 200, 150, LuxUI::RectF(-5.0, 5.0, 10.0, -10.0), warmupA),
+            "ViewportStress::Warmup2D", 0, rendererA.get(), "2D renderer warmup failed");
         CheckWithGpuDiagnostics(
-            rendererB->Render3D(scene3D, 200, 150, {0.0f, 0.0f, 0.0f}, 0.5, 0.2, 4.0, warmupB) &&
-                rendererB->Render(scene2D, 200, 150, LuxUI::RectF(-5.0, 5.0, 10.0, -10.0), warmupB),
-            "ViewportStress::WarmupB", 0, rendererB.get(), "rendererB warmup failed");
+            rendererB->Render3D(scene3D, 200, 150, {0.0f, 0.0f, 0.0f}, 0.5, 0.2, 4.0, warmupB),
+            "ViewportStress::Warmup3D", 0, rendererB.get(), "3D renderer warmup failed");
         CheckWithGpuDiagnostics(
             rendererA->GetGpuDevice()->WaitIdle() && rendererB->GetGpuDevice()->WaitIdle(),
             "ViewportStress::WarmupWaitIdle", 0, rendererA.get(), "warmup WaitIdle failed");

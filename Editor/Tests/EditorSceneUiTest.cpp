@@ -403,6 +403,7 @@ void CrossSceneMove() {
     auto parent = source.CreateEntity("원본 부모"), selected = source.CreateEntity("이동할 가지"),
          child = source.CreateEntity("함께 이동할 자식");
     const uint32 selectedId = selected.GetId(), childId = child.GetId();
+    const auto extra = source.CreateEntity("별도 루트").GetId();
     parent.GetComponent<TransformComponent>().position = {6, 3, 0};
     parent.GetComponent<TransformComponent>().rotation.z = .4f;
     parent.GetComponent<TransformComponent>().scale = {2, 2, 2};
@@ -423,12 +424,14 @@ void CrossSceneMove() {
     const auto destinationBefore = Data(*document.GetScene(destinationTab));
     Check(window.SwitchSceneDocument(sourceTab, false), "source tab switches");
     Outliner(window)->setCurrentItem(Find(*Outliner(window), selectedId));
+    document.SetSelection({selectedId, childId, extra}, selectedId);
     Check(window.MoveSelectionToScene(destinationTab), "selected subtree moves through UI command");
     const auto imported = document.GetSelected().GetId();
     Check(document.GetActiveTabId() == destinationTab && imported != selectedId &&
               document.GetScene(sourceTab)->GetEntityCount() == 1 &&
-              document.GetScene(destinationTab)->GetEntityCount() == 4,
-          "move remaps conflicting IDs and includes the complete child subtree");
+              document.GetScene(destinationTab)->GetEntityCount() == 5 &&
+              document.GetSelection().size() == 3,
+          "move remaps the entire selection without duplicating a selected descendant");
     const auto descendants = document.GetScene().GetChildren(imported);
     Check(descendants.size() == 1, "moved subtree retains its hierarchy");
     EqualMatrix(document.GetScene().GetWorldMatrix(imported), selectedWorld,
@@ -439,6 +442,7 @@ void CrossSceneMove() {
           "moving between scenes dirties both files");
     History(window)->undo();
     Check(document.GetActiveTabId() == sourceTab && document.GetSelected().GetId() == selectedId &&
+              document.GetSelection().size() == 3 &&
               Data(*document.GetScene(sourceTab)) == sourceBefore &&
               Data(*document.GetScene(destinationTab)) == destinationBefore &&
               !document.IsDirty(sourceTab) && !document.IsDirty(destinationTab),
@@ -446,7 +450,8 @@ void CrossSceneMove() {
     History(window)->redo();
     Check(document.GetActiveTabId() == destinationTab &&
               document.GetScene(sourceTab)->GetEntityCount() == 1 &&
-              document.GetScene(destinationTab)->GetEntityCount() == 4,
+              document.GetScene(destinationTab)->GetEntityCount() == 5 &&
+              document.GetSelection().size() == 3,
           "a single redo reapplies both halves of the move");
     History(window)->undo();
     Check(window.CloseSceneDocument(destinationTab), "clean destination tab may close");
@@ -571,6 +576,40 @@ void GroupClipboard() {
     EqualMatrix(
         document.GetScene().GetWorldMatrix(isolated.GetId()), expected,
         "copying a child uses its world pose rather than its old parent's local coordinates");
+}
+
+void AnimationClipboard() {
+    Fixture fixture;
+    auto& window = *fixture.window;
+    Scene scene;
+    auto unnamed = scene.CreateEntity("Unnamed animation");
+    unnamed.AddComponent<AnimationComponent>().clip.AddKeyframe({0, {1, 0, 0}});
+    auto named = scene.CreateEntity("Track animation");
+    auto& animation = named.AddComponent<AnimationComponent>();
+    animation.speed = 2;
+    animation.clip.name = "Walk";
+    animation.clip.wrap = AnimationWrap::PingPong;
+    animation.clip.events = {{.5, "step", ""}};
+    AnimationTrack track;
+    track.SetKey({0, {1, 0, 0, 0}});
+    track.SetKey({1, {2, 0, 0, 0}});
+    animation.clip.tracks.push_back(track);
+    fixture.Open(scene, "animation-clipboard.lux");
+    auto& document = window.GetDocument();
+    for (const auto id : {unnamed.GetId(), named.GetId()}) {
+        Outliner(window)->setCurrentItem(Find(*Outliner(window), id));
+        Action(window, "copyEntity")->trigger();
+        Action(window, "pasteEntity")->trigger();
+        const auto pasted = document.GetSelected();
+        Check(pasted && pasted.GetId() != id, "an embedded animation can be pasted");
+        const auto& original = document.GetScene().GetComponent<AnimationComponent>(id);
+        const auto& copy = pasted.GetComponent<AnimationComponent>();
+        std::string expected, actual, error;
+        Check(original.clip.SerializeToString(expected, error) &&
+                  copy.clip.SerializeToString(actual, error) && actual == expected &&
+                  copy.speed == original.speed,
+              "clipboard preserves unnamed clips and complete animation data");
+    }
 }
 
 void Click(LuxUI::Widget& view, LuxUI::PointF point) {
@@ -1294,7 +1333,7 @@ int main(int argc, char** argv) {
         }
         const std::string_view suite = argc > 1 ? argv[1] : "all";
         bool found = suite == "all";
-        for (const auto& [name, run] : std::array<std::pair<std::string_view, void (*)()>, 15>{
+        for (const auto& [name, run] : std::array<std::pair<std::string_view, void (*)()>, 16>{
                  {{"base-color", BaseColorEditingAndReload},
                   {"normal-map", NormalMapEditingAndReload},
                   {"mesh-assets", MeshAssetEditing},
@@ -1303,6 +1342,7 @@ int main(int argc, char** argv) {
                   {"move", CrossSceneMove},
                   {"hierarchy", HierarchyActions},
                   {"clipboard", GroupClipboard},
+                  {"animation-clipboard", AnimationClipboard},
                   {"viewport", ViewportWorldEditing},
                   {"viewport3d", ViewportAffinePicking},
                   {"async", AsyncAndDuplicateOpen},

@@ -16,6 +16,9 @@ public:
     static bool Refresh(Scene& target, uint32 root, std::string& error);
     static bool Revert(Scene& target, uint32 root, std::string& error);
     static bool Unpack(Scene& target, uint32 root, std::string& error);
+
+private:
+    static void Materialize(Scene& staged, uint32 root);
 };
 
 } // namespace LuxEngine
