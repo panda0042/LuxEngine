@@ -156,9 +156,8 @@ struct AnimatorPlayer::Impl {
     AnimationPlayback StartPlayback(const AnimatorState& state) {
         const auto clip = Primary(state);
         const double playbackSpeed = state.speed * speed;
-        const double start = playbackSpeed < 0 && clip->GetWrap() == AnimationWrap::Once
-                                 ? clip->duration
-                                 : 0;
+        const double start =
+            playbackSpeed < 0 && clip->GetWrap() == AnimationWrap::Once ? clip->duration : 0;
         return {start, playbackSpeed, true, start};
     }
 
@@ -365,8 +364,8 @@ bool AnimatorPlayer::SetSpeed(double value) {
     for (size_t index = 0; index < impl_->layers.size(); ++index) {
         auto& runtime = impl_->layers[index];
         if (!runtime.positioned)
-            runtime.playback = impl_->StartPlayback(
-                impl_->controller->layers[index].states[runtime.current]);
+            runtime.playback =
+                impl_->StartPlayback(impl_->controller->layers[index].states[runtime.current]);
     }
     return true;
 }
@@ -425,14 +424,17 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
             runtime.positioned |= runtime.playback.previousCursor != runtime.playback.cursor;
             if (emitEvents) {
                 if (layer.weight > 0) {
-                    const auto& eventClip = *std::max_element(
-                        sources.rbegin(), sources.rend(),
-                        [](const auto& a, const auto& b) { return a.second < b.second; })->first;
+                    const auto& eventClip = *std::max_element(sources.rbegin(), sources.rend(),
+                                                              [](const auto& a, const auto& b) {
+                                                                  return a.second < b.second;
+                                                              })
+                                                 ->first;
                     const double ratio = eventClip.duration / clip->duration;
                     const double from = runtime.playback.previousCursor * ratio;
                     const double to = runtime.playback.cursor * ratio;
                     if (runtime.fresh) {
-                        const double initial = AnimationTime(from, eventClip.duration, eventClip.GetWrap());
+                        const double initial =
+                            AnimationTime(from, eventClip.duration, eventClip.GetWrap());
                         for (const auto& event : eventClip.events)
                             if (event.time == initial)
                                 result.events.push_back(event);
@@ -458,8 +460,9 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
                 runtime.previousPlayback.previousCursor = runtime.previousPlayback.cursor;
             const double factor = std::clamp(runtime.elapsed / runtime.fade, 0.0, 1.0);
             const auto& previousState = layer.states[runtime.previous];
-            auto previous = impl_->Sample(impl_->BlendSources(previousState), runtime.previousPlayback,
-                                          impl_->Primary(previousState)->duration, layer.mask);
+            auto previous =
+                impl_->Sample(impl_->BlendSources(previousState), runtime.previousPlayback,
+                              impl_->Primary(previousState)->duration, layer.mask);
             // Preserve the weighted model pose contributors for skeleton-space mixing.
             for (auto& model : previous.models)
                 model.weight *= 1 - factor;

@@ -95,8 +95,10 @@ bool CheckContentFailureKeepsPrevious(const fs::path& projectDir, const BuildToo
     const auto syncArguments = [&](const fs::path& outputRoot, const fs::path& manifestPath) {
         return LuxUI::StringList{option("SOURCE_ROOT", source),
                                  option("PROJECT_MANIFEST", source / "project.luxproject"),
-                                 option("CONTENT_ROOT", outputRoot), option("MANAGED_ROOT", managed),
-                                 option("MANIFEST", manifestPath), LUX_UI_TEXT("-P"),
+                                 option("CONTENT_ROOT", outputRoot),
+                                 option("MANAGED_ROOT", managed),
+                                 option("MANIFEST", manifestPath),
+                                 LUX_UI_TEXT("-P"),
                                  ToQString(projectDir / "SyncContent.cmake")};
     };
     const auto arguments = syncArguments(content, manifest);

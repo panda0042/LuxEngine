@@ -37,9 +37,7 @@ bool IsValidProjectDependencyVersion(std::string_view version) {
 }
 
 bool IsValidProjectDependency(std::string_view package, std::string_view version) {
-    const auto letter = [](char c) {
-        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
-    };
+    const auto letter = [](char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); };
     if (package.empty() || package.size() > 64 || !letter(package.front()))
         return false;
     for (const char c : package)

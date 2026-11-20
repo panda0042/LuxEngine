@@ -1117,8 +1117,10 @@ void TestCustomProjectManifest() {
     project = EditorProject::Open(custom, error);
     Check(bool(project), "custom project manifest opens");
     fs::path backup;
-    Check(CreateProjectBackup(*project, backup, error) && RestoreProjectBackup(*project, backup, error) &&
-              bool(EditorProject::Open(custom, error)) && !fs::exists(root / EditorProject::FileName),
+    Check(CreateProjectBackup(*project, backup, error) &&
+              RestoreProjectBackup(*project, backup, error) &&
+              bool(EditorProject::Open(custom, error)) &&
+              !fs::exists(root / EditorProject::FileName),
           "backup round trip preserves the original project manifest name");
     const auto archive = files.path / "project.luxpack";
     Check(ExportProject(*project, archive, error), "custom project manifest exports");
@@ -1132,7 +1134,8 @@ void TestIcnsImagePayload() {
     using namespace LuxEditor;
     TempDirectory files;
     std::string error;
-    auto project = EditorProject::Create(files.path / "project", "Icon", ProjectTemplate::Empty, error);
+    auto project =
+        EditorProject::Create(files.path / "project", "Icon", ProjectTemplate::Empty, error);
     Check(bool(project), "icon fixture project creates");
     const auto png = files.path / "icon-payload.png";
     LuxUI::Image image(16, 16, LuxUI::Image::Format_RGBA8888);

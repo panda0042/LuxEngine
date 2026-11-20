@@ -262,8 +262,8 @@ void FixedStepRootMotion() {
                 animation.clip.duration = paused ? 2 * step : step;
                 animation.clip.loop = paused;
                 const double first = uneven ? step * 1.5 : step;
-                animation.clip.tracks = {Track(AnimationProperty::Position, 0, 1,
-                                               paused ? first : step)};
+                animation.clip.tracks = {
+                    Track(AnimationProperty::Position, 0, 1, paused ? first : step)};
                 scene.OnUpdate(first);
                 if (paused)
                     animation.playing = false;

@@ -199,12 +199,13 @@ void TestPlan() {
         hasEngineDir = hasEngineDir || argument.starts_with("-DLuxEngine_DIR=");
     Check(hasEngineDir, "configure passes the engine package");
     const auto namedManifest = project / "Named.luxproject";
-    const auto namedPlan = PlanBuild(project, BuildConfiguration::Debug, tools, "LuxGame", error,
-                                     namedManifest);
-    Check(namedPlan && std::find(namedPlan->steps.front().arguments.begin(),
-                                 namedPlan->steps.front().arguments.end(),
-                                 "-DLUX_PROJECT_MANIFEST:FILEPATH=" + GenericPathUtf8(namedManifest)) !=
-                           namedPlan->steps.front().arguments.end(),
+    const auto namedPlan =
+        PlanBuild(project, BuildConfiguration::Debug, tools, "LuxGame", error, namedManifest);
+    Check(namedPlan &&
+              std::find(namedPlan->steps.front().arguments.begin(),
+                        namedPlan->steps.front().arguments.end(),
+                        "-DLUX_PROJECT_MANIFEST:FILEPATH=" + GenericPathUtf8(namedManifest)) !=
+                  namedPlan->steps.front().arguments.end(),
           "the editor configure step passes the open project manifest");
     const auto& build = plan->steps[1].arguments;
     Check(build.size() >= 4 && build[2] == "--config" && build[3] == "Release",

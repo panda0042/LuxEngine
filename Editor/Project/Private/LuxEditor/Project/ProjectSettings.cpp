@@ -63,10 +63,9 @@ bool ValidateIcns(const std::filesystem::path& path) {
         remaining -= chunk;
         const auto payload = chunk - 8;
         const std::string_view type(reinterpret_cast<const char*>(header.data()), 4);
-        if (!hasImage && ((type == "ICON" && payload == 128) ||
-                          (type == "ICN#" && payload == 256) ||
-                          (type == "ics#" && payload == 64) ||
-                          (type == "ich#" && payload == 576)))
+        if (!hasImage &&
+            ((type == "ICON" && payload == 128) || (type == "ICN#" && payload == 256) ||
+             (type == "ics#" && payload == 64) || (type == "ich#" && payload == 576)))
             hasImage = true;
         if (!hasImage && payload > 8 && payload <= 16 * 1024 * 1024 &&
             std::find(imageChunks.begin(), imageChunks.end(), type) != imageChunks.end()) {

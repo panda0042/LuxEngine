@@ -22,14 +22,16 @@ void ScenePhysicsWorld::Step(Scene& scene, double dt, uint32 index, uint32 count
     const auto& settings = scene.GetSettings();
     const auto gravity2D =
         settings.overrideGravity ? settings.gravity : PhysicsEngine::GetGravity2D();
-    const auto gravity = planar_ ? Vec3{gravity2D.x, gravity2D.y, 0}
-                                 : settings.overrideGravity ? settings.gravity3D
-                                                            : PhysicsEngine::GetGravity3D();
+    const auto gravity = planar_                    ? Vec3{gravity2D.x, gravity2D.y, 0}
+                         : settings.overrideGravity ? settings.gravity3D
+                                                    : PhysicsEngine::GetGravity3D();
     std::vector<PhysicsBodyDescription> descriptions;
+
     struct AppliedMotion {
         Vec3 drive;
         Vec3 expectedVelocity;
     };
+
     std::unordered_map<uint32, AppliedMotion> animationVelocities;
     active_.clear();
     for (const auto& entity : scene.GetEntitiesInHierarchyOrder()) {
@@ -127,8 +129,8 @@ void ScenePhysicsWorld::Step(Scene& scene, double dt, uint32 index, uint32 count
             if (planar_)
                 velocity.z = 0;
             body.velocity += velocity;
-            animationVelocities.emplace(id, AppliedMotion{
-                velocity, body.velocity + gravity * (body.gravityScale * dt)});
+            animationVelocities.emplace(
+                id, AppliedMotion{velocity, body.velocity + gravity * (body.gravityScale * dt)});
         }
         descriptions.push_back(body);
         active_.push_back(id);

@@ -578,7 +578,8 @@ static bool WriteProjectArchive(const EditorProject& project, const std::filesys
             error = "다른 파일이 압축 파일의 프로젝트 매니페스트 경로와 충돌합니다: " + first;
             break;
         }
-        const auto entryPath = isManifest ? std::filesystem::path(EditorProject::FileName) : relative;
+        const auto entryPath =
+            isManifest ? std::filesystem::path(EditorProject::FileName) : relative;
         if (ec || ++entries > MaxEntries || !SafeArchivePath(entryPath)) {
             error = "프로젝트 파일 수 또는 크기가 제한을 넘었습니다.";
             break;

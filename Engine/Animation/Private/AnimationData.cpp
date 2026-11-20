@@ -56,8 +56,7 @@ std::vector<AnimationEvent> AnimationPlayback::Advance(double dt, double duratio
     const double low = std::min(previous, next), high = std::max(previous, next);
     const double span = high - low;
     auto emit = [&](double at, const AnimationEvent& event) {
-        if ((next > previous && at > 0 && at <= span) ||
-            (next < previous && at >= 0 && at < span))
+        if ((next > previous && at > 0 && at <= span) || (next < previous && at >= 0 && at < span))
             crossed.emplace_back(at, event);
     };
     if (wrap == AnimationWrap::Once) {
@@ -86,7 +85,8 @@ std::vector<AnimationEvent> AnimationPlayback::Advance(double dt, double duratio
         return next >= previous ? a.first < b.first : a.first > b.first;
     });
     cursor = wrap == AnimationWrap::Once ? std::clamp(next, 0.0, duration) : next;
-    if (wrap == AnimationWrap::Once && ((speed > 0 && next >= duration) || (speed < 0 && next <= 0)))
+    if (wrap == AnimationWrap::Once &&
+        ((speed > 0 && next >= duration) || (speed < 0 && next <= 0)))
         playing = false;
     std::vector<AnimationEvent> result;
     for (auto& event : crossed)

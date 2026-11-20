@@ -1285,10 +1285,11 @@ void Audio() {
     Wav(reloadPath);
     Check(AudioEngine::ReloadClip(reloadPath), "a repaired file can replace the cached clip");
     std::filesystem::resize_file(reloadPath, 16ull * 1024 * 1024 + 1);
-    Check(!AudioEngine::ReloadClip(reloadPath) && AudioEngine::IsMusicPlaying() &&
-              AudioEngine::GetCachedFileCount() == cachedCount &&
-              AudioEngine::GetCacheUsageBytes() == cachedBytes,
-          "oversized WAV files are rejected before their small audio payload can replace the cache");
+    Check(
+        !AudioEngine::ReloadClip(reloadPath) && AudioEngine::IsMusicPlaying() &&
+            AudioEngine::GetCachedFileCount() == cachedCount &&
+            AudioEngine::GetCacheUsageBytes() == cachedBytes,
+        "oversized WAV files are rejected before their small audio payload can replace the cache");
     AudioEngine::StopMusic();
 
     // Phase 2: Audio Safety, Callback Lifecycle & Cache Stress Tests
