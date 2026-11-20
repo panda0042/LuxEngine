@@ -156,6 +156,7 @@ private:
     template <class T> Pool<T>& GetPool();
 
     void RequireAlive(uint32 id) const;
+    static uint64 NewReferenceIdentity();
     bool SetReferenceIdentity(uint32 id, uint64 identity);
     void EraseReferenceIdentity(uint32 id);
     void StabilizeScriptReferences(bool assignIdentities = true);

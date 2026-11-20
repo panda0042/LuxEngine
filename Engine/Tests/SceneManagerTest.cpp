@@ -439,6 +439,91 @@ void TestStreamingScriptReferences(const fs::path& directory) {
           "streamed references restore links to the persistent scene");
 }
 
+void TestCopyUnloadedNestedInstances(const fs::path& directory) {
+    SceneManager manager;
+    std::string error;
+    Scene leaf;
+    const auto actor = AddSprite(leaf, "streamed actor", 4);
+    const auto leafPath = directory / "Scenes/copy-leaf.lux";
+    Save(leaf, leafPath);
+
+    Scene middle;
+    const auto sibling = middle.CreateEntity("sibling").GetId();
+    const auto inner =
+        manager.AddSceneInstance(middle, leafPath, SceneReferenceMode::Nested, error);
+    Check(inner && manager.ConfigureStreaming(middle, inner, {0, 0}, 4, 8, error), error);
+    const auto original = Mapped(middle, inner, actor);
+    middle.GetComponent<TransformComponent>(original).position.x = 21;
+    middle.AddComponent<ScriptComponent>(original, "Fixture.Actor", true).fields["Link"] =
+        ScriptEntityReference{sibling};
+    middle.AddComponent<ScriptComponent>(sibling, "Fixture.Sibling", true).fields["Link"] =
+        ScriptEntityReference{original};
+    Check(manager.UnloadInstance(middle, inner, error), error);
+    const auto middlePath = directory / "Scenes/copy-middle.lux";
+    Save(middle, middlePath);
+    auto reopenedMiddle = manager.Load(middlePath);
+    Check(bool(reopenedMiddle), reopenedMiddle.error);
+    const auto unrelated = reopenedMiddle.scene->CreateEntity("unrelated").GetId();
+    Check(unrelated != original, "reopening leaves suspended entity IDs reserved");
+    Save(*reopenedMiddle.scene, middlePath);
+
+    Scene world;
+    for (int i = 0; i < 20; ++i)
+        world.CreateEntity("background");
+    const auto first =
+        manager.AddSceneInstance(world, middlePath, SceneReferenceMode::Nested, error);
+    Check(first != 0, error);
+    const auto second =
+        manager.AddSceneInstance(world, middlePath, SceneReferenceMode::Nested, error);
+    Check(second != 0, error);
+    const auto firstInner = Mapped(world, first, inner);
+    const auto secondInner = Mapped(world, second, inner);
+    Check(firstInner != inner && secondInner != inner && firstInner != secondInner,
+          "both saved roots are relocated");
+    Check(manager.ConfigureStreaming(world, first, {0, 0}, 4, 8, error) &&
+              manager.UnloadInstance(world, first, error),
+          error);
+    const auto worldPath = directory / "Scenes/copy-world.lux";
+    Save(world, worldPath);
+    auto reopened = manager.Load(worldPath);
+    Check(bool(reopened), reopened.error);
+    auto& scene = *reopened.scene;
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    do {
+        Check(manager.UpdateStreaming(scene, {0, 0}, error), error);
+        const auto restoredInner = Mapped(scene, first, inner);
+        if (restoredInner && Mapped(scene, restoredInner, actor) &&
+            Mapped(scene, secondInner, actor))
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < deadline);
+
+    const auto resolve = [&](uint32 id) {
+        const auto& field = scene.GetComponent<ScriptComponent>(id).fields.at("Link");
+        return scene.ResolveScriptEntityReference(std::get<ScriptEntityReference>(field));
+    };
+    const auto verify = [&](uint32 outer) {
+        const auto localInner = Mapped(scene, outer, inner);
+        const auto localSibling = Mapped(scene, outer, sibling);
+        Check(localInner && localSibling, "restored outer scene retains its live mappings");
+        const auto localActor = Mapped(scene, localInner, actor);
+        Check(localActor && Mapped(scene, outer, original) == localActor &&
+                  scene.GetParent(localActor) == localInner,
+              "restored actor belongs to the inner hierarchy and both instance maps");
+        Check(scene.GetComponent<TransformComponent>(localActor).position.x == 21 &&
+                  resolve(localActor) == localSibling && resolve(localSibling) == localActor,
+              "each relocated region restores its override and both script links");
+        return localActor;
+    };
+    Check(verify(first) != verify(second), "duplicate copies restore distinct actors");
+    Check(manager.RefreshInstances(scene, error), error);
+    const auto firstActor = verify(first);
+    const auto secondActor = verify(second);
+    Check(firstActor != secondActor && scene.GetEntityCount() == 30,
+          "refresh keeps both regions and does not duplicate restored actors");
+}
+
 void TestLiveRuntimeState(const fs::path& directory) {
     Scene target;
     auto ground = target.CreateEntity("ground");
@@ -607,6 +692,7 @@ int RunSceneManagerTests(int, char**) {
             Files files;
             TestNestedStreaming(files.root);
             TestStreamingScriptReferences(files.root);
+            TestCopyUnloadedNestedInstances(files.root);
         }
         {
             Files files;

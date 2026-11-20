@@ -1,5 +1,6 @@
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -279,6 +280,12 @@ bool Scene::SerializeToString(std::string& output) {
         root["entities"] = Json::array();
         std::vector<uint32> ids(entities_.begin(), entities_.end());
         std::sort(ids.begin(), ids.end());
+        const auto firstFreeId = ids.empty() ? 1u : ids.back() + 1;
+        if (nextEntityId_ > firstFreeId && std::any_of(ids.begin(), ids.end(), [&](const auto id) {
+                const auto* reference = TryGetComponent<SceneReferenceComponent>(id);
+                return reference && !reference->suspended.empty();
+            }))
+            root["next_entity_id"] = nextEntityId_;
         for (auto id : ids) {
             Json components = Json::object();
             if (const auto* component = TryGetComponent<ScriptComponent>(id)) {
@@ -733,6 +740,12 @@ bool Scene::DeserializeJson(const std::string& data) {
             }
         }
         parsed.nextEntityId_ = ids.empty() ? 1 : *ids.rbegin() + 1;
+        if (root.contains("next_entity_id")) {
+            uint32 nextId = 0;
+            ReadJsonValue(root.at("next_entity_id"), nextId);
+            RequireValidScene(nextId >= parsed.nextEntityId_);
+            parsed.nextEntityId_ = nextId;
+        }
         if (!parsed.ValidateForSerialization())
             return false;
         AdoptLoadedScene(parsed);

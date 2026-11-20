@@ -1401,6 +1401,18 @@ bool Scene::SetReferenceIdentity(uint32 id, uint64 identity) {
     return true;
 }
 
+uint64 Scene::NewReferenceIdentity() {
+    static std::atomic<uint64> nextIdentity([] {
+        std::random_device random;
+        return (static_cast<uint64>(random()) << 32) | random();
+    }());
+    uint64 candidate;
+    do {
+        candidate = nextIdentity.fetch_add(1);
+    } while (!candidate);
+    return candidate;
+}
+
 void Scene::EraseReferenceIdentity(uint32 id) {
     if (const auto found = referenceIdentities_.find(id); found != referenceIdentities_.end()) {
         entitiesByReferenceIdentity_.erase(found->second);
@@ -1427,14 +1439,10 @@ void Scene::StabilizeScriptReferences(bool assignIdentities) {
                 continue;
             auto existing = referenceIdentities_.find(reference->id);
             if (existing == referenceIdentities_.end()) {
-                static std::atomic<uint64> nextIdentity([] {
-                    std::random_device random;
-                    return (static_cast<uint64>(random()) << 32) | random();
-                }());
                 uint64 candidate;
                 do {
-                    candidate = nextIdentity.fetch_add(1);
-                } while (!candidate || entitiesByReferenceIdentity_.contains(candidate));
+                    candidate = NewReferenceIdentity();
+                } while (entitiesByReferenceIdentity_.contains(candidate));
                 SetReferenceIdentity(reference->id, candidate);
                 existing = referenceIdentities_.find(reference->id);
             }
