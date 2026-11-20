@@ -171,32 +171,49 @@ void RemapReference(SceneReferenceComponent& reference, const IdMap& mapping) {
 SceneSettings InheritedSettings(const SceneSettings& current, const SceneSettings& previous,
                                 const SceneSettings& source) {
     auto result = current;
-    if (result.clearColor.x == previous.clearColor.x)
-        result.clearColor.x = source.clearColor.x;
-    if (result.clearColor.y == previous.clearColor.y)
-        result.clearColor.y = source.clearColor.y;
-    if (result.clearColor.z == previous.clearColor.z)
-        result.clearColor.z = source.clearColor.z;
-    if (result.clearColor.w == previous.clearColor.w)
-        result.clearColor.w = source.clearColor.w;
-    if (result.exposure == previous.exposure)
-        result.exposure = source.exposure;
-    if (result.gravity.x == previous.gravity.x)
-        result.gravity.x = source.gravity.x;
-    if (result.gravity.y == previous.gravity.y)
-        result.gravity.y = source.gravity.y;
-    if (result.gravity3D.x == previous.gravity3D.x)
-        result.gravity3D.x = source.gravity3D.x;
-    if (result.gravity3D.y == previous.gravity3D.y)
-        result.gravity3D.y = source.gravity3D.y;
-    if (result.gravity3D.z == previous.gravity3D.z)
-        result.gravity3D.z = source.gravity3D.z;
-    if (result.fixedStep == previous.fixedStep)
-        result.fixedStep = source.fixedStep;
-    if (result.overrideGravity == previous.overrideGravity)
-        result.overrideGravity = source.overrideGravity;
-    if (result.physicsSubsteps == previous.physicsSubsteps)
-        result.physicsSubsteps = source.physicsSubsteps;
+    const auto inherit = [](auto& local, const auto& oldValue, const auto& newValue) {
+        if (local == oldValue)
+            local = newValue;
+    };
+    const auto inheritVec3 = [&](auto& local, const auto& oldValue, const auto& newValue) {
+        inherit(local.x, oldValue.x, newValue.x);
+        inherit(local.y, oldValue.y, newValue.y);
+        inherit(local.z, oldValue.z, newValue.z);
+    };
+    inheritVec3(result.clearColor, previous.clearColor, source.clearColor);
+    inherit(result.clearColor.w, previous.clearColor.w, source.clearColor.w);
+    inherit(result.exposure, previous.exposure, source.exposure);
+    inherit(result.gravity.x, previous.gravity.x, source.gravity.x);
+    inherit(result.gravity.y, previous.gravity.y, source.gravity.y);
+    inheritVec3(result.gravity3D, previous.gravity3D, source.gravity3D);
+    inherit(result.fixedStep, previous.fixedStep, source.fixedStep);
+    inherit(result.overrideGravity, previous.overrideGravity, source.overrideGravity);
+    inherit(result.physicsSubsteps, previous.physicsSubsteps, source.physicsSubsteps);
+
+    auto& render = result.render3D;
+    const auto& oldRender = previous.render3D;
+    const auto& newRender = source.render3D;
+    inherit(render.mode, oldRender.mode, newRender.mode);
+    if (render.sun.direction.x == oldRender.sun.direction.x &&
+        render.sun.direction.y == oldRender.sun.direction.y &&
+        render.sun.direction.z == oldRender.sun.direction.z)
+        render.sun.direction = newRender.sun.direction;
+    inheritVec3(render.sun.color, oldRender.sun.color, newRender.sun.color);
+    inherit(render.sun.intensity, oldRender.sun.intensity, newRender.sun.intensity);
+    inheritVec3(render.environmentColor, oldRender.environmentColor, newRender.environmentColor);
+    inherit(render.environmentIntensity, oldRender.environmentIntensity,
+            newRender.environmentIntensity);
+    inherit(render.environmentRotation, oldRender.environmentRotation,
+            newRender.environmentRotation);
+    inherit(render.environmentPath, oldRender.environmentPath, newRender.environmentPath);
+    inherit(render.imageBasedLighting, oldRender.imageBasedLighting, newRender.imageBasedLighting);
+    inherit(render.showSkybox, oldRender.showSkybox, newRender.showSkybox);
+    inherit(render.toneMapping, oldRender.toneMapping, newRender.toneMapping);
+    inherit(render.shadows, oldRender.shadows, newRender.shadows);
+    inherit(render.shadowResolution, oldRender.shadowResolution, newRender.shadowResolution);
+    inherit(render.shadowRange, oldRender.shadowRange, newRender.shadowRange);
+    inherit(render.shadowDepthBias, oldRender.shadowDepthBias, newRender.shadowDepthBias);
+    inherit(render.shadowNormalBias, oldRender.shadowNormalBias, newRender.shadowNormalBias);
     return result;
 }
 
@@ -652,17 +669,19 @@ void SceneManager::State::RefreshOne(Scene& target, uint32 root, Scene& source, 
     for (const auto& [sourceId, localId] : oldMap)
         if (!source.IsAlive(sourceId) && target.IsAlive(localId) && untouched[sourceId])
             removeLocals.insert(localId);
-    for (const auto local : removeLocals) {
-        if (!target.IsAlive(local))
-            continue;
-        auto parent = target.GetParent(local);
-        while (parent != 0 && removeLocals.contains(parent))
-            parent = target.GetParent(parent);
-        for (const auto child : target.GetChildren(local))
-            if (!removeLocals.contains(child) && !target.SetParent(child, parent, true))
+    if (!removeLocals.empty()) {
+        for (const auto child : target.GetComponentEntityIds<HierarchyComponent>()) {
+            auto parent = target.GetParent(child);
+            if (!removeLocals.contains(parent) || removeLocals.contains(child))
+                continue;
+            do {
+                parent = target.GetParent(parent);
+            } while (removeLocals.contains(parent));
+            if (!target.SetParent(child, parent, true))
                 throw std::runtime_error(
                     "상속된 부모를 제거하는 동안 자식 상태를 보존할 수 없습니다.");
-        target.DestroyEntity(Entity(local, &target));
+        }
+        target.DestroySubtrees({removeLocals.begin(), removeLocals.end()});
     }
     const auto belongsToSuspendedSource = [&](uint32 localId) {
         for (auto parent = target.GetParent(localId); parent; parent = target.GetParent(parent))

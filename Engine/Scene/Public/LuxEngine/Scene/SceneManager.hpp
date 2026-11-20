@@ -60,6 +60,7 @@ public:
 
 private:
     friend class Scene;
+    friend class PrefabLibrary;
     static void RebaseSuspended(Scene& target, SceneReferenceComponent& reference, uint32 root,
                                 const std::unordered_map<uint32, uint32>& anchors,
                                 std::unordered_map<uint64, uint64>* identities, uint32 outer = 0,

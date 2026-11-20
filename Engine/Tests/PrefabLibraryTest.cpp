@@ -208,12 +208,54 @@ void RoundTrip(const fs::path& directory) {
               0,
           "Prefab sources must resolve within a relocated project");
 }
+
+void UnloadedPrefabRoundTrip(const fs::path& directory) {
+    std::string error;
+    Scene source, target;
+    const auto actor = source.CreateEntity("Actor");
+    const auto part = source.CreateEntity("Part");
+    Check(source.SetParent(part.GetId(), actor.GetId(), false), "prefab child is parented");
+    const auto original = directory / "unloaded-source.luxprefab";
+    Check(PrefabLibrary::Save(source, actor.GetId(), original, error), error);
+    const auto root = PrefabLibrary::Instantiate(target, original, error);
+    Check(root != 0, error);
+    const auto child = Local(target, root, actor.GetId());
+    target.GetComponent<TransformComponent>(child).position.x = 42;
+    SceneManager manager;
+    Check(manager.UnloadInstance(target, root, error), error);
+    fs::remove(original);
+
+    const auto copy = directory / "unloaded-copy.luxprefab";
+    const auto unloaded = Snapshot(target);
+    Check(PrefabLibrary::Save(target, root, copy, error) && Snapshot(target) == unloaded, error);
+    auto loaded = manager.Load(copy);
+    Check(loaded && loaded.scene->GetEntityCount() == 3 &&
+              loaded.scene->GetComponent<TransformComponent>(loaded.scene->GetChildren(root).at(0))
+                      .position.x == 42,
+          "saving an unloaded instance preserves its hierarchy and local edits without the source");
+
+    auto& suspended = target.GetComponent<SceneReferenceComponent>(root).suspended;
+    const auto saved = suspended;
+    suspended = "invalid suspended scene";
+    const auto broken = Snapshot(target);
+    const auto copyBytes = Read(copy);
+    Check(!PrefabLibrary::Save(target, root, copy, error) && Read(copy) == copyBytes &&
+              !PrefabLibrary::Unpack(target, root, error) && Snapshot(target) == broken,
+          "invalid suspended state cannot replace the file or remove the connection");
+    suspended = saved;
+    Check(PrefabLibrary::Unpack(target, root, error) &&
+              !target.HasComponent<SceneReferenceComponent>(root) && target.GetEntityCount() == 3 &&
+              target.GetComponent<TransformComponent>(target.GetChildren(root).at(0)).position.x ==
+                  42,
+          "unpacking an unloaded instance retains its hierarchy and local edits");
+}
 } // namespace
 
 int main() {
     try {
         Files files;
         RoundTrip(files.root);
+        UnloadedPrefabRoundTrip(files.root);
         std::cout
             << "Prefab export, instances, overrides, revert, validation and relocation passed\n";
         return 0;
