@@ -21,7 +21,8 @@ Entity::operator bool() const {
 }
 
 bool Entity::operator==(const Entity& other) const {
-    return id_ == other.id_ && scene_ == other.scene_;
+    return id_ == other.id_ && scene_ == other.scene_ && !lifetime_.owner_before(other.lifetime_) &&
+           !other.lifetime_.owner_before(lifetime_);
 }
 
 bool Entity::operator!=(const Entity& other) const {

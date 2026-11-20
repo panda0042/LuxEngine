@@ -495,17 +495,14 @@ struct SceneManager::State {
     }
 
     std::shared_ptr<Scene> LoadResolved(const fs::path& requested, LoadContext& context);
-    static void RebaseSuspended(Scene& target, SceneReferenceComponent& reference, uint32 root,
-                                const IdMap& anchors, IdentityMap* identities, uint32 outer = 0,
-                                size_t depth = 0);
     void RefreshOne(Scene& target, uint32 root, Scene& source, bool reset = false);
     SceneLoadResult LoadTop(const fs::path& requested, bool preload,
                             std::optional<uint64> submittedGeneration = std::nullopt);
 };
 
-void SceneManager::State::RebaseSuspended(Scene& target, SceneReferenceComponent& reference,
-                                          uint32 root, const IdMap& anchors,
-                                          IdentityMap* identities, uint32 outer, size_t depth) {
+void SceneManager::RebaseSuspended(Scene& target, SceneReferenceComponent& reference, uint32 root,
+                                   const IdMap& anchors, IdentityMap* identities, uint32 outer,
+                                   size_t depth) {
     if (reference.suspended.empty())
         return;
     Scene saved;
@@ -1153,7 +1150,7 @@ void SceneManager::RestoreSubtree(Scene& target, uint32 root) {
     Scene snapshot;
     if (!snapshot.DeserializeFromString(reference.suspended) || !snapshot.IsAlive(root))
         throw std::runtime_error("언로드된 씬 상태를 복원할 수 없습니다.");
-    const auto mapping = target.ImportEntities(snapshot, {root});
+    const auto mapping = target.ImportEntitiesInternal(snapshot, {root}, 0, false, true);
     if (mapping.empty())
         throw std::runtime_error("언로드된 씬 상태를 복원할 수 없습니다.");
     const auto newRoot = mapping.at(root);
@@ -1166,7 +1163,7 @@ void SceneManager::RestoreSubtree(Scene& target, uint32 root) {
         if (old == root)
             continue;
         if (auto* nested = target.TryGetComponent<SceneReferenceComponent>(local))
-            State::RebaseSuspended(target, *nested, old, rebasedAnchors, nullptr);
+            RebaseSuspended(target, *nested, old, rebasedAnchors, nullptr);
         if (const auto identity = snapshot.referenceIdentities_.find(old);
             identity != snapshot.referenceIdentities_.end() &&
             !target.SetReferenceIdentity(local, identity->second))
@@ -1247,7 +1244,6 @@ void SceneManager::UnloadSubtree(Scene& target, uint32 root) {
 void SceneManager::ApplyStreaming(
     Scene& target, const std::vector<uint32>& unloads,
     const std::vector<std::pair<uint32, std::shared_ptr<Scene>>>& loads) {
-    target.StabilizeScriptReferences();
     auto roots = unloads;
     for (const auto& [root, source] : loads)
         roots.push_back(root);
@@ -1257,15 +1253,15 @@ void SceneManager::ApplyStreaming(
     auto affected = staged.entities_;
     for (const auto id : anchors)
         affected.erase(id);
+    auto references = target.PrepareRegionReferences(staged, affected);
     for (const auto root : unloads)
         if (staged.IsAlive(root))
             UnloadSubtree(staged, root);
     for (const auto& [root, source] : loads)
         if (staged.IsAlive(root))
             state_->RefreshOne(staged, root, *source);
-    if (!target.CommitRegion(staged, anchors, affected))
+    if (!target.CommitRegion(staged, anchors, affected, references))
         throw std::runtime_error("씬 스트리밍 상태를 적용할 수 없습니다.");
-    target.StabilizeScriptReferences(false);
 }
 
 bool SceneManager::UnloadInstance(Scene& target, uint32 root, std::string& error) {
@@ -1351,7 +1347,15 @@ bool SceneManager::UpdateStreaming(Scene& target, Vec2 observer, std::string& er
                     unloads.push_back(root);
                 continue;
             }
-            const auto path = Canonical(Path(reference.path), Path(target.GetSourcePath()));
+            fs::path path;
+            try {
+                path = Canonical(Path(reference.path), Path(target.GetSourcePath()));
+            } catch (const std::exception& failure) {
+                std::erase_if(state_->streams, streamMatches);
+                if (error.empty())
+                    error = failure.what();
+                continue;
+            }
             const auto pathText = Utf8(path);
             auto pending =
                 std::find_if(state_->streams.begin(), state_->streams.end(), streamMatches);
@@ -1374,45 +1378,75 @@ bool SceneManager::UpdateStreaming(Scene& target, Vec2 observer, std::string& er
             }
             if (pending->future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
                 continue;
-            auto loaded = pending->future.get();
+            auto future = std::move(pending->future);
             state_->streams.erase(pending);
             const auto defer = [&](const std::string& reason) {
                 state_->failedStreams.push_back(
                     {&target, target.Lifetime(), root, pathText,
                      std::chrono::steady_clock::now() + std::chrono::seconds(3)});
-                error = reason;
+                if (error.empty())
+                    error = reason;
             };
-            if (!loaded) {
-                if (!loaded.retryable)
-                    defer(loaded.error);
-                continue;
-            }
-            if (!target.GetSourcePath().empty()) {
-                const auto origin = Canonical(Path(target.GetSourcePath()));
-                const auto dependencies = ReferenceRoots(*loaded.scene);
-                const bool cyclic =
-                    SamePath(origin, path) ||
-                    std::any_of(dependencies.begin(), dependencies.end(), [&](uint32 id) {
-                        return SamePath(
-                            origin,
-                            Canonical(Path(
-                                loaded.scene->GetComponent<SceneReferenceComponent>(id).path)));
-                    });
-                if (cyclic) {
-                    defer("씬 스트리밍 참조에 순환 관계가 있습니다.");
+            try {
+                auto loaded = future.get();
+                if (!loaded) {
+                    if (!loaded.retryable)
+                        defer(loaded.error);
                     continue;
                 }
+                if (!target.GetSourcePath().empty()) {
+                    const auto origin = Canonical(Path(target.GetSourcePath()));
+                    const auto dependencies = ReferenceRoots(*loaded.scene);
+                    const bool cyclic =
+                        SamePath(origin, path) ||
+                        std::any_of(dependencies.begin(), dependencies.end(), [&](uint32 id) {
+                            return SamePath(
+                                origin,
+                                Canonical(Path(
+                                    loaded.scene->GetComponent<SceneReferenceComponent>(id).path)));
+                        });
+                    if (cyclic) {
+                        defer("씬 스트리밍 참조에 순환 관계가 있습니다.");
+                        continue;
+                    }
+                }
+                loads.emplace_back(root, std::move(loaded.scene));
+            } catch (const std::exception& failure) {
+                defer(failure.what());
             }
-            loads.emplace_back(root, std::move(loaded.scene));
         }
-        if (!error.empty())
-            return false;
         if (loads.empty() && unloads.empty())
-            return true;
-        ApplyStreaming(target, unloads, loads);
-        if (changed)
-            *changed = true;
-        return true;
+            return error.empty();
+        try {
+            ApplyStreaming(target, unloads, loads);
+            if (changed)
+                *changed = true;
+        } catch (const std::exception&) {
+            const auto applyOne = [&](uint32 root, const std::shared_ptr<Scene>& source) {
+                if (!target.HasComponent<SceneReferenceComponent>(root))
+                    return;
+                try {
+                    if (source)
+                        ApplyStreaming(target, {}, {{root, source}});
+                    else
+                        ApplyStreaming(target, {root}, {});
+                    if (changed)
+                        *changed = true;
+                } catch (const std::exception& failure) {
+                    if (error.empty())
+                        error = failure.what();
+                    if (source)
+                        state_->failedStreams.push_back(
+                            {&target, target.Lifetime(), root, source->GetSourcePath(),
+                             std::chrono::steady_clock::now() + std::chrono::seconds(3)});
+                }
+            };
+            for (const auto root : unloads)
+                applyOne(root, {});
+            for (const auto& [root, source] : loads)
+                applyOne(root, source);
+        }
+        return error.empty();
     } catch (const std::exception& failure) {
         error = failure.what();
         return false;

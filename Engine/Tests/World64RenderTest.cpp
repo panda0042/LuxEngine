@@ -3,7 +3,9 @@
 #include <LuxEngine/Platform/Window.hpp>
 #include <LuxEngine/Renderer/Renderer2D/Renderer2D.hpp>
 #include <LuxEngine/Renderer/Renderer3D/Renderer3D.hpp>
+#include <LuxEngine/Scene/Entity.hpp>
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 using namespace LuxEngine;
@@ -43,7 +45,8 @@ int main() {
     try {
         Renderer3D::Context renderer(&gpu);
         Renderer3D::ScopedContext scoped(renderer);
-        auto capture = [&](double origin, double distance, double size) {
+        auto capture = [&](double origin, double distance, double size, double offscreenX = 0,
+                           bool forceFallback = false) {
             PerspectiveCamera camera(ToRadians(60), 1, .1, std::max(1000000., distance * 10));
             camera.SetPosition({origin + .125, 0, distance});
             camera.SetTarget({origin + .125, 0, 0});
@@ -59,15 +62,26 @@ int main() {
                 throw std::runtime_error("World64 frame failed");
             Render3DSettings settings;
             settings.mode = Render3DMode::Pbr;
-            settings.shadows = distance < 10;
+            settings.shadows = !forceFallback && distance < 10;
             settings.imageBasedLighting = false;
             settings.toneMapping = false;
             settings.sun.direction = {0, 0, -1};
+            if (forceFallback)
+                for (int pass = 0; pass < 16; ++pass) {
+                    Renderer3D::BeginScene(camera, settings, 1);
+                    Renderer3D::EndScene();
+                }
             Renderer3D::BeginScene(camera, settings, 1);
             Material3D material;
             material.albedoColor = {1, .2f, .1f, 1};
+            if (offscreenX)
+                for (int i = 0; i < 16384; ++i)
+                    Renderer3D::DrawCube({origin + offscreenX, 0, 0}, {1, 1, 1}, material);
             Renderer3D::DrawCube({origin + .125, 0, 0}, {size, size, size}, material);
             Renderer3D::EndScene();
+            if (forceFallback &&
+                renderer.GetLastAssetError().find("Too many 3D scene passes") == std::string::npos)
+                throw std::runtime_error("Expected the 17th scene pass to use the fallback");
             if (!gpu.EndFrame())
                 throw std::runtime_error(gpu.GetLastError());
             GpuFrameCapture image;
@@ -82,6 +96,12 @@ int main() {
         };
         if (center(normal) < 50 || center(large) < 50 || center(distant) < 50)
             throw std::runtime_error("Nearby or distant large-world object disappeared");
+        const auto fallback = center(capture(0, 3, 1, 0, true));
+        if (fallback < 50 || center(capture(1e12, 3, 1, 0, true)) != fallback)
+            throw std::runtime_error("Fallback rendering changed under large translation");
+        if (center(capture(0, 3, 1, 10000)) != center(normal) ||
+            center(capture(0, 3, 1, 20)) != center(normal))
+            throw std::runtime_error("Offscreen meshes consumed the visible object's draw budget");
         size_t difference = 0;
         for (size_t i = 0; i < normal.rgba.size(); ++i)
             difference += std::abs(int(normal.rgba[i]) - int(large.rgba[i]));
@@ -97,6 +117,24 @@ int main() {
             gpu.Clear(0, 0, 0, 1);
             gpu.RequestFrameCapture();
             Renderer2D::BeginScene(camera);
+            Scene scene;
+            auto map = scene.CreateEntity("Offscreen tiles");
+            map.GetComponent<TransformComponent>().position = {1e12 + 10000, 1e12, 0};
+            auto& tiles = map.AddComponent<TilemapComponent>();
+            if (!tiles.Resize(256, 256))
+                throw std::runtime_error("Could not create tilemap");
+            std::fill(tiles.tiles.begin(), tiles.tiles.end(), 1);
+            scene.OnRender();
+            if (Renderer2D::GetStats().quadCount != 0)
+                throw std::runtime_error("Offscreen tilemap submitted quads");
+            auto& transform = map.GetComponent<TransformComponent>();
+            transform.position = {1e12, 1e12, 0};
+            transform.rotation.z = .3;
+            scene.OnRender();
+            const auto visibleTiles = Renderer2D::GetStats().quadCount;
+            if (!visibleTiles || visibleTiles > 64)
+                throw std::runtime_error(
+                    "Partially visible rotated tilemap submitted wrong bounds");
             Renderer2D::DrawQuad(Mat4::Translate({1e12 + .125, 1e12 + .25, 0}), {1, 0, 0, 1});
             Renderer2D::EndScene();
             gpu.EndFrame();

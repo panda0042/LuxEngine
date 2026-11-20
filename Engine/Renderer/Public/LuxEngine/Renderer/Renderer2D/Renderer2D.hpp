@@ -70,6 +70,7 @@ public:
 
         void BeginScene(const OrthographicCamera& camera);
         void EndScene();
+        bool GetVisibleLocalBounds(const Mat4& transform, Vec2& minimum, Vec2& maximum) const;
         void AbortScene();
 
         void DrawQuad(const Vec2& position, const Vec2& size, const Vec4& color);
@@ -109,6 +110,7 @@ public:
 
     static void BeginScene(const OrthographicCamera& camera);
     static void EndScene();
+    static bool GetVisibleLocalBounds(const Mat4& transform, Vec2& minimum, Vec2& maximum);
 
     static void DrawQuad(const Vec2& position, const Vec2& size, const Vec4& color);
     static void DrawQuad(const Vec3& position, const Vec2& size, const Vec4& color);

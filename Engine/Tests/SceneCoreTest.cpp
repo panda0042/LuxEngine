@@ -129,6 +129,9 @@ void MeshAssetMetadata() {
             loaded.GetComponent<MeshRendererComponent>(entity.GetId()).material.baseColorTexture ==
                 mesh.material.baseColorTexture,
         "base color texture references retain Unicode paths in JSON");
+    const Entity reloaded(entity.GetId(), &loaded);
+    Check(!retained && reloaded && retained != reloaded && reloaded == Entity(reloaded),
+          "entity equality distinguishes generations after scene replacement");
     const auto valid = data;
     mesh.material.baseColorTexture += std::string(1, '\0');
     Check(!scene.SerializeToString(data), "NUL texture paths are rejected before scene saving");

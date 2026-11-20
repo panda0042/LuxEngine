@@ -2263,6 +2263,8 @@ void DrawSceneMeshes(LuxForgeDevice* device, Cmd* cmd,
         const auto& draw = *draws[i];
         if (shadow && draw.alphaMode == 2)
             continue;
+        if (!shadow && draw.shadowOnly)
+            continue;
         if (!shadow) {
             const uint32_t variant = (draw.alphaMode * 2 + (draw.doubleSided ? 1 : 0)) * 2 +
                                      (MirroredTransform(draw.model) ? 1 : 0);
@@ -2337,6 +2339,8 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
             SceneDrawUsable(device, draws[i]))
             visible.push_back(&draws[i]);
     std::stable_sort(visible.begin(), visible.end(), [scene](const auto* a, const auto* b) {
+        if (a->shadowOnly != b->shadowOnly)
+            return a->shadowOnly == 0;
         if ((a->alphaMode == 2) != (b->alphaMode == 2))
             return a->alphaMode != 2;
         if (a->alphaMode != 2)

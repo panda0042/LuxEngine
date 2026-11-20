@@ -94,6 +94,7 @@ private:
     GpuBuffer indices_;
     uint32 indexCount_ = 0;
     Vec3 origin_;
+    Vec3 minimum_, maximum_;
 };
 
 class LUX_API Renderer3D {

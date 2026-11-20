@@ -405,6 +405,8 @@ void TestStreamingScriptReferences(const fs::path& directory) {
              {"Second", ScriptEntityReference{secondId}}};
     for (const auto id : {firstId, secondId})
         world.GetComponent<ScriptComponent>(id).fields["Outside"] = ScriptEntityReference{actor};
+    world.GetComponent<ScriptComponent>(firstId).fields["Peer"] = ScriptEntityReference{secondId};
+    world.GetComponent<ScriptComponent>(secondId).fields["Peer"] = ScriptEntityReference{firstId};
     for (const auto root : {first, second})
         Check(manager.ConfigureStreaming(world, root, {0, 0}, 4, 8, error), error);
 
@@ -437,6 +439,114 @@ void TestStreamingScriptReferences(const fs::path& directory) {
           "references distinguish duplicate instances after save and streaming");
     Check(resolve(loadedFirst, "Outside") == actor && resolve(loadedSecond, "Outside") == actor,
           "streamed references restore links to the persistent scene");
+    Check(resolve(loadedFirst, "Peer") == loadedSecond &&
+              resolve(loadedSecond, "Peer") == loadedFirst,
+          "references between independently streamed regions follow the restored entities");
+}
+
+void TestStreamingFailurePreservesScene(const fs::path& directory) {
+    Scene source;
+    const auto sourceId = source.CreateEntity("Region child").GetId();
+    const auto path = directory / "Scenes/stream-failure.lux";
+    Save(source, path);
+    Scene world;
+    SceneManager manager;
+    std::string error;
+    const auto root = manager.AddSceneInstance(world, path, SceneReferenceMode::Nested, error);
+    Check(root && manager.ConfigureStreaming(world, root, {0, 0}, 4, 8, error) &&
+              manager.UnloadInstance(world, root, error),
+          error);
+    auto& reference = world.GetComponent<SceneReferenceComponent>(root);
+    const auto validSnapshot = reference.suspended;
+    reference.suspended = "{";
+    auto observer = world.CreateEntity("Outside observer");
+    auto& field = observer.AddComponent<ScriptComponent>("Fixture.Observer", true).fields["Link"];
+    field = ScriptEntityReference{root};
+    const auto before = Snapshot(world);
+
+    bool changed = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (manager.UpdateStreaming(world, {0, 0}, error, &changed) &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    Check(!error.empty() && !changed && Snapshot(world) == before,
+          "a failed streaming restore preserves the serialized scene and reference identities");
+
+    reference.suspended = validSnapshot;
+    Check(manager.UpdateStreaming(world, {20, 0}, error, &changed) && !changed, error);
+    const auto retryDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+        Check(manager.UpdateStreaming(world, {0, 0}, error, &changed), error);
+        if (changed)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    } while (std::chrono::steady_clock::now() < retryDeadline);
+    const auto link = std::get<ScriptEntityReference>(field);
+    Check(changed && Mapped(world, root, sourceId) && link.identity &&
+              world.ResolveScriptEntityReference(link) == root,
+          "the successful retry publishes the outside reference to the preserved region root");
+}
+
+void TestUnsupportedStreamedComponents(const fs::path& directory) {
+    struct ExtensionState {
+        int value;
+    };
+
+    Scene source;
+    const auto sourceId = source.CreateEntity("Region child").GetId();
+    const auto path = directory / "Scenes/stream-extension.lux";
+    Save(source, path);
+    Scene world;
+    SceneManager manager;
+    std::string error;
+    const auto blocked = manager.AddSceneInstance(world, path, SceneReferenceMode::Nested, error);
+    Check(blocked != 0, error);
+    const auto healthy = manager.AddSceneInstance(world, path, SceneReferenceMode::Nested, error);
+    Check(healthy != 0, error);
+    const auto blockedChild = Mapped(world, blocked, sourceId);
+    const auto healthyChild = Mapped(world, healthy, sourceId);
+    world.AddComponent<ExtensionState>(blockedChild, ExtensionState{73});
+    auto& blockedLink =
+        world.AddComponent<ScriptComponent>(blockedChild, "Fixture.Blocked", true).fields["Peer"];
+    blockedLink = ScriptEntityReference{healthyChild};
+    world.AddComponent<ScriptComponent>(healthyChild, "Fixture.Healthy", true).fields["Peer"] =
+        ScriptEntityReference{blockedChild};
+    const auto outside = world.CreateEntity("Outside custom state").GetId();
+    world.AddComponent<ExtensionState>(outside, ExtensionState{19});
+    for (const auto root : {blocked, healthy})
+        Check(manager.ConfigureStreaming(world, root, {0, 0}, 4, 8, error), error);
+
+    Check(!manager.UnloadInstance(world, blocked, error) && !error.empty() &&
+              world.IsAlive(blockedChild) &&
+              world.GetComponent<ExtensionState>(blockedChild).value == 73 &&
+              std::get<ScriptEntityReference>(blockedLink) == ScriptEntityReference{healthyChild},
+          "a manual unload rejects removal of an entity with unsupported components");
+    bool changed = false;
+    Check(!manager.UpdateStreaming(world, {20, 0}, error, &changed) && !error.empty() && changed &&
+              world.GetComponent<SceneReferenceComponent>(blocked).loaded &&
+              !world.GetComponent<SceneReferenceComponent>(healthy).loaded &&
+              !world.IsAlive(healthyChild) &&
+              world.GetComponent<ExtensionState>(blockedChild).value == 73 &&
+              world.GetComponent<ExtensionState>(outside).value == 19,
+          "an unsupported component blocks only its own region and leaves the other state intact");
+    Check(std::get<ScriptEntityReference>(blockedLink).identity &&
+              !world.ResolveScriptEntityReference(std::get<ScriptEntityReference>(blockedLink)),
+          "only the successful unload stabilizes the link to its unloaded child");
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+        Check(manager.UpdateStreaming(world, {0, 0}, error, &changed), error);
+        if (changed)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    } while (std::chrono::steady_clock::now() < deadline);
+    const auto restored = Mapped(world, healthy, sourceId);
+    Check(changed && restored &&
+              world.ResolveScriptEntityReference(std::get<ScriptEntityReference>(blockedLink)) ==
+                  restored &&
+              world.ResolveScriptEntityReference(std::get<ScriptEntityReference>(
+                  world.GetComponent<ScriptComponent>(restored).fields.at("Peer"))) == blockedChild,
+          "cross-region links survive partial failure, unload and restore");
 }
 
 void TestCopyUnloadedNestedInstances(const fs::path& directory) {
@@ -529,6 +639,98 @@ void TestCopyUnloadedNestedInstances(const fs::path& directory) {
     const auto secondActor = verify(second, "refresh");
     Check(firstActor != secondActor && scene.GetEntityCount() == 30,
           "refresh keeps both regions and does not duplicate restored actors");
+}
+
+void TestImportedSuspendedRegion(const fs::path& directory) {
+    SceneManager manager;
+    std::string error;
+    Scene source;
+    const auto actor = AddSprite(source, "imported actor", 4);
+    const auto path = directory / "Scenes/imported-region.lux";
+    Save(source, path);
+
+    Scene origin;
+    const auto sibling = origin.CreateEntity("sibling").GetId();
+    const auto region = manager.AddSceneInstance(origin, path, SceneReferenceMode::Nested, error);
+    Check(region != 0, error);
+    const auto authoredActor = Mapped(origin, region, actor);
+    origin.GetComponent<TransformComponent>(authoredActor).position.x = 21;
+    origin.AddComponent<ScriptComponent>(sibling, "Fixture.Sibling", true).fields["Actor"] =
+        ScriptEntityReference{authoredActor};
+    origin.AddComponent<ScriptComponent>(authoredActor, "Fixture.Actor", true).fields["Sibling"] =
+        ScriptEntityReference{sibling};
+    Check(manager.ConfigureStreaming(origin, region, {0, 0}, 4, 8, error) &&
+              manager.UnloadInstance(origin, region, error),
+          error);
+
+    Scene destination;
+    auto scale = destination.CreateEntity("Scale");
+    scale.GetComponent<TransformComponent>().scale = {2, 1, 1};
+    auto rotate = destination.CreateEntity("Rotation");
+    rotate.GetComponent<TransformComponent>().rotation.z = .65;
+    Check(destination.SetParent(rotate.GetId(), scale.GetId(), false), "parent rotation");
+    const auto first = destination.ImportEntities(origin, {}, rotate.GetId());
+    const auto second = destination.ImportEntities(origin, {});
+    Check(first.contains(region) && second.contains(region), "copy both dormant instances");
+    const auto before = Snapshot(destination);
+    auto& originReference = origin.GetComponent<SceneReferenceComponent>(region);
+    const auto suspended = originReference.suspended;
+    originReference.suspended = "{";
+    Check(destination.ImportEntities(origin, {}).empty() && Snapshot(destination) == before,
+          "a corrupt snapshot leaves the destination unchanged");
+    originReference.suspended = suspended;
+    const auto bad = manager.AddSceneInstance(destination, path, SceneReferenceMode::Nested, error);
+    Check(bad && manager.ConfigureStreaming(destination, bad, {0, 0}, 4, 8, error) &&
+              manager.UnloadInstance(destination, bad, error),
+          error);
+    auto& broken = destination.GetComponent<SceneReferenceComponent>(bad);
+    broken.suspended = origin.GetComponent<SceneReferenceComponent>(region).suspended;
+
+    bool sawFailure = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+        sawFailure |= !manager.UpdateStreaming(destination, {0, 0}, error);
+        if (sawFailure && Mapped(destination, first.at(region), actor) &&
+            Mapped(destination, second.at(region), actor))
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    } while (std::chrono::steady_clock::now() < deadline);
+    Check(sawFailure && !destination.GetComponent<SceneReferenceComponent>(bad).loaded,
+          "the broken region remains unloaded and reports failure");
+
+    const auto resolve = [&](uint32 owner, const char* field) {
+        const auto& value = destination.GetComponent<ScriptComponent>(owner).fields.at(field);
+        return destination.ResolveScriptEntityReference(std::get<ScriptEntityReference>(value));
+    };
+    for (const auto* copy : {&first, &second}) {
+        const auto localActor = Mapped(destination, copy->at(region), actor);
+        Check(localActor && destination.GetParent(localActor) == copy->at(region) &&
+                  destination.GetComponent<TransformComponent>(localActor).position.x == 21 &&
+                  resolve(localActor, "Sibling") == copy->at(sibling) &&
+                  resolve(copy->at(sibling), "Actor") == localActor,
+              "healthy regions preserve their local pose and independent script links");
+    }
+
+    const auto underShear = first.at(region);
+    Check(manager.UnloadInstance(destination, underShear, error) &&
+              manager.RefreshInstance(destination, underShear, error),
+          "restoring under an unchanged sheared parent preserves local transforms: " + error);
+    Check(destination.GetParent(underShear) == rotate.GetId(), "restore keeps the live parent");
+
+    destination.GetComponent<SceneReferenceComponent>(bad).path.clear();
+    Check(manager.UnloadInstance(destination, underShear, error), error);
+    const auto invalidPathDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    bool progressedWithPathError = false;
+    do {
+        bool changed = false;
+        Check(!manager.UpdateStreaming(destination, {0, 0}, error, &changed) && !error.empty(),
+              "invalid reference paths are reported");
+        progressedWithPathError |= changed && Mapped(destination, underShear, actor) != 0;
+        if (progressedWithPathError)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    } while (std::chrono::steady_clock::now() < invalidPathDeadline);
+    Check(progressedWithPathError, "invalid paths cannot block a healthy region in the same tick");
 }
 
 void TestLiveRuntimeState(const fs::path& directory) {
@@ -699,7 +901,10 @@ int RunSceneManagerTests(int, char**) {
             Files files;
             TestNestedStreaming(files.root);
             TestStreamingScriptReferences(files.root);
+            TestStreamingFailurePreservesScene(files.root);
+            TestUnsupportedStreamedComponents(files.root);
             TestCopyUnloadedNestedInstances(files.root);
+            TestImportedSuspendedRegion(files.root);
         }
         {
             Files files;

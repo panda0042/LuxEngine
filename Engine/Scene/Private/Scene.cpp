@@ -204,6 +204,8 @@ void Scene::OnUpdate(double dt) {
     const double fixedStep = settings_.fixedStep;
     while (physicsAccumulator_ + 1e-8 >= fixedStep) {
         physicsAccumulator_ = std::max(0.0, physicsAccumulator_ - fixedStep);
+        if (!has2D && !has3D)
+            continue;
         const double substep = fixedStep / settings_.physicsSubsteps;
         for (uint32 index = 0; index < settings_.physicsSubsteps; ++index) {
             if (has2D && !physics2D_)
@@ -381,12 +383,23 @@ void Scene::OnRender() {
                     !std::isfinite(map.tileSize) || map.tileSize <= 0.0f || map.tileSize > 64.0f ||
                     map.tiles.size() != static_cast<size_t>(map.width) * map.height)
                     continue;
-                for (uint32 y = 0; y < map.height; ++y)
-                    for (uint32 x = 0; x < map.width; ++x) {
+                const double size = map.tileSize;
+                uint32 xBegin = 0, yBegin = 0, xEnd = map.width, yEnd = map.height;
+                Vec2 minimum, maximum;
+                if (Renderer2D::GetVisibleLocalBounds(matrix, minimum, maximum)) {
+                    const auto tileIndex = [size](double bound, uint32 limit) {
+                        return static_cast<uint32>(std::clamp(bound / size, 0.0, double(limit)));
+                    };
+                    xBegin = tileIndex(minimum.x - size, map.width);
+                    yBegin = tileIndex(minimum.y - size, map.height);
+                    xEnd = tileIndex(maximum.x + 2 * size, map.width);
+                    yEnd = tileIndex(maximum.y + 2 * size, map.height);
+                }
+                for (uint32 y = yBegin; y < yEnd; ++y)
+                    for (uint32 x = xBegin; x < xEnd; ++x) {
                         const uint8_t tile = map.Get(x, y);
                         if (tile == 0)
                             continue;
-                        const double size = map.tileSize;
                         Renderer2D::DrawQuad(
                             matrix * Mat4::Translate({(x + .5f) * size, (y + .5f) * size, 0}) *
                                 Mat4::Scale({size, size, 1}),
@@ -1420,7 +1433,7 @@ void Scene::EraseReferenceIdentity(uint32 id) {
     }
 }
 
-void Scene::StabilizeScriptReferences(bool assignIdentities) {
+void Scene::RefreshScriptReferenceIds() {
     const auto scripts = pools_.find(typeid(ScriptComponent));
     if (scripts == pools_.end())
         return;
@@ -1428,25 +1441,9 @@ void Scene::StabilizeScriptReferences(bool assignIdentities) {
     for (auto& [id, script] : values) {
         for (auto& [name, value] : script.fields) {
             auto* reference = std::get_if<ScriptEntityReference>(&value);
-            if (!reference)
-                continue;
-            if (reference->identity) {
+            if (reference && reference->identity)
                 if (const auto resolved = ResolveScriptEntityReference(*reference))
                     reference->id = resolved;
-                continue;
-            }
-            if (!assignIdentities || !IsAlive(reference->id))
-                continue;
-            auto existing = referenceIdentities_.find(reference->id);
-            if (existing == referenceIdentities_.end()) {
-                uint64 candidate;
-                do {
-                    candidate = NewReferenceIdentity();
-                } while (entitiesByReferenceIdentity_.contains(candidate));
-                SetReferenceIdentity(reference->id, candidate);
-                existing = referenceIdentities_.find(reference->id);
-            }
-            reference->identity = existing->second;
         }
     }
 }

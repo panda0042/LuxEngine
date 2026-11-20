@@ -159,7 +159,11 @@ private:
     static uint64 NewReferenceIdentity();
     bool SetReferenceIdentity(uint32 id, uint64 identity);
     void EraseReferenceIdentity(uint32 id);
-    void StabilizeScriptReferences(bool assignIdentities = true);
+    void RefreshScriptReferenceIds();
+    std::unordered_map<uint32, uint32> ImportEntitiesInternal(const Scene& source,
+                                                              const std::vector<uint32>& roots,
+                                                              uint32 parent, bool preserveIds,
+                                                              bool restoreLocal);
 
     bool DeserializeStream(std::istream& in); // Legacy scene versions 1–6, read only.
     bool DeserializeJson(const std::string& data);
@@ -167,8 +171,17 @@ private:
     void AdoptLoadedScene(Scene& parsed);
     void StageRegion(Scene& staged, const std::vector<uint32>& roots,
                      std::unordered_set<uint32>& anchors) const;
+
+    struct RegionReferences {
+        std::unordered_map<uint32, uint64> identities;
+        std::unordered_map<uint64, uint32> entitiesByIdentity;
+        std::vector<std::pair<ScriptEntityReference*, ScriptEntityReference>> fields;
+    };
+
+    RegionReferences PrepareRegionReferences(Scene& staged,
+                                             const std::unordered_set<uint32>& affected);
     bool CommitRegion(Scene& staged, const std::unordered_set<uint32>& anchors,
-                      const std::unordered_set<uint32>& affected);
+                      const std::unordered_set<uint32>& affected, RegionReferences& references);
     void DestroySubtrees(const std::vector<uint32>& roots);
     void RepairReferenceLinks();
     void RemovePhysicsBody(uint32 id);
