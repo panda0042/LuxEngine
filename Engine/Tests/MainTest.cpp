@@ -2431,6 +2431,27 @@ void RenderOutput(Graphics& graphics) {
               IsColor(Pixel(capture, 0.25f, 0.75f), 0, 0, 0),
           "orthographic camera maps +X right and +Y up");
 
+    Files files;
+    const auto whiteSprite = files.Path("renderer-white.ppm");
+    {
+        std::ofstream image(whiteSprite, std::ios::binary);
+        image << "P6\n1 1\n255\n\xff\xff\xff";
+        Check(bool(image), "sprite fixture is writable");
+    }
+    Check(AssetManager::ValidateTextureFile(whiteSprite), "sprite fixture is valid");
+    capture = graphics.Capture([&] {
+        graphics.gpu.Clear(0, 0, 0, 1);
+        Renderer2D::BeginScene(OrthographicCamera(-2, 2, -2, 2));
+        Renderer2D::DrawQuad(Mat4::Translate({-1, 0, 0}), {1, 0, 0, 1});
+        Check(!Renderer2D::DrawSpriteAsset(Mat4::Translate({1, 0, 0}), whiteSprite, 0, 1, 1,
+                                           {std::numeric_limits<float>::infinity(), 1, 1, 1}),
+              "asset sprite with invalid tint is rejected");
+        Renderer2D::EndScene();
+    });
+    Check(IsColor(Pixel(capture, 0.25f, 0.5f), 255, 0, 0) &&
+              IsColor(Pixel(capture, 0.75f, 0.5f), 0, 0, 0),
+          "a rejected asset sprite leaves the preceding quad unchanged");
+
     Renderer3D::Init(&graphics.gpu);
     capture = graphics.Capture([&] {
         graphics.gpu.Clear(0, 0, 0, 1);

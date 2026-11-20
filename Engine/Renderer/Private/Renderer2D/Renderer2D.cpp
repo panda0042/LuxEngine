@@ -20,6 +20,11 @@ bool SameOwner(const std::weak_ptr<Rhi::RenderBackend>& a,
     return !a.owner_before(b) && !b.owner_before(a);
 }
 
+bool FiniteColor(const Vec4& color) {
+    return std::isfinite(color.x) && std::isfinite(color.y) && std::isfinite(color.z) &&
+           std::isfinite(color.w);
+}
+
 thread_local Renderer2D::Context* t_ActiveContext2D = nullptr;
 std::recursive_mutex s_DefaultContext2DMutex;
 
@@ -52,15 +57,15 @@ struct Renderer2D::Context::Impl {
         return locked;
     }
 
-    void Quad(const Vec3& position, const Vec2& size, double angle,
-              const std::weak_ptr<Rhi::RenderBackend>& owner, uint64 texture, const Vec4& color) {
+    std::span<RenderVertex> Quad(const Vec3& position, const Vec2& size, double angle,
+                                 const std::weak_ptr<Rhi::RenderBackend>& owner, uint64 texture,
+                                 const Vec4& color) {
         if (!active)
-            return;
+            return {};
         if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
             !std::isfinite(position.z) || !std::isfinite(size.x) || !std::isfinite(size.y) ||
-            !std::isfinite(angle) || !std::isfinite(color.x) || !std::isfinite(color.y) ||
-            !std::isfinite(color.z) || !std::isfinite(color.w))
-            return;
+            !std::isfinite(angle) || !FiniteColor(color))
+            return {};
         if (!usedBatches || batches[usedBatches - 1].texture != texture ||
             !SameOwner(batches[usedBatches - 1].owner, owner) ||
             batches[usedBatches - 1].vertices.size() >= 6000) {
@@ -76,15 +81,16 @@ struct Renderer2D::Context::Impl {
         const std::array<Vec2, 4> corners{
             {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}}};
         const std::array<Vec2, 4> uv{{{0, 1}, {1, 1}, {1, 0}, {0, 0}}};
+        auto& vertices = batches[usedBatches - 1].vertices;
         for (auto i : {0, 1, 2, 2, 3, 0}) {
             const double x = corners[i].x * size.x, y = corners[i].y * size.y;
-            batches[usedBatches - 1].vertices.push_back(
-                {{position.x - origin.x + c * x - s * y, position.y - origin.y + s * x + c * y,
-                  position.z - origin.z},
-                 color,
-                 uv[i]});
+            vertices.push_back({{position.x - origin.x + c * x - s * y,
+                                 position.y - origin.y + s * x + c * y, position.z - origin.z},
+                                color,
+                                uv[i]});
         }
         ++stats.quadCount;
+        return std::span(vertices).last(6);
     }
 };
 
@@ -250,8 +256,7 @@ void Renderer2D::Context::DrawQuad(const Mat4& transform, const Vec4& color) {
     for (const auto value : transform.elements)
         if (!std::isfinite(value))
             return;
-    if (!std::isfinite(color.x) || !std::isfinite(color.y) || !std::isfinite(color.z) ||
-        !std::isfinite(color.w))
+    if (!FiniteColor(color))
         return;
     constexpr std::array<Vec2, 6> points{
         {{-.5f, -.5f}, {.5f, -.5f}, {.5f, .5f}, {.5f, .5f}, {-.5f, .5f}, {-.5f, -.5f}}};
@@ -265,10 +270,9 @@ void Renderer2D::Context::DrawQuad(const Mat4& transform, const Vec4& color) {
             return;
     }
     // 2D Z ordering is applied by Scene before batching; flatten Z as DrawRotatedQuad does.
-    impl_->Quad({}, {1, 1}, 0, {}, 0, color);
-    auto& vertices = impl_->batches[impl_->usedBatches - 1].vertices;
-    for (size_t index = 0; index < positions.size(); ++index)
-        vertices[vertices.size() - positions.size() + index].position = positions[index];
+    auto vertices = impl_->Quad({}, {1, 1}, 0, {}, 0, color);
+    for (size_t index = 0; index < vertices.size(); ++index)
+        vertices[index].position = positions[index];
 }
 
 void Renderer2D::Context::DrawRotatedQuad(const Vec2& p, const Vec2& size, double angle,
@@ -287,19 +291,20 @@ void Renderer2D::Context::DrawSprite(const Vec2& p, const Vec2& size, GpuTexture
 bool Renderer2D::Context::DrawSpriteAsset(const Mat4& transform, const std::string& path,
                                           uint32 frame, uint32 columns, uint32 rows,
                                           const Vec4& tint) {
-    if (!impl_ || !impl_->active || !impl_->LockValidState() || !columns || !rows ||
-        columns > 4096 || rows > 4096 || frame >= columns * rows)
+    if (!impl_ || !impl_->active || !FiniteColor(tint) || !impl_->LockValidState() || !columns ||
+        !rows || columns > 4096 || rows > 4096 || frame >= columns * rows)
         return false;
     auto texture = AssetManager::LoadTexture(path, impl_->device);
     if (!texture || !texture->IsValid())
         return false;
+    auto vertices = impl_->Quad({}, {1, 1}, 0, texture->owner_, texture->handle_, tint);
+    if (vertices.empty())
+        return false;
     impl_->textures.push_back(texture);
-    impl_->Quad({}, {1, 1}, 0, texture->owner_, texture->handle_, tint);
-    auto& vertices = impl_->batches[impl_->usedBatches - 1].vertices;
     constexpr std::array<Vec2, 6> corners{
         {{-.5, -.5}, {.5, -.5}, {.5, .5}, {.5, .5}, {-.5, .5}, {-.5, -.5}}};
     for (size_t i = 0; i < 6; ++i) {
-        auto& vertex = vertices[vertices.size() - 6 + i];
+        auto& vertex = vertices[i];
         vertex.position = transform.TransformPoint({corners[i].x, corners[i].y, 0}) - impl_->origin;
         vertex.position.z = 0;
         vertex.uv = {(double(frame % columns) + corners[i].x + .5) / columns,
