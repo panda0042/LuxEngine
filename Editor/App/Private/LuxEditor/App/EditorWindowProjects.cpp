@@ -2,6 +2,7 @@
 #include <LuxEditor/Project/PathEncoding.hpp>
 #include <LuxEditor/Project/ProjectArchive.hpp>
 #include <LuxEditor/Project/ProjectDialog.hpp>
+#include <LuxEditor/Scene/SceneAuthoringIO.hpp>
 #include <LuxEditor/Scene/SceneDependencies.hpp>
 #include <LuxEditor/Ui/IconFactory.hpp>
 #include <LuxEditor/Viewport/SceneViewport2D.hpp>
@@ -357,11 +358,6 @@ void EditorWindow::ImportProjectDialog() {
 void EditorWindow::ExportCurrentProject() {
     if (!project_ || !SaveAllScenes(true) || !project_)
         return;
-    std::string validationError;
-    if (!ValidateProjectScenes(*project_, validationError)) {
-        ShowError(LUX_UI_TEXT("씬 의존성 오류"), Q(validationError));
-        return;
-    }
     LuxUI::String file = LuxUI::FileDialog::getSaveFileName(
         this, LUX_UI_TEXT("프로젝트 내보내기"), Q(project_->GetName()) + LUX_UI_TEXT(".luxpack"),
         LUX_UI_TEXT("Lux 프로젝트 패키지 (*.luxpack)"));
@@ -435,6 +431,47 @@ void EditorWindow::RestoreCurrentProject() {
     ApplyProjectPreferences();
     RefreshAll();
     Log(LUX_UI_TEXT("프로젝트를 백업에서 복구했습니다."));
+}
+
+void EditorWindow::OpenPreRestoreAutosave() {
+    if (!project_)
+        return;
+    std::error_code ec;
+    const auto metadata =
+        std::filesystem::canonical(project_->GetFile().parent_path() / ".lux", ec);
+    if (ec)
+        return;
+    const auto selected =
+        LuxUI::FileDialog::getOpenFileName(this, LUX_UI_TEXT("복원 전 자동 저장본 열기"),
+                                           Q(metadata), LUX_UI_TEXT("Lux 장면 (*.lux)"));
+    if (selected.isEmpty())
+        return;
+    const auto source = std::filesystem::canonical(PathFromUtf8(Utf8(selected)), ec);
+    const auto relative = source.lexically_relative(metadata);
+    if (ec || relative.empty() ||
+        !PathUtf8(*relative.begin()).starts_with("pre-restore-autosave-")) {
+        ShowError(LUX_UI_TEXT("자동 저장 복구"),
+                  LUX_UI_TEXT("복원 전에 보관한 자동 저장본을 선택하세요."));
+        return;
+    }
+    std::string error;
+    auto scene = ReadAuthoredScene(source, error);
+    if (!scene) {
+        ShowError(LUX_UI_TEXT("자동 저장 복구 실패"), Q(error));
+        return;
+    }
+    StopPreview();
+    EndTimelineEdit();
+    CancelViewportEdit();
+    const auto tab = document_.AdoptTab({}, std::move(scene), true);
+    if (!tab) {
+        ShowError(LUX_UI_TEXT("자동 저장 복구 실패"), Q(document_.GetLastError()));
+        return;
+    }
+    sceneProjects_[tab] = project_;
+    RememberSceneBaseline(false);
+    RefreshAll();
+    Log(LUX_UI_TEXT("복원 전 자동 저장본을 새 탭에서 열었습니다."));
 }
 
 void EditorWindow::RescanProjectResources() {

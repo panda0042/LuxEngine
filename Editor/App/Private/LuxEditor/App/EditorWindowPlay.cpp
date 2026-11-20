@@ -50,10 +50,11 @@ void EditorWindow::RunSceneInWindow() {
         const auto& script = document_.GetScene().GetComponent<LuxEngine::ScriptComponent>(id);
         return script.enabled && !script.typeName.empty();
     });
-    const auto assembly = hasScripts ? ResolvePlayAssembly() : std::filesystem::path{};
+    const auto assembly = ResolvePlayAssembly();
     std::error_code assemblyError;
-    if (hasScripts &&
-        (assembly.empty() || !std::filesystem::is_regular_file(assembly, assemblyError))) {
+    const bool canLoadAssembly =
+        !assembly.empty() && std::filesystem::is_regular_file(assembly, assemblyError);
+    if (hasScripts && !canLoadAssembly) {
         ShowError(LUX_UI_TEXT("게임 실행"),
                   LUX_UI_TEXT("C# 실행 어셈블리가 없습니다. 프로젝트를 빌드하거나 플레이용 C# "
                               "어셈블리를 선택하세요."));
@@ -81,7 +82,7 @@ void EditorWindow::RunSceneInWindow() {
     }
     LuxUI::StringList arguments{playerScenePath_, LUX_UI_TEXT("--title"),
                                 LUX_UI_TEXT("LuxEngine - %1").arg(windowTitle())};
-    if (hasScripts)
+    if (canLoadAssembly)
         arguments << LUX_UI_TEXT("--scripts") << LuxUI::String::fromUtf8(PathUtf8(assembly));
     if (canvas_) {
         double centerX = 0, centerY = 0, halfHeight = 0;

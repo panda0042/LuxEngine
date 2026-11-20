@@ -10,9 +10,12 @@ ScenePhysicsWorld::ScenePhysicsWorld(bool planar) : planar_(planar), world_(plan
 
 void ScenePhysicsWorld::Remove(uint32 entity) {
     world_.Remove(entity);
+    kinematicTargets_.erase(entity);
 }
 
-void ScenePhysicsWorld::Step(Scene& scene, double dt) {
+void ScenePhysicsWorld::Step(Scene& scene, double dt, uint32 index, uint32 count) {
+    if (index == 0)
+        kinematicTargets_.clear();
     error_.clear();
     std::vector<PhysicsBodyDescription> descriptions;
     active_.clear();
@@ -85,10 +88,27 @@ void ScenePhysicsWorld::Step(Scene& scene, double dt) {
                 body.mass = rigid->mass;
             }
         }
+        if (body.type == BodyType::Kinematic && count > 1) {
+            if (const auto previous = world_.GetState(id)) {
+                const auto positionChange = body.position - previous->position;
+                const auto rotationChange = body.rotation - previous->rotation;
+                if (index == 0 && (positionChange.Dot(positionChange) > 0 ||
+                                   rotationChange.Dot(rotationChange) > 0))
+                    kinematicTargets_.emplace(id, transform);
+                if (const auto target = kinematicTargets_.find(id);
+                    target != kinematicTargets_.end()) {
+                    const double fraction = 1.0 / (count - index);
+                    body.position = previous->position +
+                                    (target->second.position - previous->position) * fraction;
+                    body.rotation =
+                        SlerpRotation(previous->rotation, target->second.rotation, fraction);
+                }
+            }
+        }
         descriptions.push_back(body);
         active_.push_back(id);
     }
-    if (!world_.Synchronize(descriptions) && error_.empty())
+    if (!world_.Synchronize(descriptions, dt) && error_.empty())
         error_ = world_.GetLastError();
     const auto& settings = scene.GetSettings();
     const auto gravity2D =

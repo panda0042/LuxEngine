@@ -59,6 +59,10 @@ public:
                      const std::filesystem::path& previousPath, std::string& error);
 
 private:
+    static void RestoreSubtree(Scene& target, uint32 root);
+    static void UnloadSubtree(Scene& target, uint32 root);
+    void ApplyStreaming(Scene& target, const std::vector<uint32>& unloads,
+                        const std::vector<std::pair<uint32, std::shared_ptr<Scene>>>& loads);
     struct State;
     std::shared_ptr<State> state_;
 };

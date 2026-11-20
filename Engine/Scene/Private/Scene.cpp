@@ -17,6 +17,7 @@
 #include <locale>
 #include <map>
 #include <mutex>
+#include <random>
 #include <sstream>
 #include <thread>
 #include <tuple>
@@ -27,6 +28,10 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace LuxEngine {
@@ -54,10 +59,16 @@ Entity Scene::CreateEntity(const std::string& name) {
 void Scene::DestroyEntity(Entity entity) {
     if (entity.GetScene() != this || !entity.IsValid())
         return;
+    DestroySubtrees({entity.GetId()});
+}
+
+void Scene::DestroySubtrees(const std::vector<uint32>& roots) {
+    if (roots.empty())
+        return;
     std::unordered_map<uint32, std::vector<uint32>> children;
-    for (const uint32 id : entities_)
+    for (const auto id : GetComponentEntityIds<HierarchyComponent>())
         children[GetParent(id)].push_back(id);
-    std::vector<uint32> pending{entity.GetId()};
+    auto pending = roots;
     std::unordered_set<uint32> removed;
     while (!pending.empty()) {
         const auto id = pending.back();
@@ -70,6 +81,7 @@ void Scene::DestroyEntity(Entity entity) {
     }
     for (const auto id : removed) {
         RemovePhysicsBody(id);
+        EraseReferenceIdentity(id);
         for (auto& [type, pool] : pools_)
             pool->Erase(id);
         entities_.erase(id);
@@ -200,7 +212,7 @@ void Scene::OnUpdate(double dt) {
                 physics3D_ = std::make_unique<ScenePhysicsWorld>(false);
             const auto hierarchy = GetEntitiesInHierarchyOrder();
             if (physics2D_) {
-                physics2D_->Step(*this, substep);
+                physics2D_->Step(*this, substep, index, settings_.physicsSubsteps);
                 for (const auto& contact : physics2D_->BeganContacts())
                     collisionEvents2D_.push_back({contact.entityA,
                                                   contact.entityB,
@@ -208,7 +220,7 @@ void Scene::OnUpdate(double dt) {
                                                   contact.isTrigger});
             }
             if (physics3D_) {
-                physics3D_->Step(*this, substep);
+                physics3D_->Step(*this, substep, index, settings_.physicsSubsteps);
                 const auto& contacts = physics3D_->BeganContacts();
                 collisionEvents3D_.insert(collisionEvents3D_.end(), contacts.begin(),
                                           contacts.end());
@@ -582,6 +594,22 @@ bool WriteTempFileFlushed(const std::filesystem::path& tempPath, const std::stri
 #endif
 }
 
+#ifndef _WIN32
+std::error_code SyncPath(const std::filesystem::path& path, int flags) {
+    const auto fd = ::open(path.c_str(), flags);
+    if (fd < 0)
+        return {errno, std::generic_category()};
+    int result;
+    do {
+        result = ::fsync(fd);
+    } while (result < 0 && errno == EINTR);
+    const auto syncError = result < 0 ? errno : 0;
+    if (::close(fd) < 0 && !syncError)
+        return {errno, std::generic_category()};
+    return {syncError, std::generic_category()};
+}
+#endif
+
 bool AtomicReplaceFile(const std::filesystem::path& tempPath,
                        const std::filesystem::path& targetPath, [[maybe_unused]] uint64 seq) {
     namespace fs = std::filesystem;
@@ -738,10 +766,22 @@ bool AtomicReplaceFile(const std::filesystem::path& tempPath,
         SetSaveError("Scene save failed: access denied replacing '" + PathToUtf8(targetPath) + "'");
         return false;
     }
+    if (const auto syncError = SyncPath(tempPath, O_RDWR | O_CLOEXEC)) {
+        fs::remove(tempPath, ec);
+        SetSaveError("Scene save failed: could not sync temporary file '" + PathToUtf8(tempPath) +
+                     "': " + syncError.message());
+        return false;
+    }
     fs::rename(tempPath, targetPath, ec);
     if (ec) {
         fs::remove(tempPath, ec);
         SetSaveError("Scene save failed: rename failed for '" + PathToUtf8(targetPath) + "'");
+        return false;
+    }
+    const auto parent = targetPath.has_parent_path() ? targetPath.parent_path() : fs::path(".");
+    if (const auto syncError = SyncPath(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC)) {
+        SetSaveError("Scene saved but parent directory could not be synced for '" +
+                     PathToUtf8(targetPath) + "': " + syncError.message());
         return false;
     }
     return true;
@@ -1274,6 +1314,8 @@ void Scene::AdoptLoadedScene(Scene& parsed) {
     auto nextLifetime = std::make_shared<int>(0);
     pools_.swap(parsed.pools_);
     entities_.swap(parsed.entities_);
+    referenceIdentities_.swap(parsed.referenceIdentities_);
+    entitiesByReferenceIdentity_.swap(parsed.entitiesByReferenceIdentity_);
     nextEntityId_ = parsed.nextEntityId_;
     std::swap(settings_, parsed.settings_);
     physicsAccumulator_ = 0;
@@ -1335,6 +1377,70 @@ uint32 Scene::GetEntityCount() const {
 
 bool Scene::IsAlive(uint32 id) const {
     return entities_.contains(id);
+}
+
+uint32 Scene::ResolveScriptEntityReference(const ScriptEntityReference& reference) const {
+    if (!reference.identity)
+        return IsAlive(reference.id) ? reference.id : 0;
+    const auto found = entitiesByReferenceIdentity_.find(reference.identity);
+    return found != entitiesByReferenceIdentity_.end() ? found->second : 0;
+}
+
+bool Scene::SetReferenceIdentity(uint32 id, uint64 identity) {
+    if (!IsAlive(id) || !identity || entitiesByReferenceIdentity_.contains(identity))
+        return false;
+    auto [entry, added] = referenceIdentities_.emplace(id, identity);
+    if (!added)
+        return false;
+    try {
+        entitiesByReferenceIdentity_.emplace(identity, id);
+    } catch (...) {
+        referenceIdentities_.erase(entry);
+        throw;
+    }
+    return true;
+}
+
+void Scene::EraseReferenceIdentity(uint32 id) {
+    if (const auto found = referenceIdentities_.find(id); found != referenceIdentities_.end()) {
+        entitiesByReferenceIdentity_.erase(found->second);
+        referenceIdentities_.erase(found);
+    }
+}
+
+void Scene::StabilizeScriptReferences(bool assignIdentities) {
+    const auto scripts = pools_.find(typeid(ScriptComponent));
+    if (scripts == pools_.end())
+        return;
+    auto& values = static_cast<Pool<ScriptComponent>&>(*scripts->second).values;
+    for (auto& [id, script] : values) {
+        for (auto& [name, value] : script.fields) {
+            auto* reference = std::get_if<ScriptEntityReference>(&value);
+            if (!reference)
+                continue;
+            if (reference->identity) {
+                if (const auto resolved = ResolveScriptEntityReference(*reference))
+                    reference->id = resolved;
+                continue;
+            }
+            if (!assignIdentities || !IsAlive(reference->id))
+                continue;
+            auto existing = referenceIdentities_.find(reference->id);
+            if (existing == referenceIdentities_.end()) {
+                static std::atomic<uint64> nextIdentity([] {
+                    std::random_device random;
+                    return (static_cast<uint64>(random()) << 32) | random();
+                }());
+                uint64 candidate;
+                do {
+                    candidate = nextIdentity.fetch_add(1);
+                } while (!candidate || entitiesByReferenceIdentity_.contains(candidate));
+                SetReferenceIdentity(reference->id, candidate);
+                existing = referenceIdentities_.find(reference->id);
+            }
+            reference->identity = existing->second;
+        }
+    }
 }
 
 std::weak_ptr<int> Scene::Lifetime() const {

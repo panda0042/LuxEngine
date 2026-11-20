@@ -423,6 +423,16 @@ struct ModelAsset::Impl {
 };
 
 Ref<ModelAsset> ModelAsset::LoadFbx(const std::string& filepath, std::string& error) {
+    return ReadFbx(filepath, error, false, -1, false);
+}
+
+Ref<ModelAsset> ModelAsset::ReloadFbx(const std::string& filepath, std::string& error,
+                                      int32 requiredSubmesh, bool requireUv) {
+    return ReadFbx(filepath, error, true, requiredSubmesh, requireUv);
+}
+
+Ref<ModelAsset> ModelAsset::ReadFbx(const std::string& filepath, std::string& error, bool reload,
+                                    int32 requiredSubmesh, bool requireUv) {
     error.clear();
     try {
         Require(ValidPath(filepath), "FBX 파일 경로가 비어 있거나 유효한 UTF-8 경로가 아닙니다.");
@@ -437,7 +447,7 @@ Ref<ModelAsset> ModelAsset::LoadFbx(const std::string& filepath, std::string& er
         {
             const std::lock_guard lock(cacheMutex);
             const auto found = modelCache.find(cacheKey);
-            if (found != modelCache.end() && found->second.size == size &&
+            if (!reload && found != modelCache.end() && found->second.size == size &&
                 found->second.modified == modified)
                 if (auto cached = found->second.model.lock())
                     return cached;
@@ -510,6 +520,12 @@ Ref<ModelAsset> ModelAsset::LoadFbx(const std::string& filepath, std::string& er
         model->warnings.erase(std::unique(model->warnings.begin(), model->warnings.end()),
                               model->warnings.end());
         Require(!model->submeshes.empty(), "FBX 파일에 렌더링할 다각형 메시가 없습니다.");
+        if (requiredSubmesh >= 0) {
+            const auto index = static_cast<size_t>(requiredSubmesh);
+            Require(index < model->submeshes.size(), "갱신한 FBX에서 선택한 하위 메시를 찾을 수 없습니다.");
+            Require(!requireUv || model->submeshes[index].hasTexCoords,
+                    "갱신한 FBX 하위 메시에는 텍스처 UV가 없습니다.");
+        }
         {
             const std::lock_guard lock(cacheMutex);
             if (modelCache.size() >= 128)

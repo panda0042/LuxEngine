@@ -207,14 +207,14 @@ jobs:
             -DPython3_EXECUTABLE="${{ steps.python.outputs.python-path }}" \
             -DSTB_IMAGE_INCLUDE_DIR="$LUX_CI_PREFIX/include/stb" \
             -DLUX_BUILD_EDITOR=OFF -DLUX_BUILD_TOOLS=ON -DLUX_BUILD_TESTS=ON \
-            -DLUX_ENABLE_SANITIZERS=ON
+            -DLUX_ENABLE_SANITIZERS=ON -DLUX_BUILD_FUZZERS=ON
 
       - name: Build instrumented engine regression targets
         shell: bash
         run: |
           cmake --build build --parallel 4 --target \
             LuxEngineTests LuxSceneCoreTests LuxSceneManagerTests LuxSceneJsonTests \
-            LuxFuzzScene LuxRuntimeTests
+            LuxFuzzScene LuxFuzzSceneEngine LuxRuntimeTests
 
       # The hosted CLR owns process-wide allocations; this job exercises native engine paths.
       - name: Run native memory and undefined behavior regressions
@@ -224,6 +224,7 @@ jobs:
             -R '^(Engine_(core|physics2d|scene|assets|security|scene_management|scene_loading|scene_json|fuzz_seeds)|Runtime_(parse|fit))$' \
             --timeout 180 --output-junit sanitizers-results.xml
           build/bin/LuxFuzzScene --runs 10000
+          build/bin/LuxFuzzSceneEngine -runs=10000
 
       - name: Upload sanitizer diagnostics
         if: always()

@@ -65,6 +65,8 @@ public:
                  uint32 ignoreEntity = 0, bool includeTriggers = false) const;
 
 private:
+    friend class ScenePhysicsWorld;
+    bool Synchronize(std::span<const PhysicsBodyDescription> bodies, double step);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

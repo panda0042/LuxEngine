@@ -25,8 +25,9 @@ internal unsafe struct ManagedApi {
     public uint Size;
     public delegate* unmanaged[Cdecl]<ulong, byte*, int, ulong> Load;
     public delegate* unmanaged[Cdecl]<ulong, uint, byte*, int, byte*, int, int> Attach;
+    public delegate* unmanaged[Cdecl]<ulong, uint, byte*, int, int> SetFields;
     public delegate* unmanaged[Cdecl]<ulong, uint, int> Detach;
-    public delegate* unmanaged[Cdecl]<ulong, double, int> Update;
+    public delegate* unmanaged[Cdecl]<ulong, double, int, int> Update;
     public delegate* unmanaged[Cdecl]<ulong, void> Unload;
     public delegate* unmanaged[Cdecl]<ulong, byte*, int, byte*, int, int> Describe;
     public delegate* unmanaged[Cdecl]<byte*, int, int> LastError;
@@ -54,11 +55,15 @@ internal sealed class ScriptAssembly : AssemblyLoadContext {
 
 // This is the only managed/native entry surface. Exceptions never cross its C ABI.
 public static unsafe class NativeBridge {
+    private sealed record Instance(EntityScript Script, ScriptFieldReflection.Binding Fields) {
+        internal bool UpdateFaulted { get; set; }
+    }
+
     private sealed class World {
         internal required ulong NativeId;
         internal required ScriptAssembly Loader;
         internal required Assembly Assembly;
-        internal readonly SortedDictionary<uint, EntityScript> Instances = new();
+        internal readonly SortedDictionary<uint, Instance> Instances = new();
     }
 
     private static NativeApi native;
@@ -80,13 +85,13 @@ public static unsafe class NativeBridge {
             if (nativeApi == null || managedApi == null)
                 return 0;
             NativeApi callbacks = *(NativeApi*)nativeApi;
-            if (callbacks.Version != 4 || callbacks.Size != sizeof(NativeApi))
+            if (callbacks.Version != 6 || callbacks.Size != sizeof(NativeApi))
                 return 0;
             native = callbacks;
             *(ManagedApi*)managedApi =
-                new ManagedApi { Version = 4,           Size = (uint)sizeof(ManagedApi),
+                new ManagedApi { Version = 6,           Size = (uint)sizeof(ManagedApi),
                                  Load = &Load,          Attach = &Attach,
-                                 Detach = &Detach,      Update = &Update,
+                                 SetFields = &SetFields, Detach = &Detach, Update = &Update,
                                  Unload = &Unload,      Describe = &Describe,
                                  LastError = &LastError };
             return 1;
@@ -172,11 +177,10 @@ public static unsafe class NativeBridge {
                 throw new InvalidOperationException("A script is already attached to this entity.");
             EntityScript script = (EntityScript)Activator.CreateInstance(type)!;
             script.Entity = new Entity(world.NativeId, entity);
-            ScriptFieldReflection.Apply(
-                script, Encoding.UTF8.GetString(new ReadOnlySpan<byte>(fields, fieldLength)),
-                world.NativeId);
+            var binding = new ScriptFieldReflection.Binding(script, world.NativeId);
+            binding.Apply(Encoding.UTF8.GetString(new ReadOnlySpan<byte>(fields, fieldLength)));
             script.Create();
-            world.Instances.Add(entity, script);
+            world.Instances.Add(entity, new Instance(script, binding));
             return 1;
         } catch (Exception error) {
             lastError = error.ToString();
@@ -209,10 +213,23 @@ public static unsafe class NativeBridge {
         }
     }
 
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+
+    private static int SetFields(ulong id, uint entity, byte* fields, int length) {
+        try {
+            Find(id).Instances[entity].Fields.Apply(
+                Encoding.UTF8.GetString(new ReadOnlySpan<byte>(fields, length)));
+            return 1;
+        } catch (Exception error) {
+            lastError = error.ToString();
+            return 0;
+        }
+    }
+
     private static void Remove(World world, uint entity) {
-            if (!world.Instances.Remove(entity, out EntityScript? script))
+            if (!world.Instances.Remove(entity, out Instance? instance))
                 return;
-            script.Destroy();
+            instance.Script.Destroy();
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -229,13 +246,20 @@ public static unsafe class NativeBridge {
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
 
-    private static int Update(ulong id, double deltaTime) {
+    private static int Update(ulong id, double deltaTime, int isolateFailures) {
         try {
             World world = Find(id);
-            foreach ((uint entity, EntityScript script) in world.Instances.ToArray()) {
-                if (!IsAlive(world.NativeId, entity))
+            var errors = new StringBuilder();
+            foreach ((uint entity, Instance instance) in world.Instances.ToArray()) {
+                if (!IsAlive(world.NativeId, entity)) {
                     Remove(world, entity);
-                else {
+                    continue;
+                }
+                if (instance.UpdateFaulted)
+                    continue;
+                EntityScript script = instance.Script;
+                var callback = "OnAnimationEvent";
+                try {
                     for (int count = 0; count < 4096; ++count) {
                         int length = native.AnimationEvent(world.NativeId, entity, null, 0);
                         if (length <= 0)
@@ -244,17 +268,25 @@ public static unsafe class NativeBridge {
                             throw new InvalidOperationException(
                                 "Animation event exceeds the size limit.");
                         byte[] data = new byte[length];
-                        fixed(byte* destination = data)
+                        fixed (byte* destination = data)
                             native.AnimationEvent(world.NativeId, entity, destination, length);
                         using JsonDocument value = JsonDocument.Parse(data);
                         script.AnimationEvent(
                             value.RootElement.GetProperty("name").GetString()!,
                             value.RootElement.GetProperty("payload").GetString()!);
                     }
+                    callback = "OnUpdate";
                     script.Update(deltaTime);
+                } catch (Exception error) when (isolateFailures != 0) {
+                    instance.UpdateFaulted = true;
+                    if (errors.Length < 12000)
+                        errors.AppendLine($"Entity #{entity} {script.GetType().FullName}.{callback}: {error}");
                 }
             }
-            return 1;
+            if (errors.Length == 0)
+                return 1;
+            lastError = errors.ToString();
+            return 2;
         } catch (Exception error) {
             lastError = error.ToString();
             return 0;

@@ -229,12 +229,8 @@ void TestBrokenSceneRecovery(LuxUI::Application& app) {
                   "editor recovery accepts metadata with a valid autosave");
             const auto archive =
                 sceneFile.parent_path().parent_path().parent_path() / "Broken.luxpack";
-            Check(ExportProject(fixture.project, archive, error),
-                  "broken project archive fixture exports");
-            const auto imported = archive.parent_path() / "Imported";
-            Check(!ImportProject(archive, imported, error) && !fs::exists(imported),
-                  "archive import still rejects a broken start scene despite editor recovery "
-                  "support");
+            Check(!ExportProject(fixture.project, archive, error) && !fs::exists(archive),
+                  "portable export refuses a broken start scene before publishing an archive");
             RecentProjects recent(archive.parent_path() / "recent.txt");
             Check(recent.Add(fixture.project.GetFile()),
                   "recoverable projects stay accessible from recents");

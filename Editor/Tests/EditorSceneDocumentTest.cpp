@@ -212,12 +212,29 @@ void TestMeshAssetPaths() {
                                disk.GetComponent<MeshRendererComponent>(entity.GetId()).meshPath)),
                            model),
         "direct scene loading resolves asset paths against the source scene");
+    entity.GetComponent<MeshRendererComponent>().meshPath =
+        GenericPathUtf8(model.lexically_relative(first.parent_path()));
+    const auto previousSource = document.GetScene().GetSourcePath();
+    std::string undoState;
+    Check(document.GetScene().SerializeToString(undoState), "relative undo snapshot saves");
     Check(
         document.SaveAs(PathUtf8(second)) && disk.Deserialize(PathUtf8(second)) &&
             fs::equivalent(PathFromUtf8(disk.ResolveAssetPath(
                                disk.GetComponent<MeshRendererComponent>(entity.GetId()).meshPath)),
                            model),
         "Save As rebases mesh paths without changing the referenced model");
+    const auto id = entity.GetId();
+    Check(entity.IsValid() &&
+              fs::equivalent(PathFromUtf8(document.GetScene().ResolveAssetPath(
+                                 entity.GetComponent<MeshRendererComponent>().meshPath)),
+                             model),
+          "live handles resolve the same asset immediately after Save As");
+    Check(document.ReplaceSceneFromData(document.GetActiveTabId(), undoState, id, previousSource) &&
+              fs::equivalent(
+                  PathFromUtf8(document.GetScene().ResolveAssetPath(
+                      document.GetScene().GetComponent<MeshRendererComponent>(id).meshPath)),
+                  model),
+          "undo restores relative paths against their captured scene directory");
     EditorDocument reopened;
     Check(reopened.Open(PathUtf8(second)) &&
               fs::equivalent(PathFromUtf8(reopened.GetScene().ResolveAssetPath(

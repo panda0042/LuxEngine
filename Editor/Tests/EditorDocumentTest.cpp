@@ -364,6 +364,18 @@ void TestProjectOperations() {
                                      std::filesystem::file_time_type::clock::now() +
                                          std::chrono::seconds(5));
     Check(project->HasNewerAutosave(project->GetSceneFile()), "newer autosave is detected");
+    const auto originalScene = project->GetSceneFile();
+    auto displacedScene = originalScene;
+    displacedScene += ".displaced";
+    std::filesystem::rename(originalScene, displacedScene);
+    Check(project->HasNewerAutosave(originalScene),
+          "missing original does not hide valid autosave");
+    EditorDocument recovered;
+    Check(recovered.Recover(PathUtf8(originalScene),
+                            PathUtf8(project->GetAutosaveFile(originalScene))) &&
+              recovered.GetScene().GetEntityCount() == autosaved.GetEntityCount(),
+          "autosave is recoverable without the original file");
+    std::filesystem::rename(displacedScene, originalScene);
     Check(project->ClearAutosave(project->GetSceneFile()), "autosave can be cleared");
     Check(!project->HasNewerAutosave(project->GetSceneFile()), "cleared autosave is ignored");
     Check(!project->SaveAutosave(files.path / "outside.lux", autosaved, error),
@@ -371,6 +383,15 @@ void TestProjectOperations() {
 
     std::filesystem::create_directory(files.path / "original" / ".git");
     std::ofstream(files.path / "original" / ".git" / "config") << "local git data";
+    Scene externalImageScene;
+    const auto sprite = externalImageScene.CreateEntity("External image");
+    externalImageScene.AddComponent<SpriteRendererComponent>(sprite.GetId()).texturePath =
+        PathUtf8(icon);
+    const auto extraScene = project->GetSceneFile().parent_path() / "external-image.lux";
+    Check(externalImageScene.Serialize(PathUtf8(extraScene)), "external image scene saves");
+    const auto generated = project->GetFile().parent_path() / "build";
+    std::filesystem::create_directories(generated);
+    std::ofstream(generated / "cache.txt") << "intermediate file";
     const auto archive = files.path / "export.luxpack";
     Check(ExportProject(*project, archive, error), "project exports to package");
     Check(ExportProject(*project, archive, error), "project export safely replaces package");
@@ -379,6 +400,18 @@ void TestProjectOperations() {
               imported->GetSettings().dependencies.size() == 1 &&
               !std::filesystem::exists(files.path / "imported" / ".git"),
           "project package imports with metadata");
+    Scene packagedImage;
+    const auto importedRoot = imported->GetFile().parent_path();
+    const auto packagedScene = imported->GetSceneFile().parent_path() / extraScene.filename();
+    Check(packagedImage.Deserialize(PathUtf8(packagedScene)),
+          "packaged external image scene opens");
+    const auto texture = packagedImage.ResolveAssetPath(
+        packagedImage.GetComponent<SpriteRendererComponent>(sprite.GetId()).texturePath);
+    const auto bundledImage = PathFromUtf8(texture).lexically_relative(importedRoot);
+    Check(!bundledImage.empty() && *bundledImage.begin() == "Assets" &&
+              std::filesystem::is_regular_file(PathFromUtf8(texture)) &&
+              !std::filesystem::exists(importedRoot / "build"),
+          "export rewrites external image paths and omits build intermediates");
     Check(!ImportProject(archive, files.path / "imported", error),
           "import does not overwrite existing project");
     auto cloned = CloneProject(*project, files.path / "clone", "Clone", error);
@@ -391,11 +424,27 @@ void TestProjectOperations() {
     Check(CreateProjectBackup(*project, backup, error) && std::filesystem::exists(backup),
           "project backup is created");
     Check(project->Rename("Changed", error), "project changes after backup");
+    Check(project->SaveAutosave(project->GetSceneFile(), autosaved, error),
+          "newer edits are autosaved before restoring the old backup");
     Check(RestoreProjectBackup(*project, backup, error), "project backup restores");
     auto restored = EditorProject::Open(project->GetFile(), error);
     Check(restored.has_value() && restored->GetName() == "Original",
           "restore recovers earlier project metadata");
     Check(std::filesystem::exists(backup), "restore preserves backup history");
+    bool recoverySurvived = false;
+    for (const auto& entry :
+         std::filesystem::directory_iterator(project->GetFile().parent_path() / ".lux")) {
+        if (!entry.path().filename().string().starts_with("pre-restore-autosave-"))
+            continue;
+        const auto recoveryFile = entry.path() / project->GetSceneFile().lexically_relative(
+                                                     project->GetFile().parent_path());
+        Scene recovery;
+        recoverySurvived = recovery.Deserialize(PathUtf8(recoveryFile)) &&
+                           recovery.GetEntityCount() == autosaved.GetEntityCount();
+    }
+    Check(recoverySurvived &&
+              !std::filesystem::exists(project->GetAutosaveFile(project->GetSceneFile())),
+          "restore keeps newer edits separately from the active autosave slot");
     bool hasPreRestoreBackup = false;
     for (const auto& entry :
          std::filesystem::directory_iterator(files.path / "original" / ".lux" / "backups"))

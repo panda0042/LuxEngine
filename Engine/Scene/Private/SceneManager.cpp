@@ -211,7 +211,7 @@ std::string EntitySignature(Scene& scene, uint32 id, const IdMap& referenceIds) 
                 if (reference->id && found == referenceIds.end())
                     externalReferences += std::to_string(name.size()) + ":" + name + ":" +
                                           std::to_string(reference->id) + ";";
-                reference->id = found == referenceIds.end() ? 0 : found->second;
+                *reference = {found == referenceIds.end() ? 0 : found->second};
             }
     if (auto* reference = entity.TryGetComponent<SceneReferenceComponent>()) {
         reference->baseline.clear();
@@ -321,84 +321,6 @@ void RewritePaths(Scene& scene, const fs::path& owner, const fs::path* destinati
                 throw std::runtime_error("씬 참조 경로를 저장할 수 없습니다.");
         }
     }
-}
-
-std::string CaptureSubtree(Scene& target, uint32 root) {
-    auto snapshot = Clone(target);
-    std::unordered_set<uint32> retained;
-    for (auto entity : snapshot->GetEntities())
-        if (IsDescendant(*snapshot, entity.GetId(), root))
-            retained.insert(entity.GetId());
-    for (uint32 parent = snapshot->GetParent(root); parent != 0;
-         parent = snapshot->GetParent(parent))
-        retained.insert(parent);
-    snapshot->GetComponent<SceneReferenceComponent>(root).suspended.clear();
-    for (auto entity : snapshot->GetEntities())
-        if (!retained.contains(entity.GetId()) && entity.IsValid())
-            snapshot->DestroyEntity(entity);
-    PruneMaps(*snapshot);
-    std::string data;
-    if (!snapshot->SerializeToString(data))
-        throw std::runtime_error("언로드할 씬의 상태를 보관할 수 없습니다.");
-    return data;
-}
-
-void RestoreSubtree(Scene& target, uint32 root) {
-    auto reference = target.GetComponent<SceneReferenceComponent>(root);
-    if (reference.suspended.empty())
-        return;
-    Scene snapshot;
-    if (!snapshot.DeserializeFromString(reference.suspended) || !snapshot.IsAlive(root))
-        throw std::runtime_error("언로드된 씬 상태를 복원할 수 없습니다.");
-    const auto mapping = target.ImportEntities(snapshot, {root});
-    const auto newRoot = mapping.at(root);
-    const auto restoredReference = target.GetComponent<SceneReferenceComponent>(newRoot);
-    // These already-validated subtrees keep their local transforms. SetParent would detach their
-    // provenance while they temporarily leave the imported placeholder; publish the complete
-    // hierarchy and mapping together instead.
-    for (const auto child : target.GetChildren(newRoot))
-        target.GetComponent<HierarchyComponent>(child).parent = root;
-    for (const auto& [old, local] : mapping) {
-        (void)old;
-        if (auto* source = target.TryGetComponent<InstanceSourceComponent>(local);
-            source && source->instanceRoot == newRoot)
-            source->instanceRoot = root;
-    }
-    // An inner streamed instance also belongs to its outer instance's mapping. Restore those
-    // associations after new local IDs have been allocated, preserving nested reload behavior.
-    for (auto entity : snapshot.GetEntities()) {
-        if (mapping.contains(entity.GetId()))
-            continue;
-        const auto* saved = entity.TryGetComponent<SceneReferenceComponent>();
-        auto* ancestor = target.TryGetComponent<SceneReferenceComponent>(entity.GetId());
-        if (!saved || !ancestor)
-            continue;
-        auto ancestorMap = ReadMap(*ancestor);
-        for (const auto& [source, oldLocal] : saved->entityMap)
-            if (const auto found = mapping.find(oldLocal); found != mapping.end())
-                ancestorMap[source] = oldLocal == root ? root : found->second;
-        WriteMap(*ancestor, ancestorMap);
-    }
-    target.DestroyEntity(Entity(newRoot, &target));
-    reference.entityMap = restoredReference.entityMap;
-    reference.suspended.clear();
-    reference.loaded = true;
-    target.GetComponent<SceneReferenceComponent>(root) = std::move(reference);
-    PruneMaps(target);
-}
-
-void UnloadSubtree(Scene& target, uint32 root) {
-    auto& reference = target.GetComponent<SceneReferenceComponent>(root);
-    if (!reference.loaded)
-        return;
-    const auto suspended = CaptureSubtree(target, root);
-    for (const auto child : target.GetChildren(root))
-        target.DestroyEntity(Entity(child, &target));
-    auto& current = target.GetComponent<SceneReferenceComponent>(root);
-    current.suspended = suspended;
-    current.loaded = false;
-    current.entityMap.clear();
-    PruneMaps(target);
 }
 
 struct Stamp {
@@ -682,8 +604,9 @@ void SceneManager::State::RefreshOne(Scene& target, uint32 root, Scene& source, 
         if (auto* script = target.TryGetComponent<ScriptComponent>(localId))
             for (auto& [name, value] : script->fields)
                 if (auto* reference = std::get_if<ScriptEntityReference>(&value)) {
-                    const auto found = mapping.find(reference->id);
-                    reference->id = found == mapping.end() ? 0 : found->second;
+                    const auto found =
+                        mapping.find(source.ResolveScriptEntityReference(*reference));
+                    *reference = {found == mapping.end() ? 0 : found->second};
                 }
         if (unloaded) {
             auto& nested = target.GetComponent<SceneReferenceComponent>(localId);
@@ -1084,6 +1007,114 @@ bool SceneManager::RevertInstance(Scene& target, uint32 root, std::string& error
     }
 }
 
+void SceneManager::RestoreSubtree(Scene& target, uint32 root) {
+    auto reference = target.GetComponent<SceneReferenceComponent>(root);
+    if (reference.suspended.empty())
+        return;
+    Scene snapshot;
+    if (!snapshot.DeserializeFromString(reference.suspended) || !snapshot.IsAlive(root))
+        throw std::runtime_error("언로드된 씬 상태를 복원할 수 없습니다.");
+    const auto mapping = target.ImportEntities(snapshot, {root});
+    const auto newRoot = mapping.at(root);
+    const auto restoredReference = target.GetComponent<SceneReferenceComponent>(newRoot);
+    for (const auto& [old, local] : mapping) {
+        if (old == root)
+            continue;
+        if (const auto identity = snapshot.referenceIdentities_.find(old);
+            identity != snapshot.referenceIdentities_.end() &&
+            !target.SetReferenceIdentity(local, identity->second))
+            throw std::runtime_error("씬 스트리밍 참조 ID가 중복되었습니다.");
+        const auto* saved = snapshot.TryGetComponent<ScriptComponent>(old);
+        if (!saved)
+            continue;
+        auto& script = target.GetComponent<ScriptComponent>(local);
+        for (const auto& [name, value] : saved->fields) {
+            const auto* link = std::get_if<ScriptEntityReference>(&value);
+            if (!link || !link->identity)
+                continue;
+            const auto mapped = mapping.find(link->id);
+            script.fields.at(name) =
+                ScriptEntityReference{link->id == root          ? root
+                                      : mapped == mapping.end() ? link->id
+                                                                : mapped->second,
+                                      link->identity};
+        }
+    }
+    // These already-validated subtrees keep their local transforms. SetParent would detach their
+    // provenance while they temporarily leave the imported placeholder; publish the complete
+    // hierarchy and mapping together instead.
+    for (const auto child : target.GetChildren(newRoot))
+        target.GetComponent<HierarchyComponent>(child).parent = root;
+    for (const auto& [old, local] : mapping) {
+        (void)old;
+        if (auto* source = target.TryGetComponent<InstanceSourceComponent>(local);
+            source && source->instanceRoot == newRoot)
+            source->instanceRoot = root;
+    }
+    // An inner streamed instance also belongs to its outer instance's mapping. Restore those
+    // associations after new local IDs have been allocated, preserving nested reload behavior.
+    for (auto entity : snapshot.GetEntities()) {
+        if (mapping.contains(entity.GetId()))
+            continue;
+        const auto* saved = entity.TryGetComponent<SceneReferenceComponent>();
+        auto* ancestor = target.TryGetComponent<SceneReferenceComponent>(entity.GetId());
+        if (!saved || !ancestor)
+            continue;
+        auto ancestorMap = ReadMap(*ancestor);
+        for (const auto& [source, oldLocal] : saved->entityMap)
+            if (const auto found = mapping.find(oldLocal); found != mapping.end())
+                ancestorMap[source] = oldLocal == root ? root : found->second;
+        WriteMap(*ancestor, ancestorMap);
+    }
+    target.DestroyEntity(Entity(newRoot, &target));
+    reference.entityMap = restoredReference.entityMap;
+    reference.suspended.clear();
+    reference.loaded = true;
+    target.GetComponent<SceneReferenceComponent>(root) = std::move(reference);
+    PruneMaps(target);
+}
+
+void SceneManager::UnloadSubtree(Scene& target, uint32 root) {
+    auto& reference = target.GetComponent<SceneReferenceComponent>(root);
+    if (!reference.loaded)
+        return;
+    Scene snapshot;
+    std::unordered_set<uint32> anchors;
+    target.StageRegion(snapshot, {root}, anchors);
+    snapshot.GetComponent<SceneReferenceComponent>(root).suspended.clear();
+    std::string suspended;
+    if (!snapshot.SerializeToString(suspended))
+        throw std::runtime_error("언로드할 씬의 상태를 보관할 수 없습니다.");
+    target.DestroySubtrees(target.GetChildren(root));
+    reference.suspended = std::move(suspended);
+    reference.loaded = false;
+    reference.entityMap.clear();
+}
+
+void SceneManager::ApplyStreaming(
+    Scene& target, const std::vector<uint32>& unloads,
+    const std::vector<std::pair<uint32, std::shared_ptr<Scene>>>& loads) {
+    target.StabilizeScriptReferences();
+    auto roots = unloads;
+    for (const auto& [root, source] : loads)
+        roots.push_back(root);
+    Scene staged;
+    std::unordered_set<uint32> anchors;
+    target.StageRegion(staged, roots, anchors);
+    auto affected = staged.entities_;
+    for (const auto id : anchors)
+        affected.erase(id);
+    for (const auto root : unloads)
+        if (staged.IsAlive(root))
+            UnloadSubtree(staged, root);
+    for (const auto& [root, source] : loads)
+        if (staged.IsAlive(root))
+            state_->RefreshOne(staged, root, *source);
+    if (!target.CommitRegion(staged, anchors, affected))
+        throw std::runtime_error("씬 스트리밍 상태를 적용할 수 없습니다.");
+    target.StabilizeScriptReferences(false);
+}
+
 bool SceneManager::UnloadInstance(Scene& target, uint32 root, std::string& error) {
     error.clear();
     try {
@@ -1092,9 +1123,7 @@ bool SceneManager::UnloadInstance(Scene& target, uint32 root, std::string& error
             throw std::runtime_error("씬 참조 루트를 선택해 주세요.");
         if (!reference->loaded)
             return true;
-        auto staged = Clone(target);
-        UnloadSubtree(*staged, root);
-        Commit(target, *staged);
+        ApplyStreaming(target, {root}, {});
         return true;
     } catch (const std::exception& failure) {
         error = failure.what();
@@ -1113,12 +1142,10 @@ bool SceneManager::ConfigureStreaming(Scene& target, uint32 root, Vec2 center, f
                 "스트리밍 반경은 0 이상이며 언로드 반경은 로드 반경 이상이어야 합니다.");
         if (!target.HasComponent<SceneReferenceComponent>(root))
             throw std::runtime_error("씬 참조 루트를 선택해 주세요.");
-        auto staged = Clone(target);
-        auto& reference = staged->GetComponent<SceneReferenceComponent>(root);
+        auto& reference = target.GetComponent<SceneReferenceComponent>(root);
         reference.streamCenter = center;
         reference.streamLoadRadius = loadRadius;
         reference.streamUnloadRadius = unloadRadius;
-        Commit(target, *staged);
         return true;
     } catch (const std::exception& failure) {
         error = failure.what();
@@ -1196,27 +1223,32 @@ bool SceneManager::UpdateStreaming(Scene& target, Vec2 observer, std::string& er
                 continue;
             auto loaded = pending->future.get();
             state_->streams.erase(pending);
-            if (!loaded) {
-                if (loaded.retryable)
-                    continue;
+            const auto defer = [&](const std::string& reason) {
                 state_->failedStreams.push_back(
                     {&target, target.Lifetime(), root, pathText,
                      std::chrono::steady_clock::now() + std::chrono::seconds(3)});
-                error = loaded.error;
+                error = reason;
+            };
+            if (!loaded) {
+                if (!loaded.retryable)
+                    defer(loaded.error);
                 continue;
             }
-            // Async results cannot know the caller's scene graph. Check its origin again before
-            // attaching the result, including an indirect source reference back to this scene.
             if (!target.GetSourcePath().empty()) {
                 const auto origin = Canonical(Path(target.GetSourcePath()));
-                if (SamePath(origin, path))
-                    throw std::runtime_error("씬 스트리밍 참조에 순환 관계가 있습니다.");
-                for (const auto dependency : ReferenceRoots(*loaded.scene))
-                    if (SamePath(origin,
-                                 Canonical(Path(
-                                     loaded.scene->GetComponent<SceneReferenceComponent>(dependency)
-                                         .path))))
-                        throw std::runtime_error("씬 스트리밍 참조에 순환 관계가 있습니다.");
+                const auto dependencies = ReferenceRoots(*loaded.scene);
+                const bool cyclic =
+                    SamePath(origin, path) ||
+                    std::any_of(dependencies.begin(), dependencies.end(), [&](uint32 id) {
+                        return SamePath(
+                            origin,
+                            Canonical(Path(
+                                loaded.scene->GetComponent<SceneReferenceComponent>(id).path)));
+                    });
+                if (cyclic) {
+                    defer("씬 스트리밍 참조에 순환 관계가 있습니다.");
+                    continue;
+                }
             }
             loads.emplace_back(root, std::move(loaded.scene));
         }
@@ -1224,14 +1256,7 @@ bool SceneManager::UpdateStreaming(Scene& target, Vec2 observer, std::string& er
             return false;
         if (loads.empty() && unloads.empty())
             return true;
-        auto staged = Clone(target);
-        for (const auto root : unloads)
-            if (staged->IsAlive(root))
-                UnloadSubtree(*staged, root);
-        for (const auto& [root, source] : loads)
-            if (staged->IsAlive(root))
-                state_->RefreshOne(*staged, root, *source);
-        Commit(target, *staged);
+        ApplyStreaming(target, unloads, loads);
         if (changed)
             *changed = true;
         return true;

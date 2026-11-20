@@ -72,6 +72,14 @@ foreach(_scene IN LISTS _lux_scenes)
             "$<TARGET_FILE_DIR:LuxGame>/Content/${_scene}"
         VERBATIM)
 endforeach()
+add_custom_command(TARGET LuxGameContent POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DCONTENT_ROOT=$<TARGET_FILE_DIR:LuxGame>/Content"
+        "-DMANAGED_ROOT=${_lux_managed_output}"
+        "-DMANIFEST=${CMAKE_CURRENT_BINARY_DIR}/lux-content-$<CONFIG>.txt"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/SyncContent.cmake"
+    VERBATIM)
 if(WIN32)
     get_target_property(_engine_type LuxEngine::Engine TYPE)
     if(_engine_type STREQUAL "SHARED_LIBRARY")
@@ -86,6 +94,51 @@ if(WIN32)
     endif()
 
 endif()
+)LUX";
+
+constexpr const char* SyncContent = R"LUX(cmake_minimum_required(VERSION 3.24)
+file(GLOB_RECURSE assets LIST_DIRECTORIES false RELATIVE "${SOURCE_ROOT}"
+    "${SOURCE_ROOT}/Assets/*"
+    "${SOURCE_ROOT}/*.lux" "${SOURCE_ROOT}/*.[lL][uU][xX][pP][rR][eE][fF][aA][bB]"
+    "${SOURCE_ROOT}/*.[oO][bB][jJ]" "${SOURCE_ROOT}/*.[fF][bB][xX]"
+    "${SOURCE_ROOT}/*.[pP][nN][gG]" "${SOURCE_ROOT}/*.[jJ][pP][gG]"
+    "${SOURCE_ROOT}/*.[jJ][pP][eE][gG]" "${SOURCE_ROOT}/*.[bB][mM][pP]"
+    "${SOURCE_ROOT}/*.[tT][gG][aA]" "${SOURCE_ROOT}/*.[hH][dD][rR]")
+file(GLOB_RECURSE scripts LIST_DIRECTORIES false RELATIVE "${MANAGED_ROOT}" "${MANAGED_ROOT}/*")
+set(current project.luxproject)
+foreach(path IN LISTS assets)
+    if(path MATCHES "^Assets/" OR
+       (NOT path MATCHES "(^|/)([.]git|[.]lux)(/|$)" AND
+        NOT path MATCHES "^(build|out|cmake-build[^/]*)(/|$)"))
+        list(APPEND current "${path}")
+    endif()
+endforeach()
+foreach(path IN LISTS scripts)
+    list(APPEND current "Scripts/${path}")
+endforeach()
+file(REAL_PATH "${CONTENT_ROOT}" root)
+if(EXISTS "${MANIFEST}")
+    file(STRINGS "${MANIFEST}" previous)
+    foreach(path IN LISTS previous)
+        if(path IN_LIST current OR IS_ABSOLUTE "${path}" OR
+           path MATCHES "(^|/)[.][.](/|$)" OR path MATCHES "[:\\\\]")
+            continue()
+        endif()
+        set(candidate "${root}/${path}")
+        file(REAL_PATH "${candidate}" resolved)
+        cmake_path(IS_PREFIX root "${resolved}" NORMALIZE inside)
+        if(inside AND NOT IS_DIRECTORY "${candidate}" AND NOT IS_SYMLINK "${candidate}")
+            file(REMOVE "${candidate}")
+            if(EXISTS "${candidate}")
+                message(FATAL_ERROR "Failed to remove stale generated content: ${path}")
+            endif()
+        endif()
+    endforeach()
+endif()
+list(SORT current)
+string(JOIN "\n" contents ${current})
+file(WRITE "${MANIFEST}.tmp" "${contents}\n")
+file(RENAME "${MANIFEST}.tmp" "${MANIFEST}")
 )LUX";
 
 constexpr const char* GameSource = R"LUX(#include <LuxEngine/LuxEngine.hpp>
@@ -137,12 +190,8 @@ protected:
         scene_ = manager_.Load(sceneFile, error);
         if (!scene_)
             throw std::runtime_error(error.empty() ? "시작 씬을 열 수 없습니다." : error);
-        if (!scene_->GetComponentEntityIds<le::ScriptComponent>().empty()) {
-            le::ScriptRuntimeConfig config;
-            config.assemblyPath = basePath / "Content/Scripts/GameScripts.dll";
-            if (!scripts_.Initialize(*scene_, config))
-                throw std::runtime_error(scripts_.GetLastError());
-        }
+        scriptAssembly_ = basePath / "Content/Scripts/GameScripts.dll";
+        EnsureScripts();
         camera3D_.SetPerspective(le::ToRadians(60), 16.0f / 9, .1f, 1000);
         camera3D_.SetPosition({0, 6, 12});
         camera3D_.SetTarget({0, 0, 0});
@@ -157,6 +206,20 @@ protected:
         le::Input::BindAction("Action", le::LuxKey::Space);
         le::Input::BindAction("Quit", le::LuxKey::Escape);
         FindActors();
+    }
+
+    void EnsureScripts() {
+        if (scripts_.IsRunning())
+            return;
+        for (const auto id : scene_->GetComponentEntityIds<le::ScriptComponent>()) {
+            if (!scene_->GetComponent<le::ScriptComponent>(id).enabled)
+                continue;
+            le::ScriptRuntimeConfig config;
+            config.assemblyPath = scriptAssembly_;
+            if (!scripts_.Initialize(*scene_, config))
+                throw std::runtime_error(scripts_.GetLastError());
+            return;
+        }
     }
 
     void FindActors() {
@@ -195,6 +258,7 @@ protected:
         } else if (changed) {
             streamingError_.clear();
             FindActors();
+            EnsureScripts();
         }
     }
 
@@ -222,8 +286,8 @@ protected:
                     transform.position.y += 1.0f;
                 if (le::Input::WasActionPressed("Down"))
                     transform.position.y -= 1.0f;
-                transform.position.x = std::clamp(transform.position.x, -3.0f, 3.0f);
-                transform.position.y = std::clamp(transform.position.y, -3.0f, 3.0f);
+                transform.position.x = std::clamp(transform.position.x, -3.0, 3.0);
+                transform.position.y = std::clamp(transform.position.y, -3.0, 3.0);
                 if (goal_) {
                     const auto& target = goal_.GetComponent<le::TransformComponent>().position;
                     if (transform.position.x == target.x && transform.position.y == target.y) {
@@ -294,6 +358,7 @@ protected:
 private:
     le::SceneManager manager_;
     le::ScriptRuntime scripts_;
+    std::filesystem::path scriptAssembly_;
     std::shared_ptr<le::Scene> scene_;
     le::Entity player_;
     le::Entity npc_;
@@ -384,6 +449,7 @@ bool CreateTemplateFiles(const std::filesystem::path& directory, ProjectTemplate
         {"Scripts/GameScripts.csproj", ScriptProject},
         {"Scripts/Mover.cs", ScriptSource},
         {".editorconfig", ScriptFormatting},
+        {"SyncContent.cmake", SyncContent},
         {"Scripts/NuGet.Config",
          "<configuration><packageSources><clear /></packageSources></configuration>\n"}};
     for (const auto& [path, content] : scriptFiles) {

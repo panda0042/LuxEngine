@@ -8,6 +8,7 @@
 namespace LuxEngine {
 struct ScriptEntityReference {
     uint32 id = 0;
+    uint64 identity = 0;
     bool operator==(const ScriptEntityReference&) const = default;
 };
 

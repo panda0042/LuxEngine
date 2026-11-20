@@ -31,24 +31,40 @@ void Merge(AnimationFrame& destination, const AnimationFrame& source, double wei
         else
             *destination.rootDelta += (*source.rootDelta - *destination.rootDelta) * weight;
     }
+    const auto allowed = [&](const AnimationSample& sample) {
+        return mask.empty() || std::any_of(mask.begin(), mask.end(), [&](const auto& path) {
+                   return sample.target == path || sample.target.starts_with(path + "/") ||
+                          sample.target.ends_with("/" + path) ||
+                          sample.target.find("/" + path + "/") != std::string::npos;
+               });
+    };
+    const auto isSprite = [](const AnimationSample& sample) {
+        return sample.property == AnimationProperty::SpriteFrame;
+    };
+    const bool selectSprite =
+        weight >= .5 &&
+        std::any_of(source.samples.begin(), source.samples.end(),
+                    [&](const auto& sample) { return isSprite(sample) && allowed(sample); });
+    if (selectSprite &&
+        std::tie(destination.spriteSheet, destination.spriteColumns, destination.spriteRows) !=
+            std::tie(source.spriteSheet, source.spriteColumns, source.spriteRows))
+        std::erase_if(destination.samples, isSprite);
     for (const auto& sample : source.samples) {
-        if (!mask.empty() && std::none_of(mask.begin(), mask.end(), [&](const auto& path) {
-                return sample.target == path || sample.target.starts_with(path + "/") ||
-                       sample.target.ends_with("/" + path) ||
-                       sample.target.find("/" + path + "/") != std::string::npos;
-            }))
+        if (!allowed(sample) || (isSprite(sample) && !selectSprite))
             continue;
         auto found = std::find_if(destination.samples.begin(), destination.samples.end(),
                                   [&](const auto& value) { return Key(value) == Key(sample); });
         if (found == destination.samples.end()) {
             auto value = sample;
-            if (weight < 1) {
+            if (weight < 1 && sample.property != AnimationProperty::SpriteFrame) {
                 std::array<double, 4> identity{};
                 if (sample.property == AnimationProperty::Scale)
                     identity = {1, 1, 1, 0};
                 value.value = BlendAnimationValue(sample.property, identity, sample.value, weight);
             }
             destination.samples.push_back(std::move(value));
+        } else if (sample.property == AnimationProperty::SpriteFrame) {
+            *found = sample;
         } else if (additive) {
             if (sample.property == AnimationProperty::Scale) {
                 for (size_t i = 0; i < 3; ++i)
@@ -69,7 +85,7 @@ void Merge(AnimationFrame& destination, const AnimationFrame& source, double wei
         model.weight *= weight;
         destination.models.push_back(std::move(model));
     }
-    if (!source.spriteSheet.empty() && weight >= .5) {
+    if (selectSprite) {
         destination.spriteSheet = source.spriteSheet;
         destination.spriteColumns = source.spriteColumns;
         destination.spriteRows = source.spriteRows;
@@ -82,7 +98,9 @@ struct AnimatorPlayer::Impl {
         size_t current = 0, previous = 0;
         AnimationPlayback playback, previousPlayback;
         double fade = 0, elapsed = 0;
+        std::map<Binding, std::array<double, 4>> fadeOrigins;
         bool fresh = true;
+        bool interrupted = false;
     };
 
     Ref<AnimatorController> controller;
@@ -291,7 +309,9 @@ bool AnimatorPlayer::Play(const std::string& name, double fade, size_t layer) {
     runtime.previousPlayback = runtime.playback;
     runtime.current = static_cast<size_t>(found - definition.states.begin());
     runtime.playback = {0, 1, true};
+    runtime.interrupted = runtime.fade > 0 && runtime.elapsed < runtime.fade;
     runtime.fade = fade;
+    runtime.fadeOrigins.clear();
     runtime.elapsed = 0;
     runtime.fresh = true;
     return true;
@@ -303,6 +323,7 @@ void AnimatorPlayer::Seek(double seconds, size_t layer) {
         state.playback.cursor = seconds;
         state.playback.previousCursor = seconds;
         state.fade = 0;
+        state.fadeOrigins.clear();
         state.fresh = false;
     }
 }
@@ -346,6 +367,11 @@ double AnimatorPlayer::GetDuration(size_t layer) const {
 }
 
 AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents) {
+    return Update(dt, emitEvents, {});
+}
+
+AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
+                                      const PropertyReader& readProperty) {
     AnimationFrame result;
     if (!impl_->controller || !std::isfinite(dt) || dt < 0)
         return result;
@@ -402,7 +428,32 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents) {
             for (auto& model : previous.models)
                 model.weight *= 1 - factor;
             auto models = std::move(frame.models);
+            for (const auto& sample : frame.samples) {
+                if (sample.property == AnimationProperty::SpriteFrame)
+                    continue;
+                const auto binding = Key(sample);
+                const auto outgoing =
+                    std::find_if(previous.samples.begin(), previous.samples.end(),
+                                 [&](const auto& value) { return Key(value) == binding; });
+                if (outgoing != previous.samples.end() && !runtime.interrupted)
+                    continue;
+                const auto fallback =
+                    outgoing == previous.samples.end() ? sample.value : outgoing->value;
+                auto [origin, added] = runtime.fadeOrigins.try_emplace(binding, fallback);
+                if (added && readProperty)
+                    if (auto currentValue = readProperty(sample))
+                        origin->second = *currentValue;
+                if (outgoing != previous.samples.end()) {
+                    outgoing->value = origin->second;
+                } else {
+                    auto startingSample = sample;
+                    startingSample.value = origin->second;
+                    previous.samples.push_back(std::move(startingSample));
+                }
+            }
             Merge(previous, frame, factor);
+            if (factor >= 1)
+                runtime.fadeOrigins.clear();
 
             for (auto& model : models) {
                 model.weight *= factor;

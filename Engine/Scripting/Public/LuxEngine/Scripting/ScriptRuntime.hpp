@@ -14,6 +14,7 @@ struct ScriptRuntimeConfig {
     std::filesystem::path coreDirectory;
     std::filesystem::path hostDirectory;
     std::filesystem::path dotnetRoot;
+    bool isolateUpdateFailures = false;
 };
 
 // One script world per scene. Calls and scene access belong to its owning scene thread.
@@ -25,6 +26,7 @@ public:
     ScriptRuntime& operator=(const ScriptRuntime&) = delete;
 
     bool Initialize(Scene& scene, const ScriptRuntimeConfig& config);
+    bool PrepareInstances();
     bool Update(double deltaTime);
     bool DescribeFields(const std::string& typeName, std::vector<ScriptFieldDescription>& fields);
     void Shutdown();

@@ -17,6 +17,7 @@
 namespace LuxEngine {
 class Entity;
 class ScenePhysicsWorld;
+class SceneManager;
 class ModelAsset;
 
 struct SceneSettings {
@@ -108,6 +109,7 @@ public:
     uint32 GetEntityCount() const;
 
     bool IsAlive(uint32 id) const;
+    uint32 ResolveScriptEntityReference(const ScriptEntityReference& reference) const;
 
     std::weak_ptr<int> Lifetime() const;
 
@@ -129,6 +131,11 @@ public:
     template <class T> void RemoveComponent(uint32 id);
 
 private:
+    friend class SceneManager;
+    class AnimationBindings;
+    void ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, double dt, bool rootMotion,
+                             AnimationBindings& bindings);
+
     struct PoolBase {
         LUX_API virtual ~PoolBase();
         virtual void Erase(uint32 id) = 0;
@@ -149,16 +156,26 @@ private:
     template <class T> Pool<T>& GetPool();
 
     void RequireAlive(uint32 id) const;
+    bool SetReferenceIdentity(uint32 id, uint64 identity);
+    void EraseReferenceIdentity(uint32 id);
+    void StabilizeScriptReferences(bool assignIdentities = true);
 
     bool DeserializeStream(std::istream& in); // Legacy scene versions 1–6, read only.
     bool DeserializeJson(const std::string& data);
     bool ValidateForSerialization();
     void AdoptLoadedScene(Scene& parsed);
+    void StageRegion(Scene& staged, const std::vector<uint32>& roots,
+                     std::unordered_set<uint32>& anchors) const;
+    bool CommitRegion(Scene& staged, const std::unordered_set<uint32>& anchors,
+                      const std::unordered_set<uint32>& affected);
+    void DestroySubtrees(const std::vector<uint32>& roots);
     void RepairReferenceLinks();
     void RemovePhysicsBody(uint32 id);
     uint32 nextEntityId_ = 1;
     std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
     std::unordered_set<uint32> entities_;
+    std::unordered_map<uint32, uint64> referenceIdentities_;
+    std::unordered_map<uint64, uint32> entitiesByReferenceIdentity_;
     std::unordered_map<std::type_index, std::unique_ptr<PoolBase>> pools_;
     std::unique_ptr<ScenePhysicsWorld> physics2D_;
     std::unique_ptr<ScenePhysicsWorld> physics3D_;

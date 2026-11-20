@@ -324,6 +324,7 @@ void TestNestedStreaming(const fs::path& directory) {
     Check(inner != 0, "nested streaming source instantiates");
     Check(manager.ConfigureStreaming(middle, inner, {0, 0}, 5, 8, error),
           "nested streaming configures");
+    const auto sibling = AddSprite(middle, "sibling", 9);
     const auto middlePath = directory / "Scenes/stream-middle.lux";
     Save(middle, middlePath);
     Scene target;
@@ -331,13 +332,21 @@ void TestNestedStreaming(const fs::path& directory) {
         manager.AddSceneInstance(target, middlePath, SceneReferenceMode::Nested, error);
     Check(outer != 0, "outer streamed scene instantiates");
     const auto localInner = Mapped(target, outer, inner);
+    const auto localSibling = Mapped(target, outer, sibling);
+    const auto siblingHandle = Entity(localSibling, &target);
     const auto localLeaf = Mapped(target, localInner, sourceEntity);
     Check(localInner && localLeaf, "inner and outer provenance mappings coexist");
     target.GetComponent<TransformComponent>(localLeaf).position.x = 21;
+    target.AddComponent<ScriptComponent>(localSibling, "Fixture.Sibling", true).fields["Link"] =
+        ScriptEntityReference{localLeaf};
+    target.AddComponent<ScriptComponent>(localLeaf, "Fixture.Leaf", true).fields["Link"] =
+        ScriptEntityReference{localSibling};
     bool changed = false;
     Check(manager.UpdateStreaming(target, {20, 0}, error, &changed) && changed,
           "nested region unloads");
-    Check(target.GetEntityCount() == 2, "only streamed nested descendants are released");
+    Check(target.GetEntityCount() == 3 && siblingHandle.IsValid() &&
+              Mapped(target, outer, sibling) == localSibling,
+          "nested unload preserves the outer reference's sibling mapping and handle");
     Check(manager.RefreshInstances(target, error),
           "outer refresh can run while an inner region is unloaded");
     Check(!target.GetComponent<SceneReferenceComponent>(localInner).loaded &&
@@ -347,7 +356,7 @@ void TestNestedStreaming(const fs::path& directory) {
     Save(target, nestedFile);
     auto reopened = manager.Load(nestedFile);
     Check(reopened && !reopened.scene->GetComponent<SceneReferenceComponent>(localInner).loaded &&
-              reopened.scene->GetEntityCount() == 2,
+              reopened.scene->GetEntityCount() == 3,
           "opening a nested scene cannot silently discard an unloaded region's state");
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     do {
@@ -361,9 +370,73 @@ void TestNestedStreaming(const fs::path& directory) {
               target.GetComponent<TransformComponent>(Mapped(target, localInner, sourceEntity))
                       .position.x == 21,
           "nested unload/reload preserves source mappings and overrides");
+    const auto restoredLeaf = Mapped(target, localInner, sourceEntity);
+    const auto resolve = [&](uint32 id) {
+        const auto& link = target.GetComponent<ScriptComponent>(id).fields.at("Link");
+        return target.ResolveScriptEntityReference(std::get<ScriptEntityReference>(link));
+    };
+    Check(resolve(localSibling) == restoredLeaf && resolve(restoredLeaf) == localSibling,
+          "nested streaming reconnects the sibling and streamed references");
     Check(manager.RefreshInstances(target, error),
           "outer refresh remains valid after nested reload: " + error);
-    Check(target.GetEntityCount() == 3, "outer refresh does not duplicate reloaded inner entities");
+    Check(target.GetEntityCount() == 4, "outer refresh does not duplicate reloaded inner entities");
+}
+
+void TestStreamingScriptReferences(const fs::path& directory) {
+    Scene region;
+    const auto source = region.CreateEntity("Referenced actor").GetId();
+    region.AddComponent<ScriptComponent>(source, "Fixture.Region", true);
+    const auto regionPath = directory / "Scenes/script-links-region.lux";
+    Save(region, regionPath);
+
+    Scene world;
+    const auto actor = world.CreateEntity("Persistent actor").GetId();
+    SceneManager manager;
+    std::string error;
+    const auto first =
+        manager.AddSceneInstance(world, regionPath, SceneReferenceMode::Additive, error);
+    const auto second =
+        manager.AddSceneInstance(world, regionPath, SceneReferenceMode::Additive, error);
+    Check(first && second, error);
+    const auto firstId = Mapped(world, first, source);
+    const auto secondId = Mapped(world, second, source);
+    auto& links = world.AddComponent<ScriptComponent>(actor, "Fixture.Actor", true).fields;
+    links = {{"First", ScriptEntityReference{firstId}},
+             {"Second", ScriptEntityReference{secondId}}};
+    for (const auto id : {firstId, secondId})
+        world.GetComponent<ScriptComponent>(id).fields["Outside"] = ScriptEntityReference{actor};
+    for (const auto root : {first, second})
+        Check(manager.ConfigureStreaming(world, root, {0, 0}, 4, 8, error), error);
+
+    bool changed = false;
+    Check(manager.UpdateStreaming(world, {20, 0}, error, &changed) && changed, error);
+    const auto saved = directory / "Scenes/script-links-world.lux";
+    Save(world, saved);
+    auto reopened = manager.Load(saved);
+    Check(bool(reopened), reopened.error);
+    auto& scene = *reopened.scene;
+    const auto resolve = [&](uint32 owner, const char* name) {
+        const auto& value = scene.GetComponent<ScriptComponent>(owner).fields.at(name);
+        return scene.ResolveScriptEntityReference(std::get<ScriptEntityReference>(value));
+    };
+    Check(!resolve(actor, "First") && !resolve(actor, "Second"),
+          "references to unloaded entities stay unresolved");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+        Check(manager.UpdateStreaming(scene, {0, 0}, error, &changed), error);
+        if (scene.GetComponent<SceneReferenceComponent>(first).loaded &&
+            scene.GetComponent<SceneReferenceComponent>(second).loaded)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < deadline);
+
+    const auto loadedFirst = Mapped(scene, first, source);
+    const auto loadedSecond = Mapped(scene, second, source);
+    Check(loadedFirst && loadedSecond && loadedFirst != loadedSecond &&
+              resolve(actor, "First") == loadedFirst && resolve(actor, "Second") == loadedSecond,
+          "references distinguish duplicate instances after save and streaming");
+    Check(resolve(loadedFirst, "Outside") == actor && resolve(loadedSecond, "Outside") == actor,
+          "streamed references restore links to the persistent scene");
 }
 
 void TestLiveRuntimeState(const fs::path& directory) {
@@ -533,6 +606,7 @@ int RunSceneManagerTests(int, char**) {
         {
             Files files;
             TestNestedStreaming(files.root);
+            TestStreamingScriptReferences(files.root);
         }
         {
             Files files;

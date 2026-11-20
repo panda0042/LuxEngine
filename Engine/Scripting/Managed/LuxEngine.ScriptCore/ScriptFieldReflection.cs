@@ -75,13 +75,32 @@ internal static class ScriptFieldReflection {
         };
     }
 
-    internal static void Apply(EntityScript script, string json, ulong world) {
-        if (json.Length > 65536)
-            throw new InvalidOperationException("Script field data exceeds the limit.");
-        using JsonDocument document = JsonDocument.Parse(json);
-        var fields = Fields(script.GetType());
+    internal sealed class Binding {
+        private readonly EntityScript script;
+        private readonly ulong world;
+        private readonly SortedDictionary<string, FieldInfo> fields;
+        private readonly Dictionary<string, object?> defaults = new(StringComparer.Ordinal);
+        private Dictionary<string, string> values = new(StringComparer.Ordinal);
+
+        internal Binding(EntityScript script, ulong world) {
+            this.script = script;
+            this.world = world;
+            fields = Fields(script.GetType());
+            foreach (var (name, field) in fields)
+                defaults.Add(name, field.GetValue(script));
+        }
+
+        internal void Apply(string json) {
+            if (json.Length > 65536)
+                throw new InvalidOperationException("Script field data exceeds the limit.");
+            using JsonDocument document = JsonDocument.Parse(json);
+            var next = new Dictionary<string, string>(StringComparer.Ordinal);
             var updates = new List<(FieldInfo Field, object? Value)>();
             foreach (JsonProperty entry in document.RootElement.EnumerateObject()) {
+                string encoded = entry.Value.GetRawText();
+                next.Add(entry.Name, encoded);
+                if (values.TryGetValue(entry.Name, out string? previous) && previous == encoded)
+                    continue;
                 if (!fields.TryGetValue(entry.Name, out FieldInfo? field))
                     throw new InvalidOperationException(
                         $"Unknown serialized script field {entry.Name}.");
@@ -89,15 +108,19 @@ internal static class ScriptFieldReflection {
                 if (entry.Value.GetProperty("type").GetInt32() != kind)
                     throw new InvalidOperationException(
                         $"Serialized script field type changed: {entry.Name}.");
-                object? value = field.FieldType == typeof(Vector3d)
-                                    ? new Vector3d(entry.Value.GetProperty("value") [0].GetDouble(),
-                                                   entry.Value.GetProperty("value") [1].GetDouble(),
-                                                   entry.Value.GetProperty("value") [2].GetDouble())
-                                    : Read(entry.Value.GetProperty("value"), kind, world);
-                updates.Add((field, value));
+                JsonElement value = entry.Value.GetProperty("value");
+                object? decoded = field.FieldType == typeof(Vector3d)
+                    ? new Vector3d(value[0].GetDouble(), value[1].GetDouble(), value[2].GetDouble())
+                    : Read(value, kind, world);
+                updates.Add((field, decoded));
             }
+            foreach (string name in values.Keys)
+                if (!next.ContainsKey(name))
+                    updates.Add((fields[name], defaults[name]));
             foreach (var update in updates)
                 update.Field.SetValue(script, update.Value);
+            values = next;
+        }
     }
 
     internal static string Describe(Type type) {

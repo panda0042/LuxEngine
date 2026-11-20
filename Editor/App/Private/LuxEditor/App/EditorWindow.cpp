@@ -13,6 +13,7 @@
 #include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/ECS/ECS.hpp>
 #include <LuxEngine/Platform/Input.hpp>
+#include <LuxEngine/Runtime/ScenePlayer.hpp>
 #include <LuxUI/Widgets.hpp>
 #include <algorithm>
 #include <array>
@@ -211,6 +212,8 @@ void EditorWindow::BuildMenus() {
                         [this] { BackupCurrentProject(); });
     restoreAction_ = add(file, LUX_UI_TEXT("프로젝트 백업 복구..."), LUX_UI_TEXT("restoreProject"),
                          {}, [this] { RestoreCurrentProject(); });
+    add(file, LUX_UI_TEXT("복원 전 자동 저장본 열기..."), LUX_UI_TEXT("openPreRestoreAutosave"), {},
+        [this] { OpenPreRestoreAutosave(); });
     rescanAction_ = add(file, LUX_UI_TEXT("리소스 재검색"), LUX_UI_TEXT("rescanResources"), {},
                         [this] { RescanProjectResources(); });
     file->addSeparator();
@@ -1383,24 +1386,13 @@ void EditorWindow::StartPreview() {
          document_.GetScene().GetComponentEntityIds<LuxEngine::AnimationComponent>())
         runtime->GetComponent<LuxEngine::AnimationComponent>(id).currentTime =
             document_.GetScene().GetComponent<LuxEngine::AnimationComponent>(id).currentTime;
-    const auto scriptEntities = runtime->GetComponentEntityIds<LuxEngine::ScriptComponent>();
-    const bool hasScripts =
-        std::any_of(scriptEntities.begin(), scriptEntities.end(), [&runtime](auto id) {
-            const auto& script = runtime->GetComponent<LuxEngine::ScriptComponent>(id);
-            return script.enabled && !script.typeName.empty();
-        });
-    if (hasScripts) {
-        LuxEngine::ScriptRuntimeConfig config;
-        config.assemblyPath = ResolvePlayAssembly();
-        if (!previewScripts_.Initialize(*runtime, config)) {
-            const auto error = previewScripts_.GetLastError();
-            previewScripts_.Shutdown();
-            Log(LuxUI::String::fromUtf8(error), true);
-            return;
-        }
+    if (!EnsurePreviewScripts(*runtime)) {
+        Log(Q(previewScripts_.GetLastError()), true);
+        return;
     }
     runtimeScene_ = std::move(runtime);
     previewFrame_ = 0;
+    previewStreamingElapsed_ = 0;
     previewTimer_.setInterval(
         std::max(1, static_cast<int>(std::lround(runtimeScene_->GetSettings().fixedStep * 1000))));
     lastUpdateMs_ = 0;
@@ -1460,6 +1452,20 @@ void EditorWindow::StepPreview() {
     TickPreview();
 }
 
+bool EditorWindow::EnsurePreviewScripts(LuxEngine::Scene& scene) {
+    if (previewScripts_.IsRunning())
+        return true;
+    for (const auto id : scene.GetComponentEntityIds<LuxEngine::ScriptComponent>()) {
+        const auto& script = scene.GetComponent<LuxEngine::ScriptComponent>(id);
+        if (!script.enabled || script.typeName.empty())
+            continue;
+        LuxEngine::ScriptRuntimeConfig config;
+        config.assemblyPath = ResolvePlayAssembly();
+        return previewScripts_.Initialize(scene, config);
+    }
+    return true;
+}
+
 void EditorWindow::TickPreview() {
     if (!previewActive_ || !runtimeScene_)
         return;
@@ -1467,6 +1473,19 @@ void EditorWindow::TickPreview() {
     const auto start = std::chrono::steady_clock::now();
     try {
         const double step = scene.GetSettings().fixedStep;
+        previewStreamingElapsed_ += step;
+        if (previewStreamingElapsed_ >= .1) {
+            previewStreamingElapsed_ = 0;
+            LuxEngine::ScenePlayerView view;
+            canvas_->GetView(view.centerX, view.centerY, view.halfHeight);
+            const auto observer = LuxEngine::ResolveSceneStreamingObserver(scene, view);
+            std::string error;
+            bool changed = false;
+            if (!sceneManager_.UpdateStreaming(scene, {observer.x, observer.y}, error, &changed))
+                Log(Q(error), true);
+            if (changed && !EnsurePreviewScripts(scene))
+                throw std::runtime_error(previewScripts_.GetLastError());
+        }
         if (previewScripts_.IsRunning() && !previewScripts_.Update(step))
             throw std::runtime_error(previewScripts_.GetLastError());
         scene.OnUpdate(step);

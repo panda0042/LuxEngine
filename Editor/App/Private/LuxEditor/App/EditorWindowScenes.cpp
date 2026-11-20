@@ -446,6 +446,7 @@ EditorSnapshot EditorWindow::SnapshotScene(EditorDocument::TabId id) {
         return {};
     EditorSnapshot snapshot;
     snapshot.scene = LuxUI::ByteArray(serialized.data(), static_cast<qsizetype>(serialized.size()));
+    snapshot.sourcePath = scene->GetSourcePath();
     snapshot.selection = document_.GetSelection(id);
     for (const auto& entity : scene->GetEntities())
         if (const auto* animation = entity.TryGetComponent<LuxEngine::AnimationComponent>())
@@ -460,7 +461,7 @@ void EditorWindow::RestoreSceneAt(EditorDocument::TabId id, const EditorSnapshot
     CancelViewportEdit();
     const LuxUI::ScopedValueRollback<bool> restoring(restoringHistory_, true);
     const std::string data(snapshot.scene.constData(), static_cast<size_t>(snapshot.scene.size()));
-    if (!document_.ReplaceSceneFromData(id, data, selected)) {
+    if (!document_.ReplaceSceneFromData(id, data, selected, snapshot.sourcePath)) {
         Log(LUX_UI_TEXT("씬 편집 이력을 복원하지 못했습니다."), true);
         return;
     }
@@ -469,7 +470,8 @@ void EditorWindow::RestoreSceneAt(EditorDocument::TabId id, const EditorSnapshot
     for (const auto& [entity, time] : snapshot.animationTimes)
         if (auto* animation = scene->TryGetComponent<LuxEngine::AnimationComponent>(entity))
             animation->currentTime = time;
-    UpdateSceneDirty(id, snapshot);
+    UpdateSceneDirty(id,
+                     snapshot.sourcePath == scene->GetSourcePath() ? snapshot : SnapshotScene(id));
     if (activate)
         SwitchSceneDocument(id, false);
     RefreshAll();

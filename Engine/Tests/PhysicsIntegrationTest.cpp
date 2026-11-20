@@ -257,6 +257,36 @@ void GameplayControl() {
           "destroyed entities return empty gameplay state");
 }
 
+void KinematicTransformCarriesBox(uint32 substeps) {
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.physicsSubsteps = substeps;
+    Check(scene.SetSettings(settings), "apply kinematic test substeps");
+    auto platform = scene.CreateEntity("Kinematic platform");
+    platform.AddComponent<BoxCollider3DComponent>().size = {12, 1, 12};
+    platform.AddComponent<Rigidbody3DComponent>().type = BodyType::Kinematic;
+    auto box = scene.CreateEntity("Box");
+    box.AddComponent<BoxCollider3DComponent>();
+    box.AddComponent<Rigidbody3DComponent>();
+    box.GetComponent<TransformComponent>().position.y = 1.05;
+
+    constexpr double dt = 1.0 / 60;
+    for (int i = 0; i < 120; ++i)
+        scene.OnUpdate(dt);
+    Check(scene.IsGrounded3D(box.GetId()), "box is resting on the platform");
+    auto& position = platform.GetComponent<TransformComponent>().position;
+    for (int i = 0; i < 180; ++i) {
+        position.x += dt;
+        scene.OnUpdate(dt);
+    }
+    Check(std::abs(position.x - 3) < .01 && box.GetComponent<TransformComponent>().position.x > 1.5,
+          "a transform-driven kinematic platform imparts motion to a contacting box");
+    for (int i = 0; i < 60; ++i)
+        scene.OnUpdate(dt);
+    Check(std::abs(position.x - 3) < .01,
+          "a served kinematic target does not leave residual velocity");
+}
+
 void CapacityAndReplacement() {
     PhysicsWorld world;
     std::vector<PhysicsBodyDescription> bodies(16384);
@@ -321,6 +351,8 @@ int main() {
         Diagnostics();
         MotionAndEdits();
         GameplayControl();
+        for (const uint32 substeps : {1, 2, 4, 8})
+            KinematicTransformCarriesBox(substeps);
         CapacityAndReplacement();
         StableContactIdentity();
         std::cout << "Jolt queries, diagnostics, CCD, triggers and live body edits passed\n";

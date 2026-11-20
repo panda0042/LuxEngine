@@ -134,6 +134,7 @@ ScenePlayerCameras ResolveScenePlayerCameras(Scene& scene, double aspect,
             rotation = angle;
         }
         foundCamera = true;
+        result.cameraEntity = id;
         break;
     }
     if (!foundCamera)
@@ -265,28 +266,56 @@ ScenePlayerView FitSceneView(Scene& scene) {
     return view;
 }
 
+Vec3 ResolveSceneStreamingObserver(Scene& scene, const ScenePlayerView& view, uint32 playerId) {
+    if (scene.HasComponent<TransformComponent>(playerId))
+        return scene.GetWorldTransform(playerId).position;
+    for (const auto id : scene.GetComponentEntityIds<TagComponent>())
+        if (IsPlayerTag(scene.GetComponent<TagComponent>(id).tag) &&
+            scene.HasComponent<TransformComponent>(id))
+            return scene.GetWorldTransform(id).position;
+    const auto cameras = ResolveScenePlayerCameras(scene, 1, view);
+    if (!cameras.cameraEntity)
+        return {view.centerX, view.centerY, 0};
+    return cameras.perspective ? cameras.camera3D.GetPosition() : cameras.camera2D.GetPosition();
+}
+
 ScenePlayer::ScenePlayer(ScenePlayerOptions options)
     : Application({.name = options.title, .width = options.width, .height = options.height}),
       options_(std::move(options)) {}
 
 bool ScenePlayer::LoadScene() {
-    scripts_.Shutdown();
     auto loaded = sceneManager_.Load(std::filesystem::path(std::u8string(
         reinterpret_cast<const char8_t*>(options_.scenePath.data()), options_.scenePath.size())));
     if (!loaded) {
         Log::Error("씬을 불러올 수 없습니다: " + loaded.error);
         return false;
     }
+    auto preparedScripts = std::make_unique<ScriptRuntime>();
+    if (!EnsureScripts(*loaded.scene, *preparedScripts))
+        return false;
+    if (preparedScripts->IsRunning() && !preparedScripts->PrepareInstances()) {
+        Log::Error(preparedScripts->GetLastError());
+        return false;
+    }
+    scripts_.swap(preparedScripts);
+    preparedScripts->Shutdown();
     scene_ = std::move(loaded.scene);
     streamingAccumulator_ = 0;
     lastStreamingError_.clear();
     FindPlayer();
-    const auto scripts = scene_->GetComponentEntityIds<ScriptComponent>();
-    const bool hasActiveScripts = std::any_of(scripts.begin(), scripts.end(), [this](uint32 id) {
-        return scene_->GetComponent<ScriptComponent>(id).enabled;
+    return true;
+}
+
+bool ScenePlayer::EnsureScripts(Scene& scene, ScriptRuntime& scripts) {
+    if (scripts.IsRunning())
+        return true;
+    const auto ids = scene.GetComponentEntityIds<ScriptComponent>();
+    const bool hasActiveScripts = std::any_of(ids.begin(), ids.end(), [&scene](uint32 id) {
+        return scene.GetComponent<ScriptComponent>(id).enabled;
     });
     if (hasActiveScripts) {
         ScriptRuntimeConfig config;
+        config.isolateUpdateFailures = true;
         const auto base = SDL_GetBasePath();
         const auto directory =
             base ? std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(base)))
@@ -297,8 +326,8 @@ bool ScenePlayer::LoadScene() {
                 : std::filesystem::path(std::u8string(
                       reinterpret_cast<const char8_t*>(options_.scriptAssemblyPath.data()),
                       options_.scriptAssemblyPath.size()));
-        if (!scripts_.Initialize(*scene_, config)) {
-            Log::Error(scripts_.GetLastError());
+        if (!scripts.Initialize(scene, config)) {
+            Log::Error(scripts.GetLastError());
             return false;
         }
     }
@@ -383,9 +412,7 @@ void ScenePlayer::OnUpdate(double dt) {
     streamingAccumulator_ += dt;
     if (streamingAccumulator_ >= .1) {
         streamingAccumulator_ = 0;
-        const auto observer = player_ && player_.HasComponent<TransformComponent>()
-                                  ? scene_->GetWorldTransform(player_.GetId()).position
-                                  : Vec3{view_.centerX, view_.centerY, 0};
+        const auto observer = ResolveSceneStreamingObserver(*scene_, view_, player_.GetId());
         std::string error;
         bool changed = false;
         if (!sceneManager_.UpdateStreaming(*scene_, {observer.x, observer.y}, error, &changed)) {
@@ -394,13 +421,24 @@ void ScenePlayer::OnUpdate(double dt) {
             lastStreamingError_ = std::move(error);
         } else if (changed)
             lastStreamingError_.clear();
-        if (changed)
+        if (changed) {
             FindPlayer();
+            if (!EnsureScripts(*scene_, *scripts_)) {
+                runtimeFailed_ = true;
+                Close();
+                return;
+            }
+        }
     }
-    if (scripts_.IsRunning() && !scripts_.Update(dt)) {
-        Log::Error(scripts_.GetLastError());
-        Close();
-        return;
+    if (scripts_->IsRunning()) {
+        if (!scripts_->Update(dt)) {
+            Log::Error(scripts_->GetLastError());
+            runtimeFailed_ = true;
+            Close();
+            return;
+        }
+        if (!scripts_->GetLastError().empty())
+            Log::Error(scripts_->GetLastError());
     }
     scene_->OnUpdate(dt);
     if (options_.maxFrames != 0 && ++frames_ >= options_.maxFrames)
@@ -433,8 +471,12 @@ void ScenePlayer::OnRender(float) {
 }
 
 void ScenePlayer::OnShutdown() {
-    scripts_.Shutdown();
+    scripts_->Shutdown();
     Input::ClearBindings();
+}
+
+bool ScenePlayer::RuntimeFailed() const {
+    return runtimeFailed_;
 }
 
 bool ScenePlayer::LoadedScene() const {

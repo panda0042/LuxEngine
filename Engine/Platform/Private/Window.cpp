@@ -83,6 +83,10 @@ bool Window::ApplySystemTheme() {
 void Window::Shutdown() {
     if (window_) {
         Windows().erase(SDL_GetWindowID(window_));
+        SDL_Event release{};
+        release.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+        release.window.windowID = SDL_GetWindowID(window_);
+        Input::ProcessEvent(release);
         SDL_DestroyWindow(window_);
         window_ = nullptr;
     }

@@ -10,7 +10,7 @@ class Scene;
 class ScenePhysicsWorld final {
 public:
     explicit ScenePhysicsWorld(bool planar);
-    void Step(Scene& scene, double dt);
+    void Step(Scene& scene, double dt, uint32 index, uint32 count);
     void Remove(uint32 entity);
     std::unordered_map<uint32, TransformComponent> GetWorldPoses(const Scene& scene) const;
     const std::vector<Collision3DEvent>& BeganContacts() const;
@@ -23,6 +23,7 @@ private:
     bool planar_;
     PhysicsWorld world_;
     std::vector<uint32> active_;
+    std::unordered_map<uint32, TransformComponent> kinematicTargets_;
     std::string error_;
     std::string lastError_;
 };

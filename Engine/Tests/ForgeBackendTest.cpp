@@ -642,7 +642,7 @@ void Volume() {
                            return ok;
                        }),
           "5000 draws in one frame");
-    Check(s.gpu.GetFrameStats().drawCalls == 5000 || true, "draw count");
+    Check(s.gpu.GetFrameStats().drawCalls == 5000, "draw count");
     Check(PixelIs(c, 99, 49, 255, 255, 0, "last of 5000 draws") &&
               PixelIs(c, 100, 10, 0, 0, 0, "outside"),
           "every small draw landed");

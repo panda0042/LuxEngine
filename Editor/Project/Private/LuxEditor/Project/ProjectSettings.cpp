@@ -171,6 +171,10 @@ bool EditorProject::HasNewerAutosave(const std::filesystem::path& sceneFile) con
     if (ec)
         return false;
     const auto sourceTime = std::filesystem::last_write_time(sceneFile, ec);
+    if (ec == std::errc::no_such_file_or_directory) {
+        LuxEngine::Scene recovery;
+        return recovery.Deserialize(PathUtf8(autosave));
+    }
     return !ec && autosaveTime > sourceTime;
 }
 

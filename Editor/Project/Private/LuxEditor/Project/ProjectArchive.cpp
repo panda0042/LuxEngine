@@ -3,6 +3,8 @@
 #include <LuxEditor/Project/ProjectArchive.hpp>
 #include <LuxEditor/Project/ProjectFileOperations.hpp>
 #include <LuxEditor/Scene/SceneAuthoringIO.hpp>
+#include <LuxEditor/Scene/SceneDependencies.hpp>
+#include <LuxEngine/Scene/PrefabLibrary.hpp>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -20,6 +22,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <set>
 #include <vector>
 #include <zip.h>
@@ -497,8 +500,10 @@ bool StageArchive(const std::filesystem::path& archive, const std::filesystem::p
 }
 } // namespace
 
-bool ExportProject(const EditorProject& project, const std::filesystem::path& archive,
-                   std::string& error) {
+using BundledImages = std::map<std::filesystem::path, std::filesystem::path>;
+
+static bool WriteProjectArchive(const EditorProject& project, const std::filesystem::path& archive,
+                                std::string& error, const BundledImages* bundled = nullptr) {
     error.clear();
     const auto root = project.GetFile().parent_path();
     std::error_code ec;
@@ -515,6 +520,12 @@ bool ExportProject(const EditorProject& project, const std::filesystem::path& ar
         error = "압축 파일을 만들 수 없습니다.";
         return false;
     }
+    const auto mapAsset = [&](const std::filesystem::path& source) {
+        if (bundled)
+            if (const auto entry = bundled->find(source); entry != bundled->end())
+                return std::filesystem::absolute(root) / entry->second;
+        return source;
+    };
     uint64_t total = 0;
     std::vector<std::unique_ptr<std::string>> normalizedScenes;
     size_t entries = 0;
@@ -523,8 +534,10 @@ bool ExportProject(const EditorProject& project, const std::filesystem::path& ar
     const std::filesystem::recursive_directory_iterator end;
     for (; !ec && iterator != end; iterator.increment(ec)) {
         const auto relative = iterator->path().lexically_relative(root);
-        if (relative.empty() || *relative.begin() == ".lux" || *relative.begin() == ".git" ||
-            iterator->path() == archive || iterator->path() == temporary) {
+        const auto first = relative.empty() ? std::string{} : PathUtf8(*relative.begin());
+        if (first.empty() || first == ".lux" || first == ".git" || first == "build" ||
+            first == "out" || first.starts_with("cmake-build") || iterator->path() == archive ||
+            iterator->path() == temporary) {
             if (iterator->is_directory(ec))
                 iterator.disable_recursion_pending();
             continue;
@@ -549,15 +562,21 @@ bool ExportProject(const EditorProject& project, const std::filesystem::path& ar
         }
         uint64_t size = iterator->file_size(ec);
         std::unique_ptr<std::string> normalized;
-        if (!ec && iterator->path().extension() == ".lux") {
-            std::string normalizationError;
+        std::string normalizationError;
+        if (!ec && (iterator->path().extension() == ".lux" ||
+                    (bundled && LuxEngine::PrefabLibrary::IsPrefabPath(iterator->path())))) {
             if (auto scene = ReadAuthoredScene(iterator->path(), normalizationError)) {
                 auto data = std::make_unique<std::string>();
-                if (SerializeAuthoredScene(*scene, iterator->path(), *data, normalizationError)) {
+                if (SerializeAuthoredScene(*scene, iterator->path(), *data, normalizationError,
+                                           mapAsset)) {
                     size = data->size();
                     normalized = std::move(data);
                 }
             }
+        }
+        if (bundled && !normalizationError.empty()) {
+            error = normalizationError;
+            break;
         }
         if (ec) {
             error = "프로젝트 파일 크기를 읽지 못했습니다.";
@@ -585,6 +604,27 @@ bool ExportProject(const EditorProject& project, const std::filesystem::path& ar
     }
     if (ec && error.empty())
         error = "프로젝트 파일을 읽지 못했습니다.";
+    if (bundled && error.empty()) {
+        for (const auto& [source, destination] : *bundled) {
+            const auto size = std::filesystem::file_size(source, ec);
+            if (ec || ++entries > MaxEntries || !FitsArchiveSizeLimits(size, total) ||
+                !SafeArchivePath(destination)) {
+                error = "외부 이미지가 프로젝트 압축 한도를 넘었거나 경로를 읽을 수 없습니다: " +
+                        PathUtf8(source);
+                break;
+            }
+            auto* data =
+                zip_source_file(zip, PathUtf8(source).c_str(), 0, static_cast<zip_int64_t>(size));
+            if (!data || zip_file_add(zip, GenericPathUtf8(destination).c_str(), data,
+                                      ZIP_FL_ENC_UTF_8) < 0) {
+                if (data)
+                    zip_source_free(data);
+                error = "외부 이미지를 프로젝트에 묶을 수 없습니다: " + PathUtf8(source);
+                break;
+            }
+            total += size;
+        }
+    }
     if (error.empty()) {
         if (zip_close(zip) != 0) {
             error = "압축 파일을 완성하지 못했습니다.";
@@ -624,6 +664,27 @@ bool ExportProject(const EditorProject& project, const std::filesystem::path& ar
         return false;
     }
     return true;
+}
+
+bool ExportProject(const EditorProject& project, const std::filesystem::path& archive,
+                   std::string& error) {
+    const auto root = project.GetFile().parent_path();
+    std::filesystem::path bundleDirectory;
+    BundledImages bundled;
+    const auto collect = [&](const std::filesystem::path& image) {
+        if (bundled.contains(image))
+            return;
+        if (bundleDirectory.empty()) {
+            size_t suffix = 0;
+            do {
+                bundleDirectory =
+                    std::filesystem::path("Assets") / ("LuxExternal-" + std::to_string(suffix++));
+            } while (std::filesystem::exists(root / bundleDirectory));
+        }
+        bundled.emplace(image, bundleDirectory / std::to_string(bundled.size()) / image.filename());
+    };
+    return ValidateProjectScenes(project, error, collect) &&
+           WriteProjectArchive(project, archive, error, &bundled);
 }
 
 std::optional<EditorProject> ImportProject(const std::filesystem::path& archive,
@@ -680,7 +741,7 @@ bool CreateProjectBackup(const EditorProject& project, std::filesystem::path& ba
         directory /
         ("backup-" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) +
          ".luxbackup");
-    if (!ExportProject(project, backup, error))
+    if (!WriteProjectArchive(project, backup, error))
         return false;
     std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> backups;
     for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
@@ -732,25 +793,48 @@ bool RestoreProjectBackup(const EditorProject& project, const std::filesystem::p
             return false;
         }
     }
-    const auto backups = root / ".lux" / "backups";
-    const auto safety =
-        backups / ("pre-restore-" +
-                   std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) +
-                   ".luxbackup");
-    if (!ExportProject(project, safety, error)) {
+    const auto metadata = root / ".lux";
+    const auto backups = metadata / "backups";
+    const auto stamp = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    const auto safety = backups / ("pre-restore-" + stamp + ".luxbackup");
+    if (IsReparsePointOrSymlink(metadata) || IsReparsePointOrSymlink(backups)) {
+        error = "프로젝트 백업 경로가 링크를 가리킵니다.";
         std::filesystem::remove_all(staging, ec);
         return false;
     }
-    if (std::filesystem::is_directory(backups, ec)) {
-        std::filesystem::create_directories(staging / ".lux", ec);
-        if (!ec)
-            std::filesystem::copy(backups, staging / ".lux" / "backups",
+    if (!WriteProjectArchive(project, safety, error)) {
+        std::filesystem::remove_all(staging, ec);
+        return false;
+    }
+    const auto stagedMetadata = staging / ".lux";
+    std::filesystem::create_directories(stagedMetadata, ec);
+    if (!ec) {
+        for (std::filesystem::directory_iterator it(metadata, ec), end; !ec && it != end;
+             it.increment(ec)) {
+            const auto name = PathUtf8(it->path().filename());
+            if (name != "backups" && name != "autosave" &&
+                !name.starts_with("pre-restore-autosave-"))
+                continue;
+            if (IsReparsePointOrSymlink(it->path()) || !it->is_directory(ec)) {
+                if (!ec)
+                    ec = std::make_error_code(std::errc::invalid_argument);
+                break;
+            }
+            for (std::filesystem::recursive_directory_iterator files(it->path(), ec), endFiles;
+                 !ec && files != endFiles; files.increment(ec))
+                if (IsReparsePointOrSymlink(files->path()))
+                    ec = std::make_error_code(std::errc::invalid_argument);
+            if (ec)
+                break;
+            const auto savedName = name == "autosave" ? "pre-restore-autosave-" + stamp : name;
+            std::filesystem::copy(it->path(), stagedMetadata / savedName,
                                   std::filesystem::copy_options::recursive, ec);
-        if (ec) {
-            error = "기존 백업 목록을 보존할 수 없습니다.";
-            std::filesystem::remove_all(staging, ec);
-            return false;
         }
+    }
+    if (ec) {
+        error = "기존 백업 또는 자동 저장본을 보존할 수 없습니다.";
+        std::filesystem::remove_all(staging, ec);
+        return false;
     }
     const auto previous = TemporarySibling(root);
     RenameProjectPath(root, previous, ec);

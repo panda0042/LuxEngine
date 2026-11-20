@@ -7,6 +7,7 @@ bool EditorSnapshot::isEmpty() const {
 
 void EditorSnapshot::clear() {
     scene.clear();
+    sourcePath.clear();
     selection.clear();
     animationTimes.clear();
 }

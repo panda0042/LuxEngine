@@ -87,6 +87,34 @@ public sealed class AnimationDriver : EntityScript {
     }
 }
 
+public sealed class LiveFields : EntityScript {
+    public float Amount = 2;
+    public float Other = 4;
+    private int updates;
+
+    protected override void OnCreate() {
+        Transform value = Entity.Transform;
+        value.Position.Y += 1;
+        Entity.Transform = value;
+    }
+
+    protected override void OnUpdate(double deltaTime) {
+        Transform value = Entity.Transform;
+        value.Position.X = ++updates;
+        value.Scale.X = Amount;
+        value.Scale.Y = ++Other;
+        Entity.Transform = value;
+    }
+
+    protected override void OnDestroy() {
+        if (Entity.IsValid) {
+            Transform value = Entity.Transform;
+            value.Position.Z += 1;
+            Entity.Transform = value;
+        }
+    }
+}
+
 public sealed class DebugProbe : EntityScript {
     public int Counter = 0;
 

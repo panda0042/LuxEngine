@@ -35,7 +35,9 @@ bool Ignored(const fs::path& relative) {
 
 class ReferenceValidator final {
 public:
-    explicit ReferenceValidator(const EditorProject& project) : project_(project) {
+    explicit ReferenceValidator(const EditorProject& project,
+                                const ExternalImageHandler& externalImage = {})
+        : project_(project), externalImage_(externalImage) {
         std::error_code error;
         root = fs::canonical(project.GetFile().parent_path(), error);
         if (error)
@@ -118,17 +120,25 @@ private:
         return data;
     }
 
-    fs::path ResolveModel(const std::string& resource, const fs::path& owner) const {
+    fs::path ResolveModel(const std::string& resource, const fs::path& owner,
+                          bool image = false) const {
         if (resource.empty() || resource.size() > 4096 || resource.find('\0') != std::string::npos)
             throw std::runtime_error("모델 경로가 올바르지 않습니다.");
         const auto input = PathFromUtf8(resource);
         std::error_code error;
         const auto file =
             fs::canonical(input.is_absolute() ? input : owner.parent_path() / input, error);
+        if (error || !fs::is_regular_file(file, error) || error)
+            throw std::runtime_error("프로젝트 자산 파일을 읽을 수 없습니다: " + resource);
         const auto relative = file.lexically_relative(root);
-        if (error || relative.empty() || relative.is_absolute() || *relative.begin() == ".." ||
-            Ignored(relative) || !fs::is_regular_file(file, error) || error)
-            throw std::runtime_error("모델 파일은 프로젝트 내부에 있어야 합니다: " + resource);
+        const bool outside =
+            relative.empty() || relative.is_absolute() || *relative.begin() == "..";
+        const auto extension = owner.extension();
+        if (outside && image && externalImage_ &&
+            (extension == ".lux" || LuxEngine::PrefabLibrary::IsPrefabPath(owner)))
+            externalImage_(file);
+        else if (outside || Ignored(relative))
+            throw std::runtime_error("자산 파일은 프로젝트 내부에 있어야 합니다: " + resource);
         return file;
     }
 
@@ -147,7 +157,7 @@ private:
     void ValidateImage(const std::string& resource, const fs::path& owner) {
         if (resource.empty())
             return;
-        const auto file = ResolveModel(resource, owner);
+        const auto file = ResolveModel(resource, owner, true);
         if (textureFiles_.insert(file).second) {
             Charge(fs::file_size(file));
             int width = 0, height = 0;
@@ -207,15 +217,7 @@ private:
         CheckDepth(depth);
         const auto& environment = scene.GetSettings().render3D.environmentPath;
         if (!environment.empty()) {
-            const auto input = PathFromUtf8(environment);
-            std::error_code ec;
-            const auto file =
-                fs::canonical(input.is_absolute() ? input : owner.parent_path() / input, ec);
-            const auto relative = file.lexically_relative(root);
-            if (ec || relative.empty() || relative.is_absolute() || *relative.begin() == ".." ||
-                Ignored(relative))
-                throw std::runtime_error("Environment image must be inside the project: " +
-                                         environment);
+            const auto file = ResolveModel(environment, owner, true);
             if (textureFiles_.insert(file).second) {
                 Charge(fs::file_size(file));
                 std::string error;
@@ -293,15 +295,8 @@ private:
                     if (!LuxEngine::AssetManager::IsBaseColorTextureFile(resource))
                         throw std::runtime_error("지원하지 않는 기본 색상 텍스처 형식입니다: " +
                                                  resource);
-                    const auto input = PathFromUtf8(resource);
+                    const auto file = ResolveModel(resource, owner, true);
                     std::error_code error;
-                    const auto file = fs::canonical(
-                        input.is_absolute() ? input : owner.parent_path() / input, error);
-                    const auto relative = file.lexically_relative(root);
-                    if (error || relative.empty() || relative.is_absolute() ||
-                        *relative.begin() == ".." || Ignored(relative))
-                        throw std::runtime_error(
-                            "기본 색상 텍스처는 프로젝트 내부에 있어야 합니다: " + resource);
                     if (textureFiles_.insert(file).second) {
                         const auto size = fs::file_size(file, error);
                         if (error)
@@ -339,6 +334,7 @@ private:
     }
 
     const EditorProject& project_;
+    ExternalImageHandler externalImage_;
     std::uintmax_t remaining_ = MaximumBytes;
     std::set<fs::path> active_;
     std::set<fs::path> meshFiles_;
@@ -362,14 +358,15 @@ bool ValidateProjectSceneReferences(const EditorProject& project, LuxEngine::Sce
     }
 }
 
-bool ValidateProjectScenes(const EditorProject& project, std::string& error) {
+bool ValidateProjectScenes(const EditorProject& project, std::string& error,
+                           const ExternalImageHandler& externalImage) {
     error.clear();
     try {
         const auto root = ReferenceValidator(project).root;
         LuxEngine::SceneManager manager;
         const auto validateGraph = [&](const fs::path& path) {
             // Limits apply to each composed graph, not the sum of independent authored scenes.
-            ReferenceValidator graph(project);
+            ReferenceValidator graph(project, externalImage);
             graph.ValidateFile(path);
             // The file walk already includes saved baselines and suspended snapshots. A second
             // memory walk would charge that same graph again after runtime composition.
@@ -389,7 +386,8 @@ bool ValidateProjectScenes(const EditorProject& project, std::string& error) {
                 entry.disable_recursion_pending();
                 continue;
             }
-            if (entry->path().extension() != ".lux")
+            if (entry->path().extension() != ".lux" &&
+                !(externalImage && LuxEngine::PrefabLibrary::IsPrefabPath(entry->path())))
                 continue;
             const bool directory = entry->is_directory(errorCode);
             if (errorCode)

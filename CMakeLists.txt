@@ -97,10 +97,14 @@ configure_package_config_file(
     "${CMAKE_CURRENT_BINARY_DIR}/LuxEngineConfig.cmake"
     INSTALL_DESTINATION lib/cmake/LuxEngine
 )
+set(_lux_sdk_compatibility SameMajorVersion)
+if(PROJECT_VERSION_MAJOR EQUAL 0)
+    set(_lux_sdk_compatibility SameMinorVersion)
+endif()
 write_basic_package_version_file(
     "${CMAKE_CURRENT_BINARY_DIR}/LuxEngineConfigVersion.cmake"
     VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion
+    COMPATIBILITY ${_lux_sdk_compatibility}
 )
 
 install(TARGETS LuxEngine LuxRuntime EXPORT LuxEngineTargets

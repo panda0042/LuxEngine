@@ -21,7 +21,8 @@ Json Value(const ScriptFieldValue& value) {
             else if constexpr (std::is_same_v<T, Vec4>)
                 return Json::array({item.x, item.y, item.z, item.w});
             else if constexpr (std::is_same_v<T, ScriptEntityReference>)
-                return item.id;
+                return item.identity ? Json{{"id", item.id}, {"identity", item.identity}}
+                                     : Json(item.id);
             else
                 return item;
         },
@@ -80,11 +81,19 @@ ScriptFieldValue Read(const Json& field) {
         if (!value.is_array() || value.size() != 4)
             break;
         return Vec4{Number32(value[0]), Number32(value[1]), Number32(value[2]), Number32(value[3])};
-    case 7:
-        if (!value.is_number_integer() || value.get<double>() < 0 ||
-            value.get<double>() > std::numeric_limits<uint32>::max())
-            break;
-        return ScriptEntityReference{value.get<uint32>()};
+    case 7: {
+        const auto validId = [](const Json& id) {
+            return id.is_number_integer() && id.get<double>() >= 0 &&
+                   id.get<double>() <= std::numeric_limits<uint32>::max();
+        };
+        if (validId(value))
+            return ScriptEntityReference{value.get<uint32>()};
+        if (value.is_object() && value.size() == 2 && validId(value.at("id")) &&
+            value.at("identity").is_number_unsigned() && value.at("identity").get<uint64>())
+            return ScriptEntityReference{value.at("id").get<uint32>(),
+                                         value.at("identity").get<uint64>()};
+        break;
+    }
     }
     throw std::invalid_argument("Invalid script field value");
 }

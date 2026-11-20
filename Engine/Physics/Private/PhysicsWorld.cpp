@@ -128,6 +128,7 @@ struct PhysicsWorld::Impl final : JPH::ContactListener {
         JPH::BodyID body;
         PhysicsBodyDescription description;
         PhysicsBodyState state;
+        bool movingToTarget = false;
     };
 
     bool planar;
@@ -204,6 +205,10 @@ PhysicsWorld::PhysicsWorld(bool planar) {
 PhysicsWorld::~PhysicsWorld() = default;
 
 bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input) {
+    return Synchronize(input, 0);
+}
+
+bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input, double step) {
     impl_->error.clear();
     bool valid = true;
     const auto report = [&](uint32 id, const char* reason) {
@@ -307,13 +312,21 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input) {
                         .first;
         }
         auto& entry = found->second;
-        if (!Same(entry.state.position, description.position) ||
-            !Same(entry.state.rotation, description.rotation))
-            bodies.SetPositionAndRotation(
-                entry.body,
-                JPH::RVec3(description.position.x, description.position.y, description.position.z),
-                JPH::Quat::sEulerAngles(Vector(description.rotation)), JPH::EActivation::Activate);
-        if (!Same(entry.state.velocity, description.velocity))
+        const bool poseChanged = !Same(entry.state.position, description.position) ||
+                                 !Same(entry.state.rotation, description.rotation);
+        if (poseChanged) {
+            const auto position =
+                JPH::RVec3(description.position.x, description.position.y, description.position.z);
+            const auto rotation = JPH::Quat::sEulerAngles(Vector(description.rotation));
+            if (description.type == BodyType::Kinematic && step > 0) {
+                bodies.MoveKinematic(entry.body, position, rotation, static_cast<float>(step));
+                entry.movingToTarget = true;
+            } else {
+                bodies.SetPositionAndRotation(entry.body, position, rotation,
+                                              JPH::EActivation::Activate);
+            }
+        }
+        if (!entry.movingToTarget && !Same(entry.state.velocity, description.velocity))
             bodies.SetLinearVelocity(entry.body, Vector(description.velocity));
         if (description.type != BodyType::Static)
             bodies.SetGravityFactor(entry.body, description.gravityScale);
@@ -348,8 +361,13 @@ void PhysicsWorld::Step(double dt, Vec3 gravity) {
             impl_->began.push_back(contact);
     }
     impl_->previousContacts = std::move(currentContacts);
-    const auto& bodies = impl_->system.GetBodyInterface();
+    auto& bodies = impl_->system.GetBodyInterface();
     for (auto& [id, entry] : impl_->entries) {
+        if (entry.movingToTarget) {
+            bodies.SetLinearAndAngularVelocity(entry.body, Vector(entry.description.velocity),
+                                               JPH::Vec3::sZero());
+            entry.movingToTarget = false;
+        }
         const auto p = bodies.GetPosition(entry.body);
         entry.state = {{static_cast<double>(p.GetX()), static_cast<double>(p.GetY()),
                         static_cast<double>(p.GetZ())},

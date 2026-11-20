@@ -150,6 +150,15 @@ void Test() {
         j["entities"][0]["components"]["hierarchy"]["parent"] = j["entities"][1]["id"];
     });
     reject("{\"format\":\"LuxEngine.Scene\",\"format\":\"LuxEngine.Scene\"}");
+    const auto withDepth = [&](size_t depth) {
+        return text.substr(0, text.find_last_of('}')) + ",\"extra\":" + std::string(depth, '[') +
+               "0" + std::string(depth, ']') + "}";
+    };
+    Scene depthBoundary;
+    Check(depthBoundary.DeserializeFromString(withDepth(63)), "values at JSON depth 64 are valid");
+    reject(withDepth(64));
+    const auto escapedDuplicate = "{\"f\\u006frmat\":\"LuxEngine.Scene\"," + text.substr(1);
+    reject(escapedDuplicate);
     reject(text + " trailing");
     reject(std::string("{\"deep\":") + std::string(100, '[') + "0" + std::string(100, ']') + "}");
     for (int version : {1, 2}) {
