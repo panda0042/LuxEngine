@@ -71,6 +71,11 @@ void Test() {
     Check(LuxEngine::ReadProjectStartScene(content, target, error) &&
               target == std::filesystem::canonical(project->GetSceneFile()),
           "runtime resolves JSON start scene");
+    Write(project->GetFile(), "\xef\xbb\xbf" + original);
+    Check(EditorProject::Open(project->GetFile(), error) &&
+              LuxEngine::ReadProjectStartScene(content, target, error),
+          "the editor and runtime accept JSON saved with a UTF-8 BOM");
+    Write(project->GetFile(), original);
     const auto reject = [&](const std::string& invalid) {
         Write(project->GetFile(), invalid);
         Check(!EditorProject::Open(project->GetFile(), error), "invalid project rejected");
@@ -99,6 +104,30 @@ void Test() {
     const auto previous = target;
     Check(!LuxEngine::ReadProjectStartScene(content, target, error) && target == previous,
           "runtime rejects traversal without changing caller output");
+    Write(project->GetFile(), original);
+    auto partial = json;
+    partial.erase("settings");
+    Write(project->GetFile(), partial.dump());
+    Check(!EditorProject::Open(project->GetFile(), error) &&
+              !LuxEngine::ReadProjectStartScene(content, target, error),
+          "editor and runtime require the same JSON manifest fields");
+    Write(project->GetFile(), original);
+    auto badDependency = json;
+    badDependency["dependencies"][0]["package"] = "Package with spaces";
+    Write(project->GetFile(), badDependency.dump());
+    Check(!EditorProject::Open(project->GetFile(), error) &&
+              !LuxEngine::ReadProjectStartScene(content, target, error),
+          "the runtime rejects the same malformed package names as the editor");
+    Write(project->GetFile(), original);
+    auto malformedVersion = settings;
+    malformedVersion.dependencies[0].version = "1..2";
+    Check(!project->UpdateSettings(malformedVersion, error) && Read(project->GetFile()) == original,
+          "invalid CMake version is rejected before saving project settings");
+    const auto dependencies = content / "Dependencies.cmake";
+    const auto customised = Read(dependencies) + "include(LocalOverrides.cmake)\n";
+    Write(dependencies, customised);
+    Check(project->Rename("Project renamed", error) && Read(dependencies) == customised,
+          "renaming a project preserves unchanged dependency configuration");
     Write(project->GetFile(), original);
     const auto old = content / "project.luxproj";
     std::filesystem::rename(project->GetFile(), old);

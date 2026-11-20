@@ -1,4 +1,6 @@
 #include <LuxEngine/Runtime/ProjectManifest.hpp>
+#include <array>
+#include <charconv>
 #include <fstream>
 #include <iomanip>
 #include <nlohmann/json.hpp>
@@ -6,6 +8,114 @@
 #include <sstream>
 
 namespace LuxEngine {
+namespace {
+bool ParseDependencyVersion(std::string_view text, std::array<unsigned, 4>& version) {
+    for (auto& number : version) {
+        const auto dot = text.find('.');
+        const auto part = text.substr(0, dot);
+        if (part.empty())
+            return false;
+        const auto [end, error] = std::from_chars(part.data(), part.data() + part.size(), number);
+        if (error != std::errc{} || end != part.data() + part.size())
+            return false;
+        if (dot == std::string_view::npos)
+            return true;
+        text.remove_prefix(dot + 1);
+    }
+    return false;
+}
+} // namespace
+
+bool IsValidProjectDependencyVersion(std::string_view version) {
+    if (version.empty())
+        return true;
+    const auto range = version.find("...");
+    std::array<unsigned, 4> lower{}, upper{};
+    return ParseDependencyVersion(version.substr(0, range), lower) &&
+           (range == std::string_view::npos ||
+            (ParseDependencyVersion(version.substr(range + 3), upper) && upper >= lower));
+}
+
+bool IsValidProjectDependency(std::string_view package, std::string_view version) {
+    const auto letter = [](char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    };
+    if (package.empty() || package.size() > 64 || !letter(package.front()))
+        return false;
+    for (const char c : package)
+        if (!letter(c) && (c < '0' || c > '9') && c != '_')
+            return false;
+    return IsValidProjectDependencyVersion(version);
+}
+
+std::string_view ProjectManifestContent(std::string_view data) {
+    if (data.starts_with("\xef\xbb\xbf"))
+        data.remove_prefix(3);
+    const auto first = data.find_first_not_of(" \t\r\n");
+    return first == std::string_view::npos ? std::string_view{} : data.substr(first);
+}
+
+bool ParseProjectManifestJson(std::string_view data, ProjectManifestData& manifest) {
+    using Json = nlohmann::json;
+    if (data.empty() || data.size() > 65536)
+        return false;
+    try {
+        std::vector<std::set<std::string>> keys;
+        const auto root =
+            Json::parse(data, [&](int depth, Json::parse_event_t event, Json& parsed) {
+                if (depth > 16)
+                    throw std::runtime_error("Project JSON nesting limit exceeded");
+                if (event == Json::parse_event_t::object_start)
+                    keys.emplace_back();
+                else if (event == Json::parse_event_t::key &&
+                         (keys.empty() || !keys.back().insert(parsed.get<std::string>()).second))
+                    throw std::runtime_error("Duplicate project JSON field");
+                else if (event == Json::parse_event_t::object_end)
+                    keys.pop_back();
+                return true;
+            });
+        if (!root.is_object() || root.at("format") != "LuxEngine.Project" ||
+            !root.at("version").is_number_integer() || root.at("version") != 1)
+            return false;
+
+        ProjectManifestData parsed;
+        parsed.name = root.at("name").get<std::string>();
+        parsed.engineVersion = root.at("engine_version").get<std::string>();
+        parsed.projectVersion = root.at("project_version").get<std::string>();
+        parsed.templateName = root.at("template").get<std::string>();
+        parsed.startScene = root.at("start_scene").get<std::string>();
+        const auto& settings = root.at("settings");
+        parsed.icon = settings.at("icon").get<std::string>();
+        parsed.snapToGrid = settings.at("snap_to_grid").get<bool>();
+        const auto readUnsigned = [](const Json& value, unsigned max, unsigned& output) {
+            if (!value.is_number_integer() || (!value.is_number_unsigned() && value < 0) ||
+                value > max)
+                return false;
+            output = value.get<unsigned>();
+            return true;
+        };
+        if (!readUnsigned(settings.at("autosave_seconds"), 3600, parsed.autosaveSeconds) ||
+            !readUnsigned(settings.at("backup_limit"), 100, parsed.backupLimit) ||
+            parsed.backupLimit == 0)
+            return false;
+
+        const auto& dependencies = root.at("dependencies");
+        if (!dependencies.is_array() || dependencies.size() > 64)
+            return false;
+        for (const auto& dependency : dependencies) {
+            auto package = dependency.at("package").get<std::string>();
+            auto version = dependency.at("version").get<std::string>();
+            if (!IsValidProjectDependency(package, version))
+                return false;
+            parsed.dependencies.emplace_back(std::move(package), std::move(version));
+        }
+        manifest = std::move(parsed);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 bool ReadProjectStartScene(const std::filesystem::path& contentRoot,
                            std::filesystem::path& sceneFile, std::string& error) {
     error.clear();
@@ -24,30 +134,14 @@ bool ReadProjectStartScene(const std::filesystem::path& contentRoot,
             input.peek() != std::char_traits<char>::eof())
             throw std::runtime_error("프로젝트 실행 정보를 읽을 수 없습니다.");
         std::string scene;
-        const auto first = data.find_first_not_of(" \t\r\n");
-        if (first != std::string::npos && data[first] == '{') {
-            using Json = nlohmann::json;
-            std::vector<std::set<std::string>> keys;
-            const auto root = Json::parse(data, [&](int depth, Json::parse_event_t event,
-                                                    Json& parsed) {
-                if (depth > 16)
-                    throw std::runtime_error("프로젝트 JSON 중첩이 너무 깊습니다.");
-                if (event == Json::parse_event_t::object_start)
-                    keys.emplace_back();
-                else if (event == Json::parse_event_t::key &&
-                         (keys.empty() || !keys.back().insert(parsed.get<std::string>()).second))
-                    throw std::runtime_error("프로젝트 JSON에 중복된 필드가 있습니다.");
-                else if (event == Json::parse_event_t::object_end)
-                    keys.pop_back();
-                return true;
-            });
-            if (!root.is_object() || root.at("format") != "LuxEngine.Project" ||
-                !root.at("version").is_number_integer() || root.at("version") != 1 ||
-                !root.at("start_scene").is_string())
+        const auto text = ProjectManifestContent(data);
+        if (text.starts_with('{')) {
+            ProjectManifestData project;
+            if (!ParseProjectManifestJson(data, project))
                 throw std::runtime_error("프로젝트 실행 정보 형식이 올바르지 않습니다.");
-            scene = root.at("start_scene").get<std::string>();
+            scene = std::move(project.startScene);
         } else {
-            std::istringstream legacy(data);
+            std::istringstream legacy{std::string(text)};
             std::string magic;
             int version = 0;
             if (!(legacy >> magic >> version) || magic != "LUXPROJECT" ||

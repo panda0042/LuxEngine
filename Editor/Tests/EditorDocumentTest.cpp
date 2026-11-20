@@ -3,6 +3,9 @@
 #include <LuxEditor/Project/ProjectArchive.hpp>
 #include <LuxEditor/Project/ProjectFileOperations.hpp>
 #include <LuxEditor/Scene/EditorDocument.hpp>
+#include <LuxEngine/Animation/Animator.hpp>
+#include <LuxEngine/Assets/AssetManager.hpp>
+#include <LuxEngine/Scene/SceneManager.hpp>
 #include <LuxUI/Widgets.hpp>
 
 #include <chrono>
@@ -10,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -345,10 +349,46 @@ void TestProjectOperations() {
               std::filesystem::is_regular_file(files.path / "original" / project->GetIcon()),
           "project icon is copied into assets");
     const auto previousIcon = project->GetIcon();
+    auto invalidIconSettings = project->GetSettings();
+    invalidIconSettings.backupLimit = 0;
+    const bool accepted = project->UpdateSettings(invalidIconSettings, icon, error);
+    const auto afterRejectedSettings = EditorProject::Open(project->GetFile(), error);
+    Check(!accepted && project->GetIcon() == previousIcon && afterRejectedSettings &&
+              afterRejectedSettings->GetIcon() == previousIcon,
+          "a valid icon cannot be committed when the rest of the settings fail");
     const auto badIcon = files.path / "invalid-icon.png";
     std::ofstream(badIcon, std::ios::binary) << "not an image";
     Check(!project->SetIcon(badIcon, error) && project->GetIcon() == previousIcon,
           "invalid icon leaves existing icon unchanged");
+    {
+        std::ifstream image(icon, std::ios::binary);
+        std::array<char, 33> header{};
+        Check(bool(image.read(header.data(), header.size())), "PNG fixture has a complete header");
+        std::ofstream(badIcon, std::ios::binary).write(header.data(), header.size());
+        Check(!project->SetIcon(badIcon, error) && project->GetIcon() == previousIcon,
+              "an image header is not sufficient to set an icon");
+    }
+    const auto badIcns = files.path / "invalid.icns";
+    std::ofstream(badIcns, std::ios::binary) << "icns";
+    Check(!project->SetIcon(badIcns, error) && project->GetIcon() == previousIcon,
+          "ICNS magic without a file header is rejected");
+    const char truncatedChunk[] = "icns\0\0\0\x10"
+                                  "icp4\0\0\0\x20";
+    std::ofstream(badIcns, std::ios::binary).write(truncatedChunk, sizeof(truncatedChunk) - 1);
+    Check(!project->SetIcon(badIcns, error) && project->GetIcon() == previousIcon,
+          "an ICNS chunk cannot extend beyond the declared file");
+    for (const auto* type : {"junk", "TOC ", "icp4"}) {
+        const char header[] = "icns\0\0\0\x11";
+        const char invalidPayload[] = "\0\0\0\x09X";
+        {
+            std::ofstream output(badIcns, std::ios::binary);
+            output.write(header, sizeof(header) - 1);
+            output.write(type, 4);
+            output.write(invalidPayload, sizeof(invalidPayload) - 1);
+        }
+        Check(!project->SetIcon(badIcns, error) && project->GetIcon() == previousIcon,
+              "structurally valid ICNS without decodable image data is rejected");
+    }
     Check(project->RescanResources(error) == 1 && error.empty(), "assets are rescanned");
     std::ofstream(files.path / "original" / "Assets" / "new.txt") << "new";
     Check(project->RescanResources(error) == 2, "resource rescan detects added assets");
@@ -982,6 +1022,12 @@ void TestBackupRetentionAfterRestore() {
         std::filesystem::path initial;
         Check(CreateProjectBackup(*project, initial, error), "initial backup exists");
         Check(RestoreProjectBackup(*project, initial, error), "backup restores with safety copy");
+        const auto restoredCount =
+            std::count_if(std::filesystem::directory_iterator(initial.parent_path()),
+                          std::filesystem::directory_iterator{}, [](const auto& entry) {
+                              return entry.path().extension() == ".luxbackup";
+                          });
+        Check(restoredCount <= limit, "restore immediately applies the backup retention limit");
         for (int iteration = 0; iteration < 3; ++iteration) {
             std::filesystem::path newest;
             Check(CreateProjectBackup(*project, newest, error) && std::filesystem::exists(newest),
@@ -997,6 +1043,172 @@ void TestBackupRetentionAfterRestore() {
             Check(restored.has_value(), "retained backup remains readable");
         }
     }
+}
+
+void TestBackupValidationAndLocalFiles() {
+    using namespace LuxEditor;
+    using namespace LuxEngine;
+    namespace fs = std::filesystem;
+    TempDirectory files;
+    std::string error;
+    auto project =
+        EditorProject::Create(files.path / "project", "Restore", ProjectTemplate::Empty, error);
+    Check(project.has_value(), "restore fixture opens");
+    const auto root = project->GetFile().parent_path();
+    const auto leafPath = root / "Scenes/Leaf.lux";
+    Scene leaf, main;
+    leaf.CreateEntity("Required leaf");
+    Check(leaf.Serialize(PathUtf8(leafPath)), "required leaf serializes");
+    SceneManager manager;
+    const auto reference =
+        manager.AddSceneInstance(main, leafPath, SceneReferenceMode::Nested, error);
+    Check(reference != 0 && SceneManager::Save(main, project->GetSceneFile(), {}, error),
+          "main scene requires the leaf");
+
+    fs::path backup;
+    Check(CreateProjectBackup(*project, backup, error), "valid backup creates");
+    for (const auto* dir : {".git", "out", ".lux/local"}) {
+        fs::create_directories(root / dir);
+        std::ofstream(root / dir / "keep.txt") << "local";
+    }
+    Check(RestoreProjectBackup(*project, backup, error), "valid backup restores");
+    for (const auto* dir : {".git", "out", ".lux/local"})
+        Check(fs::exists(root / dir / "keep.txt"), "local files outside the archive are preserved");
+
+    for (bool unloaded : {false, true}) {
+        if (unloaded) {
+            Check(manager.ConfigureStreaming(main, reference, {0, 0}, 2, 3, error) &&
+                      manager.UnloadInstance(main, reference, error) &&
+                      SceneManager::Save(main, project->GetSceneFile(), {}, error) &&
+                      CreateProjectBackup(*project, backup, error),
+                  "valid backup includes an unloaded streaming scene");
+        }
+        const auto incomplete =
+            files.path / (unloaded ? "incomplete-unloaded.luxbackup" : "incomplete.luxbackup");
+        fs::copy_file(backup, incomplete);
+        int zipError = 0;
+        auto* zip = zip_open(PathUtf8(incomplete).c_str(), 0, &zipError);
+        Check(zip != nullptr, "test backup opens for editing");
+        const auto leafEntry = zip_name_locate(zip, "Scenes/Leaf.lux", 0);
+        Check(leafEntry >= 0 && zip_delete(zip, static_cast<zip_uint64_t>(leafEntry)) == 0 &&
+                  zip_close(zip) == 0,
+              "test backup intentionally omits its required scene");
+        Check(!RestoreProjectBackup(*project, incomplete, error) && fs::exists(leafPath) &&
+                  bool(SceneManager().Load(project->GetSceneFile())),
+              "an incomplete backup cannot replace a working project");
+        fs::remove(leafPath);
+        Check(bool(SceneManager().Load(project->GetSceneFile())) == unloaded &&
+                  !CreateProjectBackup(*project, backup, error),
+              "backup validation checks required scenes even when startup defers their loading");
+        Check(leaf.Serialize(PathUtf8(leafPath)), "restore fixture dependency for next check");
+    }
+}
+
+void TestCustomProjectManifest() {
+    using namespace LuxEditor;
+    namespace fs = std::filesystem;
+    TempDirectory files;
+    std::string error;
+    const auto root = files.path / "project";
+    auto project = EditorProject::Create(root, "Custom manifest", ProjectTemplate::Empty, error);
+    Check(bool(project), "named manifest fixture creates");
+    const auto custom = root / "MyGame.luxproject";
+    fs::rename(project->GetFile(), custom);
+    project = EditorProject::Open(custom, error);
+    Check(bool(project), "custom project manifest opens");
+    fs::path backup;
+    Check(CreateProjectBackup(*project, backup, error) && RestoreProjectBackup(*project, backup, error) &&
+              bool(EditorProject::Open(custom, error)) && !fs::exists(root / EditorProject::FileName),
+          "backup round trip preserves the original project manifest name");
+    const auto archive = files.path / "project.luxpack";
+    Check(ExportProject(*project, archive, error), "custom project manifest exports");
+    std::ofstream(root / EditorProject::FileName) << "conflicting file";
+    Check(!ExportProject(*project, archive, error) &&
+              bool(ImportProject(archive, files.path / "imported", error)),
+          "manifest collision cannot replace a readable project archive");
+}
+
+void TestIcnsImagePayload() {
+    using namespace LuxEditor;
+    TempDirectory files;
+    std::string error;
+    auto project = EditorProject::Create(files.path / "project", "Icon", ProjectTemplate::Empty, error);
+    Check(bool(project), "icon fixture project creates");
+    const auto png = files.path / "icon-payload.png";
+    LuxUI::Image image(16, 16, LuxUI::Image::Format_RGBA8888);
+    image.fill(LuxUI::Color(255, 100, 50));
+    Check(image.save(LuxUI::String::fromUtf8(PathUtf8(png)), "PNG"), "ICNS fixture has a PNG");
+    std::ifstream input(png, std::ios::binary);
+    const std::string payload(std::istreambuf_iterator<char>(input), {});
+    const auto icns = files.path / "valid.icns";
+    {
+        std::ofstream output(icns, std::ios::binary);
+        const auto writeLength = [&](size_t length) {
+            for (const int shift : {24, 16, 8, 0})
+                output.put(static_cast<char>((length >> shift) & 255));
+        };
+        output << "icns";
+        writeLength(payload.size() + 16);
+        output << "icp4";
+        writeLength(payload.size() + 8);
+        output.write(payload.data(), payload.size());
+    }
+    Check(project->SetIcon(icns, error), "ICNS containing a valid image is accepted");
+}
+
+void TestPortableAnimationArchive() {
+    using namespace LuxEditor;
+    using namespace LuxEngine;
+    namespace fs = std::filesystem;
+    TempDirectory files;
+    std::string error;
+    const auto root = files.path / "animation-project";
+    auto project = EditorProject::Create(root, "Animation", ProjectTemplate::Empty, error);
+    Check(bool(project), "animation archive fixture creates");
+    const auto texture = root / "Assets/Sheet.ppm";
+    std::ofstream(texture, std::ios::binary) << "P6\n1 1\n255\n\xff\xff\xff";
+    fs::create_directories(root / "Animations");
+    const auto clipPath = root / "Animations/Move.luxanim";
+    AnimationClip clip;
+    clip.spriteSheet = GenericPathUtf8(texture);
+    std::string clipJson;
+    Check(clip.SerializeToString(clipJson, error), "absolute clip fixture serializes");
+    std::ofstream(clipPath, std::ios::binary) << clipJson;
+    AnimatorController controller;
+    AnimatorLayer layer;
+    layer.entry = "Move";
+    layer.states = {{"Move", GenericPathUtf8(clipPath)}};
+    controller.layers = {layer};
+    const auto controlPath = root / "Animations/Character.luxanimator";
+    std::string controllerJson;
+    Check(controller.SerializeForFile(GenericPathUtf8(controlPath), controllerJson, error),
+          "controller fixture serializes");
+    auto data = nlohmann::json::parse(controllerJson);
+    data["layers"][0]["states"][0]["clip"] = GenericPathUtf8(clipPath);
+    std::ofstream(controlPath, std::ios::binary) << data.dump();
+    Scene scene;
+    auto entity = scene.CreateEntity("Animated");
+    entity.AddComponent<AnimatorComponent>().controllerPath = "../Animations/Character.luxanimator";
+    Check(scene.Serialize(PathUtf8(project->GetSceneFile())), "animated startup scene writes");
+    const auto archive = files.path / "animation.luxpack";
+    Check(ExportProject(*project, archive, error), error.c_str());
+    const auto original = AnimationClip::Load(GenericPathUtf8(clipPath), error);
+    Check(original && original->spriteSheet == clip.spriteSheet,
+          "export leaves source assets intact");
+    const auto imported = files.path / "animation-import";
+    Check(bool(ImportProject(archive, imported, error)), error.c_str());
+    fs::remove(texture);
+    fs::remove(clipPath);
+    const auto relocated = AnimatorController::Load(
+        GenericPathUtf8(imported / "Animations/Character.luxanimator"), error);
+    AnimatorPlayer player;
+    Check(relocated && player.SetController(relocated, error),
+          "relocated animator resolves its clip");
+    const auto movedClip =
+        AnimationClip::Load(GenericPathUtf8(imported / "Animations/Move.luxanim"), error);
+    Check(movedClip && fs::equivalent(movedClip->spriteSheet, imported / "Assets/Sheet.ppm") &&
+              AssetManager::ValidateTextureFile(movedClip->spriteSheet),
+          "relocated clip resolves a readable copy of its sprite sheet");
 }
 
 } // namespace
@@ -1047,6 +1259,10 @@ int main(int argc, char** argv) {
         TestProjectManagement();
         TestProjectOperations();
         TestBackupRetentionAfterRestore();
+        TestBackupValidationAndLocalFiles();
+        TestCustomProjectManifest();
+        TestIcnsImagePayload();
+        TestPortableAnimationArchive();
         TestProjectSharingLocks();
         TestUnicodeProjectPaths();
         TestArchiveSecurityAndFuzzing();

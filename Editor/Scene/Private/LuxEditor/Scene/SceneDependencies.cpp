@@ -8,6 +8,8 @@
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/PrefabLibrary.hpp>
 #include <LuxEngine/Scene/SceneManager.hpp>
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -36,8 +38,9 @@ bool Ignored(const fs::path& relative) {
 class ReferenceValidator final {
 public:
     explicit ReferenceValidator(const EditorProject& project,
-                                const ExternalImageHandler& externalImage = {})
-        : project_(project), externalImage_(externalImage) {
+                                const ExternalImageHandler& externalImage = {},
+                                bool inspectAssets = true)
+        : project_(project), externalImage_(externalImage), inspectAssets_(inspectAssets) {
         std::error_code error;
         root = fs::canonical(project.GetFile().parent_path(), error);
         if (error)
@@ -74,6 +77,13 @@ public:
         Inspect(parsed, canonical, depth);
         active_.erase(canonical);
         checked_[canonical] = depth;
+    }
+
+    void ValidateAnimationFile(const fs::path& path, bool controller) {
+        if (controller)
+            ValidateController(GenericPathUtf8(path), path);
+        else
+            ValidateClip(GenericPathUtf8(path), path);
     }
 
     fs::path root;
@@ -213,8 +223,7 @@ private:
 
     std::set<fs::path> clips_, controllers_;
 
-    void Inspect(LuxEngine::Scene& scene, const fs::path& owner, size_t depth) {
-        CheckDepth(depth);
+    void InspectAssets(LuxEngine::Scene& scene, const fs::path& owner) {
         const auto& environment = scene.GetSettings().render3D.environmentPath;
         if (!environment.empty()) {
             const auto file = ResolveModel(environment, owner, true);
@@ -311,14 +320,20 @@ private:
                     }
                 }
             }
-            const auto* reference = entity.TryGetComponent<LuxEngine::SceneReferenceComponent>();
-            if (!reference)
-                continue;
-            if (reference->path.empty() || reference->path.size() > 4096)
+        }
+    }
+
+    void Inspect(LuxEngine::Scene& scene, const fs::path& owner, size_t depth) {
+        CheckDepth(depth);
+        if (inspectAssets_)
+            InspectAssets(scene, owner);
+        for (const auto id : scene.GetComponentEntityIds<LuxEngine::SceneReferenceComponent>()) {
+            const auto& reference = scene.GetComponent<LuxEngine::SceneReferenceComponent>(id);
+            if (reference.path.empty() || reference.path.size() > 4096)
                 throw std::runtime_error("씬 참조 경로가 올바르지 않습니다.");
-            const auto path = PathFromUtf8(reference->path);
+            const auto path = PathFromUtf8(reference.path);
             ValidateFile(path.is_absolute() ? path : owner.parent_path() / path, depth + 1);
-            for (const std::string* data : {&reference->baseline, &reference->suspended}) {
+            for (const std::string* data : {&reference.baseline, &reference.suspended}) {
                 if (data->empty())
                     continue;
                 CheckDepth(depth + 1);
@@ -335,6 +350,7 @@ private:
 
     const EditorProject& project_;
     ExternalImageHandler externalImage_;
+    bool inspectAssets_;
     std::uintmax_t remaining_ = MaximumBytes;
     std::set<fs::path> active_;
     std::set<fs::path> meshFiles_;
@@ -344,6 +360,17 @@ private:
     std::map<fs::path, size_t> checked_;
 };
 } // namespace
+
+bool ValidateProjectStartupReferences(const EditorProject& project, std::string& error) {
+    error.clear();
+    try {
+        ReferenceValidator(project, {}, false).ValidateFile(project.GetSceneFile());
+        return static_cast<bool>(LuxEngine::SceneManager().Load(project.GetSceneFile(), error));
+    } catch (const std::exception& failure) {
+        error = failure.what();
+        return false;
+    }
+}
 
 bool ValidateProjectSceneReferences(const EditorProject& project, LuxEngine::Scene& scene,
                                     std::string& error) {
@@ -386,7 +413,12 @@ bool ValidateProjectScenes(const EditorProject& project, std::string& error,
                 entry.disable_recursion_pending();
                 continue;
             }
-            if (entry->path().extension() != ".lux" &&
+            auto extension = PathUtf8(entry->path().extension());
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            const bool animation =
+                externalImage && (extension == ".luxanim" || extension == ".luxanimator");
+            if (!animation && entry->path().extension() != ".lux" &&
                 !(externalImage && LuxEngine::PrefabLibrary::IsPrefabPath(entry->path())))
                 continue;
             const bool directory = entry->is_directory(errorCode);
@@ -394,7 +426,10 @@ bool ValidateProjectScenes(const EditorProject& project, std::string& error,
                 throw std::runtime_error("씬 파일 상태를 확인할 수 없습니다.");
             if (directory)
                 continue;
-            if (!validateGraph(entry->path()))
+            if (animation)
+                ReferenceValidator(project, externalImage)
+                    .ValidateAnimationFile(entry->path(), extension == ".luxanimator");
+            else if (!validateGraph(entry->path()))
                 return false;
         }
         if (errorCode)
