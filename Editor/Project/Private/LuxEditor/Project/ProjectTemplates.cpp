@@ -80,7 +80,8 @@ if(WIN32)
 endif()
 )LUX";
 
-constexpr const char* SyncContent = R"LUX(cmake_minimum_required(VERSION 3.24)
+constexpr const char* SyncContent =
+    R"LUX(cmake_minimum_required(VERSION 3.24)
 function(encode_paths text output)
     string(REPLACE "%" "%25" text "${text}")
     string(REPLACE ";" "%3B" text "${text}")
@@ -311,7 +312,8 @@ if(EXISTS "${MANIFEST}")
     list(SORT staleDirectories ORDER DESCENDING)
 endif()
 
-function(validate_content source path)
+)LUX"
+    R"LUX(function(validate_content source path)
     if(NOT EXISTS "${source}" OR IS_DIRECTORY "${source}")
         message(FATAL_ERROR "Missing generated content source: ${source}")
     endif()
