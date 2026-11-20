@@ -240,7 +240,8 @@ std::string DescribeMissingTools(const BuildTools& tools) {
 
 std::optional<BuildPlan> PlanBuild(const fs::path& projectDirectory,
                                    BuildConfiguration configuration, const BuildTools& tools,
-                                   const std::string& executableName, std::string& error) {
+                                   const std::string& executableName, std::string& error,
+                                   const fs::path& projectManifest) {
     error.clear();
     if (!IsFile(projectDirectory / "CMakeLists.txt")) {
         error = "프로젝트 폴더에 CMakeLists.txt가 없습니다.";
@@ -269,6 +270,9 @@ std::optional<BuildPlan> PlanBuild(const fs::path& projectDirectory,
                            GenericPathUtf8(plan.buildDirectory),
                            std::string("-DCMAKE_BUILD_TYPE=") + ToString(configuration),
                            "-DLuxEngine_DIR=" + GenericPathUtf8(tools.enginePackage)};
+    if (!projectManifest.empty())
+        configure.arguments.push_back("-DLUX_PROJECT_MANIFEST:FILEPATH=" +
+                                      GenericPathUtf8(projectManifest));
     if (!tools.toolchainFile.empty()) {
         configure.arguments.push_back("-DCMAKE_TOOLCHAIN_FILE=" +
                                       GenericPathUtf8(tools.toolchainFile));

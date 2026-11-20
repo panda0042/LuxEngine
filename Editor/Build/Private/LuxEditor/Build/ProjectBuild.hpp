@@ -48,7 +48,8 @@ struct BuildPlan {
 // folder has no CMakeLists.txt or the tools are incomplete.
 std::optional<BuildPlan> PlanBuild(const std::filesystem::path& projectDirectory,
                                    BuildConfiguration configuration, const BuildTools& tools,
-                                   const std::string& executableName, std::string& error);
+                                   const std::string& executableName, std::string& error,
+                                   const std::filesystem::path& projectManifest = {});
 
 // Deletes the project's build folder for a clean build. Refuses any folder that is not exactly
 // <project>/.lux/build.

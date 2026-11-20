@@ -84,7 +84,8 @@ void EditorWindow::StartBuild(BuildConfiguration configuration, bool clean,
         return;
     }
     auto plan =
-        PlanBuild(project_->GetFile().parent_path(), configuration, tools, GameExecutable, error);
+        PlanBuild(project_->GetFile().parent_path(), configuration, tools, GameExecutable, error,
+                  project_->GetFile());
     if (!plan) {
         ShowError(LUX_UI_TEXT("빌드"), LuxUI::String::fromUtf8(error));
         return;
