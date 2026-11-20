@@ -153,21 +153,18 @@ std::shared_ptr<CachedAudio> LoadBuffer(const std::string& file, bool reload = f
     if (error || !fs::is_regular_file(path, error) || error)
         return nullptr;
     const auto fileSize = fs::file_size(path, error);
-    if (error)
+    if (error || fileSize == 0 || fileSize > MaxSingleAudioBytes)
         return nullptr;
     const auto modified = fs::last_write_time(path, error);
     if (error)
         return nullptr;
     const auto encoded = path.generic_u8string();
     const std::string key(encoded.begin(), encoded.end());
-    if (auto it = audioCache.find(key); it != audioCache.end()) {
-        if (!reload && it->second.fileSize == fileSize && it->second.modified == modified) {
-            s_LruList.splice(s_LruList.begin(), s_LruList, it->second.lruIt);
-            return it->second.audio;
-        }
-        s_CurrentCacheBytes -= it->second.audio->length;
-        s_LruList.erase(it->second.lruIt);
-        audioCache.erase(it);
+    const auto previous = audioCache.find(key);
+    if (previous != audioCache.end() && !reload && previous->second.fileSize == fileSize &&
+        previous->second.modified == modified) {
+        s_LruList.splice(s_LruList.begin(), s_LruList, previous->second.lruIt);
+        return previous->second.audio;
     }
 
     auto cached = std::make_shared<CachedAudio>();
@@ -182,6 +179,11 @@ std::shared_ptr<CachedAudio> LoadBuffer(const std::string& file, bool reload = f
     if (fs::file_size(path, error) != fileSize || error ||
         fs::last_write_time(path, error) != modified || error)
         return nullptr;
+    if (previous != audioCache.end()) {
+        s_CurrentCacheBytes -= previous->second.audio->length;
+        s_LruList.erase(previous->second.lruIt);
+        audioCache.erase(previous);
+    }
     EvictAudioCacheIfNeeded(cached->length);
 
     // If adding this buffer would still exceed budget because active voices hold existing cache

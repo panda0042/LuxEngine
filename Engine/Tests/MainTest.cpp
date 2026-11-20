@@ -1272,6 +1272,25 @@ void Audio() {
     std::this_thread::sleep_for(std::chrono::milliseconds(1400));
     Check(!AudioEngine::IsMusicPlaying(), "music ends naturally");
 
+    const auto reloadPath = files.Path("reload.wav");
+    Wav(reloadPath);
+    Check(AudioEngine::PlayMusic(reloadPath), "reload fixture plays");
+    const auto cachedCount = AudioEngine::GetCachedFileCount();
+    const auto cachedBytes = AudioEngine::GetCacheUsageBytes();
+    std::ofstream(reloadPath, std::ios::binary | std::ios::trunc) << "partial save";
+    Check(!AudioEngine::ReloadClip(reloadPath) && AudioEngine::IsMusicPlaying() &&
+              AudioEngine::GetCachedFileCount() == cachedCount &&
+              AudioEngine::GetCacheUsageBytes() == cachedBytes,
+          "failed audio reload preserves the last decoded clip and its voice");
+    Wav(reloadPath);
+    Check(AudioEngine::ReloadClip(reloadPath), "a repaired file can replace the cached clip");
+    std::filesystem::resize_file(reloadPath, 16ull * 1024 * 1024 + 1);
+    Check(!AudioEngine::ReloadClip(reloadPath) && AudioEngine::IsMusicPlaying() &&
+              AudioEngine::GetCachedFileCount() == cachedCount &&
+              AudioEngine::GetCacheUsageBytes() == cachedBytes,
+          "oversized WAV files are rejected before their small audio payload can replace the cache");
+    AudioEngine::StopMusic();
+
     // Phase 2: Audio Safety, Callback Lifecycle & Cache Stress Tests
     // 1. Abnormal volume rejection (NaN, Inf, negative)
     AudioEngine::SetMasterVolume(std::numeric_limits<float>::quiet_NaN());
