@@ -157,7 +157,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           & pwsh -NoProfile -File tools/PackageSdk.ps1 -BuildDir build -OutputDir dist
-          & pwsh -NoProfile -File tools/VerifySdkRelocation.ps1 -BuildDir build
+          & pwsh -NoProfile -File tools/VerifySdkRelocation.ps1 -SdkArchive dist/LuxEngine-SDK-0.1.0-x64.zip
 
       - name: Package and Verify Standalone Editor
         run: |

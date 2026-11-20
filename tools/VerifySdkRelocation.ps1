@@ -1,7 +1,9 @@
 # Verify SDK Relocatability & Consumer Build in Debug and Release
 param(
     [string]$BuildDir = "build/local",
-    [string]$SdkPrefix = ""
+    [string]$SdkPrefix = "",
+    [string]$SdkArchive = "",
+    [string]$DepsDir = "C:/LuxDeps"
 )
 
 . (Join-Path $PSScriptRoot "Utf8.ps1")
@@ -42,19 +44,14 @@ $consumerTestDir = Join-Path ([System.IO.Path]::GetTempPath()) "LuxConsumerTest-
 New-Item -ItemType Directory -Path $consumerTestDir -Force | Out-Null
 
 try {
-    # 1. Install both engine configurations, retaining Release shared runtime files.
-    Write-Host "1. Installing SDK to relocated path..."
-    & $cmakeExe --install $BuildDir --config Debug --prefix $SdkPrefix
-    if ($LASTEXITCODE -ne 0) { throw "SDK Debug install failed" }
-    & $cmakeExe --install $BuildDir --config Release --prefix $SdkPrefix
-    if ($LASTEXITCODE -ne 0) { throw "SDK Release install failed" }
-
-    # Copy SDL3 runtime DLL into SDK bin
-    $buildDirResolved = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $root $BuildDir }
-    $sdlDll = Join-Path $buildDirResolved "bin/Release/SDL3.dll"
-    if (Test-Path $sdlDll) {
-        Copy-Item -Path $sdlDll -Destination "$SdkPrefix/bin/SDL3.dll" -Force
+    if (-not $SdkArchive) {
+        $packages = Join-Path $consumerTestDir "packages"
+        $packageArguments = @{ BuildDir = $BuildDir; DepsDir = $DepsDir; OutputDir = $packages; CMakeExe = $cmakeExe }
+        & (Join-Path $PSScriptRoot "PackageSdk.ps1") @packageArguments
+        $SdkArchive = Join-Path $packages "LuxEngine-SDK-0.1.0-x64.zip"
     }
+    Write-Host "1. Extracting SDK ZIP to relocated path..."
+    Expand-Archive -LiteralPath $SdkArchive -DestinationPath $SdkPrefix
 
     $sdkCmake = Join-Path $SdkPrefix "lib/cmake/LuxEngine"
     if (-not (Test-Path (Join-Path $sdkCmake "LuxEngineConfig.cmake"))) {
@@ -67,7 +64,16 @@ try {
 
     $consumerBuild = Join-Path $consumerTestDir "build"
     Write-Host "2. Configuring MinimalGame against relocated SDK..."
-    & $cmakeExe -S $consumerTestDir -B $consumerBuild -A x64 "-DLuxEngine_DIR=$sdkCmake"
+    $sdlCmake = Join-Path $SdkPrefix "share/sdl3"
+    $joltCmake = Join-Path $SdkPrefix "lib/cmake/Jolt"
+    foreach ($file in @("$sdlCmake/SDL3Config.cmake", "$joltCmake/JoltConfig.cmake")) {
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+            throw "SDK dependency package missing: $file"
+        }
+    }
+    $configureArgs = @("-DLuxEngine_DIR=$sdkCmake", "-DSDL3_DIR=$sdlCmake", "-DJolt_DIR=$joltCmake",
+        "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE", "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE")
+    & $cmakeExe -S $consumerTestDir -B $consumerBuild -A x64 @configureArgs
     if ($LASTEXITCODE -ne 0) { throw "CMake configure failed for consumer" }
 
     # Build & Run Release

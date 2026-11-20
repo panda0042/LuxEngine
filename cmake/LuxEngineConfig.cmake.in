@@ -10,6 +10,10 @@ set(LuxEngine_MODELS_DIR "${PACKAGE_PREFIX_DIR}/share/LuxEngine/models")
 
 include(CMakeFindDependencyMacro)
 find_dependency(Threads)
+if(NOT SDL3_DIR AND NOT TARGET SDL3::SDL3 AND
+   EXISTS "${PACKAGE_PREFIX_DIR}/share/sdl3/SDL3Config.cmake")
+    set(SDL3_DIR "${PACKAGE_PREFIX_DIR}/share/sdl3")
+endif()
 # The hints point at the packages the engine was built with, as well as the SDK prefix directory,
 # so games find them even when relocated or without the same CMAKE_PREFIX_PATH or vcpkg toolchain.
 find_dependency(SDL3 3.2 CONFIG HINTS
