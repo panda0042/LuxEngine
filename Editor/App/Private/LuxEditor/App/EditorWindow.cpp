@@ -1655,12 +1655,20 @@ void EditorWindow::CopyEntity() {
     const auto* sprite = selected.TryGetComponent<LuxEngine::SpriteRendererComponent>();
     const auto* camera = selected.TryGetComponent<LuxEngine::CameraComponent>();
     const auto* animation = selected.TryGetComponent<LuxEngine::AnimationComponent>();
+    const bool needsFullAnimation = animation && [&] {
+        const auto& clip = animation->clip;
+        const auto name = Q(clip.name);
+        return !animation->assetPath.empty() || animation->rootMotion || animation->speed != 1 ||
+               name.isEmpty() || name.trimmed() != name || !clip.tracks.empty() ||
+               !clip.events.empty() || clip.wrap != LuxEngine::AnimationWrap::Loop ||
+               clip.framesPerSecond != 30 || !clip.modelPath.empty() || clip.modelClip != -1 ||
+               !clip.rootMotionTarget.empty() || !clip.spriteSheet.empty() ||
+               clip.spriteColumns != 1 || clip.spriteRows != 1;
+    }();
     if ((sprite && (!sprite->texturePath.empty() || sprite->frame || sprite->columns != 1 ||
                     sprite->rows != 1)) ||
         (camera && (camera->nearClip != .1f || camera->farClip != 1000000.0)) ||
-        (animation && (!animation->assetPath.empty() || !animation->clip.modelPath.empty() ||
-                       !animation->clip.spriteSheet.empty() || animation->rootMotion)) ||
-        selected.HasComponent<LuxEngine::AnimatorComponent>() ||
+        needsFullAnimation || selected.HasComponent<LuxEngine::AnimatorComponent>() ||
         selected.HasComponent<LuxEngine::ModelAnimationComponent>() ||
         selected.HasComponent<LuxEngine::ScriptComponent>() ||
         document_.GetScene().GetParent(selected.GetId()) ||

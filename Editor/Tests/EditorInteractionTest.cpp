@@ -1,6 +1,7 @@
 #include <LuxEditor/App/EditorWindow.hpp>
 #include <LuxEditor/Viewport/SceneViewport2D.hpp>
 #include <LuxUI/Widgets.hpp>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -155,13 +156,16 @@ int main(int argc, char** argv) {
         Check(window.MoveSelectionToScene(other), "Scene move during a gesture failed");
         Mouse(view, LuxUI::Event::MouseButtonRelease, finish, LuxUI::Flags::LeftButton,
               LuxUI::Flags::NoButton);
-        Check(
-            document.GetScene(original)->GetEntityCount() == 1 &&
-                document.GetScene(original)->GetWorldTransform(first).position.x == -1 &&
-                document.GetScene(other)->GetEntityCount() == 1 &&
-                document.GetScene().GetWorldTransform(document.GetSelected().GetId()).position.x ==
-                    3,
-            "Canceled gesture retained the moved source entity or exported preview data");
+        std::vector<double> movedPositions;
+        for (const auto entity : document.GetScene(other)->GetEntities())
+            movedPositions.push_back(
+                document.GetScene(other)->GetWorldTransform(entity.GetId()).position.x);
+        std::sort(movedPositions.begin(), movedPositions.end());
+        Check(document.GetActiveTabId() == other &&
+                  document.GetScene(original)->GetEntityCount() == 0 &&
+                  document.GetSelection().size() == 2 &&
+                  movedPositions == std::vector<double>{-1, 3},
+              "Moving the selection must cancel the drag and keep both committed positions");
         undo->undo();
         Check(document.GetActiveTabId() == original &&
                   document.GetScene(original)->GetEntityCount() == 2 &&

@@ -55,6 +55,18 @@ LuxUI::String SceneName(const EditorDocument::TabInfo& tab) {
     return tab.path.empty() ? LUX_UI_TEXT("새 씬 %1").arg(tab.id)
                             : LuxUI::FileInfo(Q(tab.path)).fileName();
 }
+
+std::vector<LuxEngine::uint32> SelectedSubtreeRoots(const LuxEngine::Scene& scene,
+                                                    std::vector<LuxEngine::uint32> selected) {
+    const std::unordered_set<LuxEngine::uint32> all(selected.begin(), selected.end());
+    std::erase_if(selected, [&](auto id) {
+        for (auto parent = scene.GetParent(id); parent; parent = scene.GetParent(parent))
+            if (all.contains(parent))
+                return true;
+        return false;
+    });
+    return selected;
+}
 } // namespace
 
 void EditorWindow::BuildSceneMenus() {
@@ -779,15 +791,7 @@ void EditorWindow::ReparentSelection(const std::vector<LuxEngine::uint32>& child
 }
 
 void EditorWindow::GroupSelection() {
-    auto selected = document_.GetSelection();
-    const auto all = selected;
-    std::erase_if(selected, [&](auto id) {
-        for (auto parent = document_.GetScene().GetParent(id); parent;
-             parent = document_.GetScene().GetParent(parent))
-            if (std::find(all.begin(), all.end(), parent) != all.end())
-                return true;
-        return false;
-    });
+    const auto selected = SelectedSubtreeRoots(document_.GetScene(), document_.GetSelection());
     if (selected.empty())
         return;
     RecordEdit(LUX_UI_TEXT("그룹 만들기"), [this, selected] {
@@ -851,10 +855,12 @@ bool EditorWindow::MoveSelectionToScene(EditorDocument::TabId targetId) {
     CancelViewportEdit();
     EndTimelineEdit();
     const auto sourceId = document_.GetActiveTabId();
-    const auto entity = document_.GetSelected();
+    auto& source = document_.GetScene();
+    const auto selected = document_.GetSelection();
     auto* target = document_.GetScene(targetId);
-    if (!entity || !target || sourceId == targetId)
+    if (selected.empty() || !target || sourceId == targetId)
         return false;
+    const auto roots = SelectedSubtreeRoots(source, selected);
     const auto sourceBefore = SnapshotScene(sourceId), targetBefore = SnapshotScene(targetId);
     if (sourceBefore.isEmpty() || targetBefore.isEmpty())
         return false;
@@ -871,13 +877,19 @@ bool EditorWindow::MoveSelectionToScene(EditorDocument::TabId targetId) {
     };
     LuxEngine::uint32 importedId = 0;
     try {
-        const auto ids = target->ImportEntities(document_.GetScene(), {entity.GetId()});
-        if (!ids.contains(entity.GetId()))
-            throw std::runtime_error("씬 간 이동 복사에 실패했습니다.");
-        importedId = ids.at(entity.GetId());
-        document_.GetScene().DestroyEntity(entity);
+        const auto ids = target->ImportEntities(source, roots);
+        std::vector<LuxEngine::uint32> imported;
+        imported.reserve(selected.size());
+        for (const auto id : selected) {
+            if (!ids.contains(id))
+                throw std::runtime_error("씬 간 이동 복사에 실패했습니다.");
+            imported.push_back(ids.at(id));
+        }
+        importedId = imported.back();
+        for (const auto root : roots)
+            source.DestroyEntity({root, &source});
         document_.Select(sourceId, std::nullopt);
-        document_.Select(targetId, importedId);
+        document_.SetSelection(targetId, std::move(imported), importedId);
     } catch (const std::exception& error) {
         restore(sourceBefore, targetBefore, sourceSelected, targetSelected);
         Log(Q(std::string(error.what())), true);
