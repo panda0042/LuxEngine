@@ -503,7 +503,7 @@ void TestCopyUnloadedNestedInstances(const fs::path& directory) {
         const auto& field = scene.GetComponent<ScriptComponent>(id).fields.at("Link");
         return scene.ResolveScriptEntityReference(std::get<ScriptEntityReference>(field));
     };
-    const auto verify = [&](uint32 outer) {
+    const auto verify = [&](uint32 outer, const char* operation) {
         const auto localInner = Mapped(scene, outer, inner);
         const auto localSibling = Mapped(scene, outer, sibling);
         Check(localInner && localSibling, "restored outer scene retains its live mappings");
@@ -511,15 +511,22 @@ void TestCopyUnloadedNestedInstances(const fs::path& directory) {
         Check(localActor && Mapped(scene, outer, original) == localActor &&
                   scene.GetParent(localActor) == localInner,
               "restored actor belongs to the inner hierarchy and both instance maps");
-        Check(scene.GetComponent<TransformComponent>(localActor).position.x == 21 &&
-                  resolve(localActor) == localSibling && resolve(localSibling) == localActor,
-              "each relocated region restores its override and both script links");
+        Check(scene.GetComponent<TransformComponent>(localActor).position.x == 21,
+              "relocated actor restores its transform override");
+        const auto actorLink = resolve(localActor);
+        const auto siblingLink = resolve(localSibling);
+        Check(actorLink == localSibling && siblingLink == localActor,
+              std::string(operation) + " in instance " + std::to_string(outer) +
+                  ": relocated actor " + std::to_string(localActor) + " links to " +
+                  std::to_string(actorLink) + ", sibling " + std::to_string(localSibling) +
+                  " links to " + std::to_string(siblingLink));
         return localActor;
     };
-    Check(verify(first) != verify(second), "duplicate copies restore distinct actors");
+    Check(verify(first, "streaming") != verify(second, "streaming"),
+          "duplicate copies restore distinct actors");
     Check(manager.RefreshInstances(scene, error), error);
-    const auto firstActor = verify(first);
-    const auto secondActor = verify(second);
+    const auto firstActor = verify(first, "refresh");
+    const auto secondActor = verify(second, "refresh");
     Check(firstActor != secondActor && scene.GetEntityCount() == 30,
           "refresh keeps both regions and does not duplicate restored actors");
 }

@@ -705,6 +705,20 @@ void SceneManager::State::RefreshOne(Scene& target, uint32 root, Scene& source, 
         if (!reset && !added && !untouched[sourceId])
             continue;
         const auto localId = mapping.at(sourceId);
+        if (!reset && !added) {
+            const auto* oldScript = previous.TryGetComponent<ScriptComponent>(sourceId);
+            const auto* localScript = target.TryGetComponent<ScriptComponent>(localId);
+            if (oldScript && localScript)
+                for (const auto& [name, value] : oldScript->fields) {
+                    const auto* oldLink = std::get_if<ScriptEntityReference>(&value);
+                    const auto field = localScript->fields.find(name);
+                    if (!oldLink || !oldLink->identity || field == localScript->fields.end())
+                        continue;
+                    if (const auto* localLink = std::get_if<ScriptEntityReference>(&field->second);
+                        localLink && localLink->identity)
+                        identities.try_emplace(oldLink->identity, localLink->identity);
+                }
+        }
         const auto* sourceNested = source.TryGetComponent<SceneReferenceComponent>(sourceId);
         std::optional<SceneReferenceComponent> retainedReference;
         if (const auto* nested = target.TryGetComponent<SceneReferenceComponent>(localId);
@@ -753,7 +767,10 @@ void SceneManager::State::RefreshOne(Scene& target, uint32 root, Scene& source, 
         if (auto* script = target.TryGetComponent<ScriptComponent>(localId))
             for (auto& [name, value] : script->fields)
                 if (auto* link = std::get_if<ScriptEntityReference>(&value)) {
-                    const auto found = mapping.find(source.ResolveScriptEntityReference(*link));
+                    auto sourceTarget = source.ResolveScriptEntityReference(*link);
+                    if (!sourceTarget && link->identity && !source.IsAlive(link->id))
+                        sourceTarget = link->id;
+                    const auto found = mapping.find(sourceTarget);
                     const auto identity = identities.find(link->identity);
                     *link = {found == mapping.end() ? 0 : found->second,
                              identity == identities.end() ? 0 : identity->second};
