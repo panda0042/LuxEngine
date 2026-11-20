@@ -1884,6 +1884,53 @@ void MultiDeviceLifetime() {
     Check(second.Initialize(secondWindow, config), "validation peer initialized");
     config.validation = GpuValidation::Synchronization;
     Check(third.Initialize(thirdWindow, config), "synchronization peer initialized");
+    {
+        Files files;
+        const auto path = files.Path("peer-cache.bmp");
+        auto* surface = SDL_CreateSurface(2, 2, SDL_PIXELFORMAT_RGBA32);
+        Check(surface != nullptr, "peer cache fixture surface created");
+        const bool saved = SDL_SaveBMP(surface, path.c_str());
+        SDL_DestroySurface(surface);
+        Check(saved, "peer cache fixture saved");
+        const auto initialCount = AssetManager::GetCachedTextureCount();
+        const auto initialBytes = AssetManager::GetTextureCacheMemoryBytes();
+        const auto local = AssetManager::LoadTexture(path, &first.gpu);
+        const auto peer = AssetManager::LoadTexture(path, &second);
+        Check(local && peer && local != peer, "textures belong to their own device");
+        Check(AssetManager::LoadTexture(path, &first.gpu) == local &&
+                  AssetManager::LoadTexture(path, &second) == peer &&
+                  AssetManager::GetCachedTextureCount() == initialCount + 2 &&
+                  AssetManager::GetTextureCacheMemoryBytes() == initialBytes + 32,
+              "peer requests preserve both cached textures and count both allocations");
+        AssetManager::UnloadTexture(path);
+        Check(!AssetManager::HasTexture(path) && local->IsValid() && peer->IsValid() &&
+                  AssetManager::GetCachedTextureCount() == initialCount &&
+                  AssetManager::GetTextureCacheMemoryBytes() == initialBytes,
+              "unloading a path releases both cache entries while clients keep their textures");
+
+        const auto previousBudget = AssetManager::GetCacheMemoryBudget();
+        const auto initialTotal = AssetManager::GetTotalCacheMemoryBytes();
+        const auto storageBytes = local->GetStorageBytes();
+        AssetManager::SetCacheMemoryBudget(1);
+        const auto oversized = AssetManager::LoadTexture(path, &first.gpu);
+        Check(oversized && oversized->IsValid() && !AssetManager::HasTexture(path),
+              "a texture larger than the cache budget is returned without retention");
+        AssetManager::SetCacheMemoryBudget(initialTotal + storageBytes);
+        auto retained = AssetManager::LoadTexture(path, &first.gpu);
+        const auto excess = AssetManager::LoadTexture(path, &second);
+        Check(retained && excess && excess->IsValid() &&
+                  AssetManager::LoadTexture(path, &first.gpu) == retained &&
+                  AssetManager::GetTotalCacheMemoryBytes() == initialTotal + storageBytes,
+              "a texture that cannot displace a live entry is returned without retention");
+        retained.reset();
+        const auto replacement = AssetManager::LoadTexture(path, &second);
+        Check(replacement && replacement != excess &&
+                  AssetManager::LoadTexture(path, &second) == replacement &&
+                  AssetManager::GetTotalCacheMemoryBytes() == initialTotal + storageBytes,
+              "an unused entry can be evicted to admit a texture from another device");
+        AssetManager::UnloadTexture(path);
+        AssetManager::SetCacheMemoryBudget(previousBudget);
+    }
 #if defined(LUX_GPU_FAULT_INJECTION) && LUX_GPU_FAULT_INJECTION
     const auto cohortInstances = Vk::GetInstanceLifetimeCounters().instances;
     Check(cohortInstances <= 3 && Vk::GetInstanceLifetimeCounters().devices == 3,

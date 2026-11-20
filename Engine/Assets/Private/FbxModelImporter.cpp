@@ -164,6 +164,19 @@ struct CachedModel {
 
 std::mutex cacheMutex;
 std::unordered_map<std::string, CachedModel> modelCache;
+std::unordered_map<std::string, std::weak_ptr<std::mutex>> fileLoadLocks;
+
+std::shared_ptr<std::mutex> FileLoadLock(const std::string& key) {
+    const std::lock_guard lock(cacheMutex);
+    if (const auto found = fileLoadLocks.find(key); found != fileLoadLocks.end())
+        if (auto active = found->second.lock())
+            return active;
+    if (fileLoadLocks.size() >= 128)
+        std::erase_if(fileLoadLocks, [](const auto& entry) { return entry.second.expired(); });
+    auto active = std::make_shared<std::mutex>();
+    fileLoadLocks.insert_or_assign(key, active);
+    return active;
+}
 
 struct Corner {
     uint32 position;
@@ -436,10 +449,14 @@ Ref<ModelAsset> ModelAsset::ReadFbx(const std::string& filepath, std::string& er
     error.clear();
     try {
         Require(ValidPath(filepath), "FBX 파일 경로가 비어 있거나 유효한 UTF-8 경로가 아닙니다.");
-        const auto path = std::filesystem::path(std::u8string(filepath.begin(), filepath.end()));
         std::error_code status;
-        const auto key = std::filesystem::absolute(path).lexically_normal().generic_u8string();
+        const auto path = std::filesystem::canonical(
+            std::filesystem::path(std::u8string(filepath.begin(), filepath.end())), status);
+        Require(!status, "FBX 원본 경로를 확인할 수 없습니다.");
+        const auto key = path.generic_u8string();
         const std::string cacheKey(key.begin(), key.end());
+        const auto loadLock = FileLoadLock(cacheKey);
+        const std::lock_guard lockFile(*loadLock);
         const auto size = std::filesystem::file_size(path, status);
         Require(!status, "FBX 파일 크기를 확인할 수 없습니다.");
         const auto modified = std::filesystem::last_write_time(path, status);
@@ -469,7 +486,7 @@ Ref<ModelAsset> ModelAsset::ReadFbx(const std::string& filepath, std::string& er
         options.space_conversion = UFBX_SPACE_CONVERSION_ADJUST_TRANSFORMS;
         options.inherit_mode_handling = UFBX_INHERIT_MODE_HANDLING_HELPER_NODES;
         options.load_external_files = false;
-        options.filename = {filepath.data(), filepath.size()};
+        options.filename = {cacheKey.data(), cacheKey.size()};
         ufbx_error parserError{};
         ScenePtr scene(ufbx_load_memory(bytes.data(), bytes.size(), &options, &parserError),
                        ufbx_free_scene);
@@ -482,7 +499,7 @@ Ref<ModelAsset> ModelAsset::ReadFbx(const std::string& filepath, std::string& er
         Require(scene->nodes.count <= MaxNodes && scene->anim_stacks.count <= MaxAnimations,
                 "FBX 노드·애니메이션 수가 가져오기 한도를 초과했습니다.");
         Ref<ModelAsset> model(new ModelAsset);
-        model->sourcePath = filepath;
+        model->sourcePath = cacheKey;
         model->sourceUnitMeters = scene->settings.unit_meters;
         model->framesPerSecond = scene->settings.frames_per_second;
         model->impl_ = std::make_shared<Impl>();
@@ -522,10 +539,14 @@ Ref<ModelAsset> ModelAsset::ReadFbx(const std::string& filepath, std::string& er
         Require(!model->submeshes.empty(), "FBX 파일에 렌더링할 다각형 메시가 없습니다.");
         if (requiredSubmesh >= 0) {
             const auto index = static_cast<size_t>(requiredSubmesh);
-            Require(index < model->submeshes.size(), "갱신한 FBX에서 선택한 하위 메시를 찾을 수 없습니다.");
+            Require(index < model->submeshes.size(),
+                    "갱신한 FBX에서 선택한 하위 메시를 찾을 수 없습니다.");
             Require(!requireUv || model->submeshes[index].hasTexCoords,
                     "갱신한 FBX 하위 메시에는 텍스처 UV가 없습니다.");
         }
+        Require(std::filesystem::file_size(path, status) == size && !status &&
+                    std::filesystem::last_write_time(path, status) == modified && !status,
+                "FBX를 처리하는 동안 파일이 변경되었습니다.");
         {
             const std::lock_guard lock(cacheMutex);
             if (modelCache.size() >= 128)
