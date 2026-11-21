@@ -46,6 +46,8 @@ void Merge(AnimationFrame& destination, const AnimationFrame& source, double wei
             continue;
         auto found = std::find_if(destination.samples.begin(), destination.samples.end(),
                                   [&](const auto& value) { return Key(value) == Key(sample); });
+        if (found != destination.samples.end())
+            found->rootMotionPosition |= sample.rootMotionPosition;
         if (sprite) {
             auto value = sample;
             if (!value.spriteSheet)

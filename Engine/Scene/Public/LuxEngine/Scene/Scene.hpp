@@ -137,7 +137,6 @@ private:
     void UpdateAnimations(double dt, bool emitEvents, RootMotionDeltas* physicsMotion);
     void ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, double dt, bool rootMotion,
                              AnimationBindings& bindings, RootMotionDeltas* physicsMotion);
-    void SetRootMotionVelocity(uint32 owner, Vec3 velocity);
     void ResetPhysicsTiming();
 
     struct PoolBase {

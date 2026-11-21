@@ -193,6 +193,92 @@ void AnimationFileRoundTrip(const std::filesystem::path& root) {
     }
 }
 
+void ChildRootMotion(const std::filesystem::path& root) {
+    AnimationClip clip;
+    clip.loop = false;
+    clip.rootMotionTarget = "Motion";
+    auto motion = Track(AnimationProperty::Position, 4, 6);
+    motion.target = clip.rootMotionTarget;
+    auto pose = Track(AnimationProperty::Position, 0, 8);
+    pose.target = "Pose";
+    clip.tracks = {motion, pose};
+    std::string error;
+    const auto clipPath = (root / "child-root.luxanim").string();
+    const auto controllerPath = (root / "child-root.luxanimator").string();
+    Check(clip.Save(clipPath, error), error.c_str());
+    AnimatorController controller;
+    AnimatorLayer layer;
+    layer.entry = "Move";
+    layer.states = {{"Move", clipPath}};
+    controller.layers = {layer};
+    Check(controller.Save(controllerPath, error), error.c_str());
+
+    for (const bool useAnimator : {false, true}) {
+        for (const bool extractMotion : {false, true}) {
+            Scene scene;
+            auto owner = scene.CreateEntity("Owner");
+            auto child = scene.CreateEntity("Motion");
+            auto other = scene.CreateEntity("Pose");
+            Check(scene.SetParent(child.GetId(), owner.GetId(), false) &&
+                      scene.SetParent(other.GetId(), owner.GetId(), false),
+                  "animation child bindings resolve");
+            child.GetComponent<TransformComponent>().position.x = 4;
+            if (useAnimator) {
+                auto& animator = owner.AddComponent<AnimatorComponent>();
+                animator.controllerPath = controllerPath;
+                animator.rootMotion = extractMotion;
+            } else {
+                auto& animation = owner.AddComponent<AnimationComponent>();
+                animation.assetPath = clipPath;
+                animation.rootMotion = extractMotion;
+            }
+            for (const double elapsed : {.5, 1.}) {
+                scene.UpdateAnimations(.5);
+                const double displacement = elapsed * 2;
+                Check(Near(scene.GetWorldTransform(owner.GetId()).position.x,
+                           extractMotion ? displacement : 0) &&
+                          Near(child.GetComponent<TransformComponent>().position.x,
+                               extractMotion ? 4 : 4 + displacement) &&
+                          Near(scene.GetWorldTransform(child.GetId()).position.x, 4 + displacement),
+                      "child root position contributes to displacement exactly once");
+                Check(Near(other.GetComponent<TransformComponent>().position.x, elapsed * 8),
+                      "root extraction preserves other position tracks");
+            }
+        }
+    }
+}
+
+void RootMotionWithoutCollider() {
+    for (const bool planar : {false, true}) {
+        Scene scene;
+        auto owner = scene.CreateEntity("Unsimulated body");
+        if (planar)
+            owner.AddComponent<Rigidbody2DComponent>().type = BodyType::Dynamic;
+        else
+            owner.AddComponent<Rigidbody3DComponent>().type = BodyType::Dynamic;
+        auto& animation = owner.AddComponent<AnimationComponent>();
+        animation.rootMotion = true;
+        animation.clip.loop = false;
+        animation.clip.duration = .25;
+        animation.clip.tracks = {Track(AnimationProperty::Position, 0, 2, .25)};
+        scene.OnUpdate(.25);
+        const auto position = [&] { return scene.GetWorldTransform(owner.GetId()).position.x; };
+        const auto velocity = [&] {
+            return planar ? owner.GetComponent<Rigidbody2DComponent>().velocity.x
+                          : owner.GetComponent<Rigidbody3DComponent>().velocity.x;
+        };
+        Check(!animation.playing && Near(position(), 2) && Near(velocity(), 0),
+              "root motion applies to the transform without storing unsimulated body velocity");
+        if (planar)
+            owner.AddComponent<BoxCollider2DComponent>();
+        else
+            owner.AddComponent<BoxCollider3DComponent>();
+        scene.OnUpdate(.25);
+        Check(Near(position(), 2, .001) && Near(velocity(), 0),
+              "adding a collider after the clip ends does not replay root motion");
+    }
+}
+
 void FixedStepRootMotion() {
     const auto simulate = [](bool planar, bool split) {
         Scene scene;
@@ -657,6 +743,8 @@ int main() {
         Curves();
         AnimationMotion(root);
         AnimationFileRoundTrip(root);
+        ChildRootMotion(root);
+        RootMotionWithoutCollider();
         FixedStepRootMotion();
         AnimatorEventSources(root);
         AnimatedCameraClipRange();

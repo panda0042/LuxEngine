@@ -147,18 +147,20 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
         auto* transform = TryGetComponent<TransformComponent>(owner);
         if (!rootMotion || !transform || dt <= 0)
             return;
-        const auto* body3D = TryGetComponent<Rigidbody3DComponent>(owner);
-        const auto* body2D = TryGetComponent<Rigidbody2DComponent>(owner);
-        const bool dynamic3D = body3D && body3D->type == BodyType::Dynamic;
-        const bool dynamic2D = body2D && body2D->type == BodyType::Dynamic;
-        if (dynamic3D || dynamic2D) {
+        auto* body2D = TryGetComponent<Rigidbody2DComponent>(owner);
+        auto* body3D = TryGetComponent<Rigidbody3DComponent>(owner);
+        const bool uses2D = body2D && HasComponent<BoxCollider2DComponent>(owner);
+        const bool dynamic2D = uses2D && body2D->type == BodyType::Dynamic;
+        const bool dynamic3D = !uses2D && body3D && body3D->type == BodyType::Dynamic &&
+                               HasComponent<BoxCollider3DComponent>(owner);
+        if (dynamic2D || dynamic3D) {
             const auto worldDelta = GetWorldMatrix(owner).TransformDirection(delta);
-            const bool simulated = dynamic3D ? HasComponent<BoxCollider3DComponent>(owner)
-                                             : HasComponent<BoxCollider2DComponent>(owner);
-            if (physicsMotion && simulated)
+            if (physicsMotion)
                 (*physicsMotion)[owner] = worldDelta;
+            else if (dynamic2D)
+                body2D->velocity = {worldDelta.x / dt, worldDelta.y / dt};
             else
-                SetRootMotionVelocity(owner, worldDelta * (1 / dt));
+                body3D->velocity = worldDelta * (1 / dt);
         } else
             transform->position += transform->GetTransform().TransformDirection(delta);
     };
@@ -170,7 +172,7 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
         auto* transform = TryGetComponent<TransformComponent>(target);
         if (sample.property == AnimationProperty::Position && transform) {
             const Vec3 position{v[0], v[1], v[2]};
-            if (!(rootMotion && target == owner))
+            if (!rootMotion || (target != owner && !sample.rootMotionPosition))
                 transform->position = position;
         } else if (sample.property == AnimationProperty::Rotation && transform)
             transform->rotation = {v[0], v[1], v[2]};

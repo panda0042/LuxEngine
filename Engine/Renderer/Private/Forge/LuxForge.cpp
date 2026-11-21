@@ -357,7 +357,10 @@ bool AcquirePlatform(std::string& error) {
                                     dllDir.c_str());
         resourceDirsSet = true;
     }
-    initLog("LuxForge", static_cast<LogLevel>(LogLevel::eWARNING | LogLevel::eERROR));
+    const char* trace = (std::getenv)("LUX_FORGE_TRACE");
+    const auto logLevel = LogLevel::eWARNING | LogLevel::eERROR |
+                          (trace && std::strcmp(trace, "1") == 0 ? LogLevel::eINFO : 0);
+    initLog("LuxForge", static_cast<LogLevel>(logLevel));
     addLogCallback("LuxForgeInitialization", LogLevel::eERROR, nullptr, CaptureInitializationError,
                    nullptr, nullptr);
     addLogCallback("LuxForgeValidationWarnings", LogLevel::eWARNING, nullptr,

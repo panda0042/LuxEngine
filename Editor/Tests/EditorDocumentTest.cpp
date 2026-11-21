@@ -1104,6 +1104,51 @@ void TestBackupValidationAndLocalFiles() {
     }
 }
 
+void TestExcludedStartScene() {
+    using namespace LuxEditor;
+    namespace fs = std::filesystem;
+    TempDirectory files;
+    std::string error;
+    const auto root = files.path / "project";
+    auto project = EditorProject::Create(root, "Archive paths", ProjectTemplate::Empty, error);
+    Check(project.has_value(), "archive path fixture creates");
+    const auto original = project->GetSceneFile();
+    for (const auto* directory : {"Out", "Build", "CMake-Build-Debug"}) {
+        const auto candidate = root / directory / "Start.lux";
+        fs::create_directories(candidate.parent_path());
+        fs::copy_file(original, candidate);
+        Check(!project->SetStartScene(candidate, error) && project->GetSceneFile() == original,
+              "start scenes in excluded directories are rejected regardless of case");
+    }
+    const auto reopened = EditorProject::Open(project->GetFile(), error);
+    Check(reopened && reopened->GetSceneFile() == original,
+          "rejecting an excluded start scene preserves the saved manifest");
+    fs::path backup;
+    Check(CreateProjectBackup(*project, backup, error) &&
+              RestoreProjectBackup(*project, backup, error),
+          "backup still restores with an authored start scene");
+    const auto archive = files.path / "project.luxpack";
+    Check(ExportProject(*project, archive, error) &&
+              ImportProject(archive, files.path / "imported", error).has_value(),
+          "export still imports with an authored start scene");
+
+    nlohmann::json descriptor;
+    {
+        std::ifstream input(project->GetFile());
+        input >> descriptor;
+    }
+    descriptor["start_scene"] = "Out/Start.lux";
+    std::ofstream(project->GetFile()) << descriptor;
+    auto legacy = EditorProject::Open(project->GetFile(), error);
+    Check(legacy.has_value(), "a previously accepted project opens for repair");
+    const auto invalidArchive = files.path / "excluded.luxpack";
+    Check(!CreateProjectBackup(*legacy, backup, error) && backup.empty() &&
+              !ExportProject(*legacy, invalidArchive, error) && !fs::exists(invalidArchive),
+          "an excluded start scene cannot produce an unusable backup or archive");
+    Check(legacy->SetStartScene(original, error),
+          "a legacy project can select a valid start scene");
+}
+
 void TestCustomProjectManifest() {
     using namespace LuxEditor;
     namespace fs = std::filesystem;
@@ -1263,6 +1308,7 @@ int main(int argc, char** argv) {
         TestProjectOperations();
         TestBackupRetentionAfterRestore();
         TestBackupValidationAndLocalFiles();
+        TestExcludedStartScene();
         TestCustomProjectManifest();
         TestIcnsImagePayload();
         TestPortableAnimationArchive();

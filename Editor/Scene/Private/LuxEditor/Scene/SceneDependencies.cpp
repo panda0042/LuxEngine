@@ -1,5 +1,6 @@
 #include <LuxEditor/Project/EditorProject.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
+#include <LuxEditor/Project/ProjectFileOperations.hpp>
 #include <LuxEditor/Scene/SceneDependencies.hpp>
 #include <LuxEngine/Animation/Animator.hpp>
 #include <LuxEngine/Assets/AssetManager.hpp>
@@ -22,18 +23,6 @@ namespace {
 namespace fs = std::filesystem;
 constexpr size_t MaximumDepth = 16;
 constexpr std::uintmax_t MaximumBytes = 128 * 1024 * 1024;
-
-bool Ignored(const fs::path& relative) {
-    if (relative.empty())
-        return false;
-    const auto first = PathUtf8(*relative.begin());
-    if (first == "build" || first == "out" || first.starts_with("cmake-build"))
-        return true;
-    for (const auto& part : relative)
-        if (part == ".git" || part == ".lux")
-            return true;
-    return false;
-}
 
 class ReferenceValidator final {
 public:
@@ -106,9 +95,11 @@ private:
         if (error || !fs::is_regular_file(resolved, error) || error)
             throw std::runtime_error("참조 씬 파일을 찾을 수 없습니다: " + GenericPathUtf8(path));
         const auto relative = resolved.lexically_relative(root);
+        if (IsExcludedProjectPath(relative))
+            throw std::runtime_error("이 씬은 백업과 내보내기에서 제외되는 경로에 있습니다: " +
+                                     GenericPathUtf8(path));
         const bool prefab = LuxEngine::PrefabLibrary::IsPrefabPath(resolved) && !relative.empty() &&
-                            !relative.is_absolute() && *relative.begin() != ".." &&
-                            !Ignored(relative);
+                            !relative.is_absolute() && *relative.begin() != "..";
         if (!project_.ContainsScene(resolved) && !prefab)
             throw std::runtime_error("프로젝트 밖의 씬은 게임에 포함할 수 없습니다: " +
                                      GenericPathUtf8(path));
@@ -147,7 +138,7 @@ private:
         if (outside && image && externalImage_ &&
             (extension == ".lux" || LuxEngine::PrefabLibrary::IsPrefabPath(owner)))
             externalImage_(file);
-        else if (outside || Ignored(relative))
+        else if (outside || IsExcludedProjectPath(relative))
             throw std::runtime_error("자산 파일은 프로젝트 내부에 있어야 합니다: " + resource);
         return file;
     }
@@ -409,7 +400,7 @@ bool ValidateProjectScenes(const EditorProject& project, std::string& error,
             if (errorCode)
                 throw std::runtime_error("프로젝트의 씬 목록을 읽을 수 없습니다.");
             const auto relative = entry->path().lexically_relative(root);
-            if (Ignored(relative)) {
+            if (IsExcludedProjectPath(relative)) {
                 entry.disable_recursion_pending();
                 continue;
             }

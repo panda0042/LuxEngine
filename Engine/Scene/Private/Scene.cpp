@@ -269,15 +269,6 @@ void Scene::OnUpdate(double dt) {
         physics3D_->SetPoseError(failedPose3D);
 }
 
-void Scene::SetRootMotionVelocity(uint32 owner, Vec3 velocity) {
-    if (auto* body = TryGetComponent<Rigidbody3DComponent>(owner);
-        body && body->type == BodyType::Dynamic)
-        body->velocity = velocity;
-    else if (auto* body2D = TryGetComponent<Rigidbody2DComponent>(owner);
-             body2D && body2D->type == BodyType::Dynamic)
-        body2D->velocity = {velocity.x, velocity.y};
-}
-
 void Scene::ResetPhysicsTiming() {
     physicsAccumulator_ = 0;
     pendingPhysicsMotion_.clear();
