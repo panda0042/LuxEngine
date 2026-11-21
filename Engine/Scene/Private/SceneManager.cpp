@@ -69,9 +69,11 @@ std::shared_ptr<Scene> Clone(Scene& source) {
         throw std::runtime_error("씬 상태를 복원할 수 없습니다.");
     result->SetSourcePath(source.GetSourcePath());
     for (auto entity : source.GetEntities()) {
-        if (const auto* animation = entity.TryGetComponent<AnimationComponent>())
-            result->GetComponent<AnimationComponent>(entity.GetId()).currentTime =
-                animation->currentTime;
+        if (const auto* animation = entity.TryGetComponent<AnimationComponent>()) {
+            auto& copy = result->GetComponent<AnimationComponent>(entity.GetId());
+            copy.currentTime = animation->currentTime;
+            copy.playbackStarted = animation->playbackStarted;
+        }
         if (const auto* body = entity.TryGetComponent<Rigidbody2DComponent>())
             result->GetComponent<Rigidbody2DComponent>(entity.GetId()).isGrounded =
                 body->isGrounded;

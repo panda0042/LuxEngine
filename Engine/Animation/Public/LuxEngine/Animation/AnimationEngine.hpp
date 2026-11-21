@@ -65,6 +65,7 @@ struct AnimationComponent {
     double speed = 1;
     bool rootMotion = false;
     std::vector<AnimationEvent> pendingEvents;
+    bool playbackStarted = false;
 };
 
 class LUX_API AnimationEngine {

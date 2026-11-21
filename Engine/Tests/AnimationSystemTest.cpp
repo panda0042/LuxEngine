@@ -193,6 +193,99 @@ void AnimationFileRoundTrip(const std::filesystem::path& root) {
     }
 }
 
+void ReverseOneShotFromSavedScene(const std::filesystem::path& root) {
+    AnimationClip clip;
+    clip.duration = 1;
+    clip.loop = false;
+    clip.tracks = {Track(AnimationProperty::Position, 0, 10)};
+    clip.events = {{.875, "reverse-marker", ""}};
+    std::string error;
+    const auto clipPath = (root / "reverse-once.luxanim").string();
+    Check(clip.Save(clipPath, error), error.c_str());
+    const auto scenePath = (root / "reverse-once.lux").string();
+    for (const bool external : {false, true}) {
+        Scene authored, runtime;
+        auto entity = authored.CreateEntity("Reverse once");
+        auto& animation = entity.AddComponent<AnimationComponent>();
+        animation.speed = -1;
+        if (external)
+            animation.assetPath = clipPath;
+        else
+            animation.clip = clip;
+        Check(authored.Serialize(scenePath) && runtime.Deserialize(scenePath),
+              "reverse clip survives a scene round trip");
+        auto saved = runtime.GetEntities().front();
+        auto& restored = saved.GetComponent<AnimationComponent>();
+        auto& transform = saved.GetComponent<TransformComponent>();
+        runtime.UpdateAnimations(.25);
+        Check(restored.playing && Near(restored.currentTime, .75) &&
+                  Near(transform.position.x, 7.5) && restored.pendingEvents.size() == 1 &&
+                  restored.pendingEvents.front().name == "reverse-marker",
+              "a saved reverse one-shot starts at the end and crosses reverse events");
+        runtime.UpdateAnimations(.75);
+        runtime.UpdateAnimations(.25);
+        Check(!restored.playing && Near(restored.currentTime, 0) && Near(transform.position.x, 0) &&
+                  restored.pendingEvents.empty(),
+              "the reverse one-shot stops at the first key and remains stopped");
+
+        Scene positioned;
+        Check(positioned.Deserialize(scenePath), "a second playback scene opens");
+        auto sought = positioned.GetEntities().front();
+        sought.GetComponent<AnimationComponent>().currentTime = .5;
+        positioned.UpdateAnimations(.25);
+        Check(Near(sought.GetComponent<AnimationComponent>().currentTime, .25),
+              "reverse playback respects a manually positioned start time");
+    }
+}
+
+void CrossfadeFromChildRootMotion(const std::filesystem::path& root) {
+    AnimationClip walk, pose;
+    walk.rootMotionTarget = "Motion";
+    auto motion = Track(AnimationProperty::Position, 0, 2);
+    motion.target = walk.rootMotionTarget;
+    walk.tracks = {motion};
+    auto normal = Track(AnimationProperty::Position, 7, 7);
+    normal.target = motion.target;
+    pose.tracks = {normal};
+    const auto walkPath = (root / "crossfade-walk.luxanim").string();
+    const auto posePath = (root / "crossfade-pose.luxanim").string();
+    const auto controllerPath = (root / "crossfade-root.luxanimator").string();
+    std::string error;
+    Check(walk.Save(walkPath, error) && pose.Save(posePath, error), "crossfade assets save");
+    AnimatorController controller;
+    controller.parameters = {{"TakePose", AnimationParameterType::Trigger, 0}};
+    AnimatorLayer layer;
+    layer.entry = "Walk";
+    layer.states = {{"Walk", walkPath}, {"Pose", posePath}};
+    layer.transitions = {{"Walk", "Pose", .5, -1, {{"TakePose", AnimationComparison::Set, 0}}}};
+    controller.layers = {layer};
+    Check(controller.Save(controllerPath, error), error.c_str());
+
+    for (const bool rootMotion : {false, true}) {
+        Scene scene;
+        auto owner = scene.CreateEntity("Owner");
+        auto child = scene.CreateEntity("Motion");
+        auto& transform = child.GetComponent<TransformComponent>();
+        transform.position.x = 4;
+        Check(scene.SetParent(child.GetId(), owner.GetId(), false), "root motion child is bound");
+        auto& animator = owner.AddComponent<AnimatorComponent>();
+        animator.controllerPath = controllerPath;
+        animator.rootMotion = rootMotion;
+        scene.UpdateAnimations(.125);
+        Check(animator.player && animator.player->Trigger("TakePose"),
+              "author triggers transition");
+        Check(Near(transform.position.x, rootMotion ? 4 : .25),
+              "the source pose uses the locally applied root motion mode");
+        scene.UpdateAnimations(.25);
+        Check(Near(transform.position.x, rootMotion ? 5.5 : 3.875),
+              "halfway through the crossfade the ordinary pose is already blended");
+        scene.UpdateAnimations(.25);
+        Check(Near(transform.position.x, 7), "the final crossfade frame reaches the new pose");
+        scene.UpdateAnimations(.01);
+        Check(Near(transform.position.x, 7), "the first full frame has no pose jump");
+    }
+}
+
 void ChildRootMotion(const std::filesystem::path& root) {
     AnimationClip clip;
     clip.loop = false;
@@ -743,6 +836,8 @@ int main() {
         Curves();
         AnimationMotion(root);
         AnimationFileRoundTrip(root);
+        ReverseOneShotFromSavedScene(root);
+        CrossfadeFromChildRootMotion(root);
         ChildRootMotion(root);
         RootMotionWithoutCollider();
         FixedStepRootMotion();

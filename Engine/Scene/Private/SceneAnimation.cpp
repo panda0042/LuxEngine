@@ -421,8 +421,14 @@ void Scene::UpdateAnimations(double dt, bool emitEvents, RootMotionDeltas* physi
             animation->loadedPath = path;
         }
         const auto& clip = animation->asset ? *animation->asset : animation->clip;
+        const auto wrap = clip.GetWrap();
         AnimationPlayback playback{animation->currentTime, animation->speed, animation->playing};
-        auto events = playback.Advance(dt, clip.duration, clip.GetWrap(), clip.events);
+        if (!animation->playbackStarted && playback.cursor == 0 && playback.speed < 0 &&
+            wrap == AnimationWrap::Once && std::isfinite(dt) && dt >= 0 &&
+            std::isfinite(clip.duration) && clip.duration > 0)
+            playback.cursor = clip.duration;
+        auto events = playback.Advance(dt, clip.duration, wrap, clip.events);
+        animation->playbackStarted |= playback.cursor != playback.previousCursor;
         animation->currentTime = playback.cursor;
         animation->playing = playback.playing;
         AnimationFrame frame;
@@ -435,10 +441,9 @@ void Scene::UpdateAnimations(double dt, bool emitEvents, RootMotionDeltas* physi
             AnimationModelSample sample;
             sample.path = clip.modelPath;
             sample.clip = clip.modelClip;
-            sample.time = playback.Time(clip.duration, clip.GetWrap());
-            sample.previousTime =
-                AnimationTime(playback.previousCursor, clip.duration, clip.GetWrap());
-            sample.cycles = clip.GetWrap() == AnimationWrap::Loop
+            sample.time = playback.Time(clip.duration, wrap);
+            sample.previousTime = AnimationTime(playback.previousCursor, clip.duration, wrap);
+            sample.cycles = wrap == AnimationWrap::Loop
                                 ? std::floor(playback.cursor / clip.duration) -
                                       std::floor(playback.previousCursor / clip.duration)
                                 : 0;
@@ -471,13 +476,16 @@ void Scene::UpdateAnimations(double dt, bool emitEvents, RootMotionDeltas* physi
             for (const auto& parameter : animation->parameters)
                 animation->player->SetParameter(parameter.name, parameter.value);
             if (animation->rootMotion)
-                ApplyAnimationFrame(id, animation->player->Update(0, false), 0, true, bindings,
-                                    nullptr);
+                ApplyAnimationFrame(id, animation->player->Update(0, false, {}, true), 0, true,
+                                    bindings, nullptr);
         }
         animation->player->SetPlaying(animation->playing);
-        auto frame = animation->player->Update(dt, emitEvents, [&](const auto& sample) {
-            return ReadAnimatedValue(*this, bindings.Resolve(id, sample.target), sample);
-        });
+        auto frame = animation->player->Update(
+            dt, emitEvents,
+            [&](const auto& sample) {
+                return ReadAnimatedValue(*this, bindings.Resolve(id, sample.target), sample);
+            },
+            animation->rootMotion);
         ApplyAnimationFrame(id, frame, dt, animation->rootMotion, bindings, physicsMotion);
         if (emitEvents)
             animation->pendingEvents = std::move(frame.events);
