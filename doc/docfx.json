@@ -1,0 +1,28 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "src": "../Engine/Scripting/Managed/LuxEngine.ScriptCore",
+          "files": ["LuxEngine.ScriptCore.csproj"]
+        }
+      ],
+      "dest": "api",
+      "filter": "api-filter.yml"
+    }
+  ],
+  "build": {
+    "content": [
+      { "files": ["index.md", "toc.yml", "ko/**", "en/**", "zh/**", "ja/**"] },
+      { "files": ["api/**/*.yml"] }
+    ],
+    "output": "_site",
+    "template": ["default", "modern"],
+    "globalMetadata": {
+      "_appName": "LuxEngine",
+      "_appTitle": "LuxEngine",
+      "_enableSearch": true,
+      "_lang": "en"
+    }
+  }
+}

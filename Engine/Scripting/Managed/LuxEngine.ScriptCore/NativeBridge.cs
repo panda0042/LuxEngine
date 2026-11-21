@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -14,6 +15,8 @@ internal unsafe struct NativeApi {
     public delegate* unmanaged[Cdecl]<ulong, uint, int> IsAlive;
     public delegate* unmanaged[Cdecl]<ulong, uint, Transform*, int> GetTransform;
     public delegate* unmanaged[Cdecl]<ulong, uint, Transform*, int> SetTransform;
+    public delegate* unmanaged[Cdecl]<ulong, uint, Vector4*, int> GetSpriteColor;
+    public delegate* unmanaged[Cdecl]<ulong, uint, Vector4*, int> SetSpriteColor;
     public delegate* unmanaged[Cdecl]<int, int> IsKeyPressed;
     public delegate* unmanaged[Cdecl]<ulong, uint, int, byte*, int, double, double> Animation;
     public delegate* unmanaged[Cdecl]<ulong, uint, byte*, int, int> AnimationEvent;
@@ -84,12 +87,13 @@ public static unsafe class NativeBridge {
         try {
             if (nativeApi == null || managedApi == null)
                 return 0;
-            NativeApi callbacks = *(NativeApi*)nativeApi;
-            if (callbacks.Version != 6 || callbacks.Size != sizeof(NativeApi))
+            // Check the fixed header before reading callbacks from a potentially older host.
+            uint* header = (uint*)nativeApi;
+            if (header[0] != 7 || header[1] != sizeof(NativeApi))
                 return 0;
-            native = callbacks;
+            native = *(NativeApi*)nativeApi;
             *(ManagedApi*)managedApi =
-                new ManagedApi { Version = 6,           Size = (uint)sizeof(ManagedApi),
+                new ManagedApi { Version = 7,           Size = (uint)sizeof(ManagedApi),
                                  Load = &Load,          Attach = &Attach,
                                  SetFields = &SetFields, Detach = &Detach, Update = &Update,
                                  Unload = &Unload,      Describe = &Describe,
@@ -116,6 +120,18 @@ public static unsafe class NativeBridge {
     internal static void SetTransform(ulong world, uint entity, Transform value) {
         if (native.SetTransform(world, entity, &value) == 0)
             throw new InvalidOperationException("The entity transform is invalid or unavailable.");
+    }
+
+    internal static Vector4 GetSpriteColor(ulong world, uint entity) {
+        Vector4 value;
+        if (native.GetSpriteColor(world, entity, &value) == 0)
+            throw new InvalidOperationException("The entity's sprite renderer is unavailable.");
+        return value;
+    }
+
+    internal static void SetSpriteColor(ulong world, uint entity, Vector4 value) {
+        if (native.SetSpriteColor(world, entity, &value) == 0)
+            throw new InvalidOperationException("The sprite renderer is unavailable or its color is not finite.");
     }
 
     internal static bool IsKeyPressed(int key) {

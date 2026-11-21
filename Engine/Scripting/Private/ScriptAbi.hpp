@@ -16,6 +16,8 @@ struct NativeApi {
     int(LUX_SCRIPT_CALL* getTransform)(uint64 world, uint32 entity, TransformComponent* value);
     int(LUX_SCRIPT_CALL* setTransform)(uint64 world, uint32 entity,
                                        const TransformComponent* value);
+    int(LUX_SCRIPT_CALL* getSpriteColor)(uint64 world, uint32 entity, Vec4* value);
+    int(LUX_SCRIPT_CALL* setSpriteColor)(uint64 world, uint32 entity, const Vec4* value);
     int(LUX_SCRIPT_CALL* isKeyPressed)(int key);
     double(LUX_SCRIPT_CALL* animation)(uint64 world, uint32 entity, int operation, const char* name,
                                        int length, double value);
