@@ -1,6 +1,22 @@
+#include <LuxEditor/Project/PathEncoding.hpp>
 #include <LuxEditor/Project/ProjectFileOperations.hpp>
+#include <algorithm>
 
 namespace LuxEditor {
+bool IsExcludedProjectPath(const std::filesystem::path& relative) {
+    for (auto part = relative.begin(); part != relative.end(); ++part) {
+        auto name = PathUtf8(*part);
+        std::transform(name.begin(), name.end(), name.begin(), [](char c) {
+            return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c;
+        });
+        if (name == ".lux" || name == ".git" ||
+            (part == relative.begin() &&
+             (name == "build" || name == "out" || name.starts_with("cmake-build"))))
+            return true;
+    }
+    return false;
+}
+
 void RenameProjectPath(const std::filesystem::path& source,
                        const std::filesystem::path& destination, std::error_code& error) {
 #ifdef _WIN32

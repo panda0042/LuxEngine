@@ -11,6 +11,14 @@ using Value = std::array<double, 4>;
 bool Finite(const Value& value) {
     return std::all_of(value.begin(), value.end(), [](double x) { return std::isfinite(x); });
 }
+
+const AnimationTrack* FindRootMotionTrack(const AnimationClip& clip) {
+    const auto track = std::find_if(clip.tracks.begin(), clip.tracks.end(), [&](const auto& value) {
+        return value.target == clip.rootMotionTarget &&
+               value.property == AnimationProperty::Position && !value.keys.empty();
+    });
+    return track == clip.tracks.end() ? nullptr : &*track;
+}
 } // namespace
 
 std::array<double, 4> BlendAnimationValue(AnimationProperty property, const Value& a,
@@ -154,10 +162,16 @@ AnimationWrap AnimationClip::GetWrap() const {
 
 std::vector<AnimationSample> AnimationClip::SampleTracks(double time, bool wrapTime) const {
     std::vector<AnimationSample> result;
+    const auto* root = rootMotionTarget.empty() ? nullptr : FindRootMotionTrack(*this);
     time = AnimationTime(time, duration, wrapTime ? GetWrap() : AnimationWrap::Once);
     for (const auto& track : tracks)
         if (!track.keys.empty())
-            result.push_back({track.target, track.property, track.field, track.Sample(time)});
+            result.push_back({track.target,
+                              track.property,
+                              track.field,
+                              track.Sample(time),
+                              {},
+                              &track == root});
     if (tracks.empty() && !keyframes.empty()) {
         const auto value = Sample(time, false);
         result.push_back({{},
@@ -175,13 +189,11 @@ std::vector<AnimationSample> AnimationClip::SampleTracks(double time, bool wrapT
 }
 
 std::optional<Vec3> AnimationClip::RootDelta(double from, double to) const {
-    const auto track = std::find_if(tracks.begin(), tracks.end(), [&](const auto& value) {
-        return value.target == rootMotionTarget && value.property == AnimationProperty::Position;
-    });
-    if (track == tracks.end() && (keyframes.empty() || !rootMotionTarget.empty()))
+    const auto* track = FindRootMotionTrack(*this);
+    if (!track && (keyframes.empty() || !rootMotionTarget.empty()))
         return {};
     auto position = [&](double time, bool endpoint) {
-        if (track != tracks.end()) {
+        if (track) {
             auto value = track->Sample(endpoint ? time : AnimationTime(time, duration, GetWrap()));
             return Vec3{value[0], value[1], value[2]};
         }

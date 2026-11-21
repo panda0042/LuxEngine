@@ -474,6 +474,10 @@ bool EditorProject::SetStartScene(const std::filesystem::path& sceneFile, std::s
         error = "시작 씬은 프로젝트 내부의 .lux 파일이어야 합니다.";
         return false;
     }
+    if (IsExcludedProjectPath(relative)) {
+        error = "백업과 내보내기에서 제외하는 폴더의 씬은 시작 씬으로 지정할 수 없습니다.";
+        return false;
+    }
     if (!LuxEngine::SceneManager().Load(target, error))
         return false;
     if (relative == scene_)

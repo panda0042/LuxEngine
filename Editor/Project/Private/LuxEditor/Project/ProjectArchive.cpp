@@ -100,12 +100,6 @@ std::string ToLowerAscii(std::string_view s) {
     return out;
 }
 
-bool IsExcludedProjectEntry(std::string_view name) {
-    const auto lower = ToLowerAscii(name);
-    return lower == ".lux" || lower == ".git" || lower == "build" || lower == "out" ||
-           lower.starts_with("cmake-build");
-}
-
 std::string MetadataName(std::string name) {
 #ifdef _WIN32
     return ToLowerAscii(name);
@@ -558,8 +552,8 @@ static bool WriteProjectArchive(const EditorProject& project, const std::filesys
     for (; !ec && iterator != end; iterator.increment(ec)) {
         const auto relative = iterator->path().lexically_relative(root);
         const auto first = relative.empty() ? std::string{} : PathUtf8(*relative.begin());
-        if (first.empty() || IsExcludedProjectEntry(first) || iterator->path() == archive ||
-            iterator->path() == temporary) {
+        if (first.empty() || IsExcludedProjectPath(*relative.begin()) ||
+            iterator->path() == archive || iterator->path() == temporary) {
             if (iterator->is_directory(ec))
                 iterator.disable_recursion_pending();
             continue;
@@ -911,7 +905,7 @@ bool RestoreProjectBackup(const EditorProject& project, const std::filesystem::p
              it.increment(ec)) {
             const auto name = PathUtf8(it->path().filename());
             const auto metadataName = MetadataName(name);
-            if (projectRoot ? metadataName != ".lux" && IsExcludedProjectEntry(name)
+            if (projectRoot ? metadataName != ".lux" && IsExcludedProjectPath(it->path().filename())
                             : metadataName != "backups" && metadataName != "autosave" &&
                                   !metadataName.starts_with("pre-restore-autosave-"))
                 preserve.push_back(directory / it->path().filename());

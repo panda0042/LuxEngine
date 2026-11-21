@@ -47,6 +47,7 @@ struct AnimationSample {
     std::string field{};
     std::array<double, 4> value;
     std::optional<AnimationSpriteSheet> spriteSheet{};
+    bool rootMotionPosition = false;
 };
 
 struct AnimationPlayback {
