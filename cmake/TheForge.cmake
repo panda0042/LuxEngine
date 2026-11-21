@@ -102,6 +102,21 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 else()
     message(FATAL_ERROR "The Forge renderer supports Windows, Linux and macOS.")
 endif()
+
+if(NOT APPLE)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LUX_FORGE_GPU_DATA}")
+    file(READ "${LUX_FORGE_GPU_DATA}" _forge_pc_gpu_data)
+    if(NOT _forge_pc_gpu_data MATCHES "(^|[\r\n])[ \t]*0[xX]10[dD][eE][ \t]*;[ \t]*0[xX]2[fF]04[ \t]*;")
+        if(NOT _forge_pc_gpu_data MATCHES "\nEND_GPU_LIST;")
+            message(FATAL_ERROR "The Forge PC GPU database is missing END_GPU_LIST.")
+        endif()
+        string(REPLACE "\nEND_GPU_LIST;"
+            "\n0x10DE; 0x2F04; high; #NVIDIA; NVIDIA GeForce RTX 5070\nEND_GPU_LIST;"
+            _forge_pc_gpu_data "${_forge_pc_gpu_data}")
+    endif()
+    set(LUX_FORGE_GPU_DATA "${LUX_FORGE_CONFIG_DIR}/pc_gpu.data")
+    file(CONFIGURE OUTPUT "${LUX_FORGE_GPU_DATA}" CONTENT "${_forge_pc_gpu_data}" @ONLY NEWLINE_STYLE LF)
+endif()
 # The pinned resource loader transitions raw textures on its copy queue. New Vulkan
 # validation rejects shader access barriers on a transfer-only queue. Use a graphics-capable
 # upload queue for this renderer; keep the external checkout untouched.
@@ -224,11 +239,14 @@ add_custom_command(OUTPUT "${LUX_FORGE_SHADER_STAMP}"
     COMMAND ${CMAKE_COMMAND} -E touch "${LUX_FORGE_SHADER_STAMP}"
     DEPENDS ${LUX_FORGE_SHADER_SOURCES} VERBATIM)
 add_custom_target(LuxForgeShaders DEPENDS "${LUX_FORGE_SHADER_STAMP}")
-add_dependencies(LuxForge LuxForgeShaders)
+add_custom_target(LuxForgeGpuData
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:LuxForge>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${LUX_FORGE_GPU_DATA}" "$<TARGET_FILE_DIR:LuxForge>/gpu.data"
+    DEPENDS "${LUX_FORGE_GPU_DATA}" VERBATIM)
+add_dependencies(LuxForge LuxForgeShaders LuxForgeGpuData)
 add_custom_command(TARGET LuxForge POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/forge/shaders/bin/${LUX_FORGE_SHADER_TARGET}"
         "$<TARGET_FILE_DIR:LuxForge>/${LUX_FORGE_SHADER_TARGET}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${LUX_FORGE_GPU_DATA}" "$<TARGET_FILE_DIR:LuxForge>/gpu.data"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Engine/Renderer/Private/Forge/gpu.cfg" "$<TARGET_FILE_DIR:LuxForge>/gpu.cfg")
 install(TARGETS LuxForge RUNTIME DESTINATION bin LIBRARY DESTINATION bin)
