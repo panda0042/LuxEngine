@@ -496,6 +496,11 @@ bool EditorProject::UpdateSettings(const ProjectSettings& settings, std::string&
         error = "프로젝트 설정 값이 올바르지 않습니다.";
         return false;
     }
+    if (IsExcludedProjectPath(settings.icon.lexically_normal())) {
+        error =
+            "백업과 내보내기에서 제외하는 폴더의 이미지는 프로젝트 아이콘으로 지정할 수 없습니다.";
+        return false;
+    }
     std::error_code ec;
     if (!settings.icon.empty() &&
         !std::filesystem::is_regular_file(file_.parent_path() / settings.icon, ec)) {

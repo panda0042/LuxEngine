@@ -478,8 +478,9 @@ bool ExtractArchive(const std::filesystem::path& archive, const std::filesystem:
     return true;
 }
 
-bool StageArchive(const std::filesystem::path& archive, const std::filesystem::path& staging,
-                  std::string& error) {
+std::optional<EditorProject> StageArchive(const std::filesystem::path& archive,
+                                          const std::filesystem::path& staging,
+                                          std::string& error) {
     std::error_code ec;
     std::filesystem::create_directories(staging.parent_path(), ec);
     bool created = false;
@@ -490,11 +491,12 @@ bool StageArchive(const std::filesystem::path& archive, const std::filesystem::p
             error = "프로젝트 임시 폴더를 만들 수 없습니다.";
         if (created)
             std::filesystem::remove_all(staging, ec);
-        return false;
+        return std::nullopt;
     }
-    if (!EditorProject::Open(staging / EditorProject::FileName, error)) {
+    auto project = EditorProject::Open(staging / EditorProject::FileName, error);
+    if (!project || !ValidateProjectStartupReferences(*project, error)) {
         std::filesystem::remove_all(staging, ec);
-        return false;
+        return std::nullopt;
     }
     // Older packages omitted empty directories. Restore the standard project layout too.
     for (const auto* directory : {"Assets", "Scenes"}) {
@@ -502,8 +504,24 @@ bool StageArchive(const std::filesystem::path& archive, const std::filesystem::p
         if (ec) {
             error = "프로젝트 기본 폴더를 만들 수 없습니다: " + std::string(directory);
             std::filesystem::remove_all(staging, ec);
-            return false;
+            return std::nullopt;
         }
+    }
+    return project;
+}
+
+bool ValidateArchiveIcon(const EditorProject& project, std::string& error) {
+    const auto& icon = project.GetIcon();
+    if (icon.empty())
+        return true;
+    if (IsExcludedProjectPath(icon.lexically_normal())) {
+        error = "프로젝트 아이콘이 백업과 내보내기에서 제외되는 폴더에 있습니다.";
+        return false;
+    }
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(project.GetFile().parent_path() / icon, ec)) {
+        error = "프로젝트 아이콘 파일을 찾을 수 없습니다.";
+        return false;
     }
     return true;
 }
@@ -713,6 +731,8 @@ static bool WriteProjectArchive(const EditorProject& project, const std::filesys
 
 bool ExportProject(const EditorProject& project, const std::filesystem::path& archive,
                    std::string& error) {
+    if (!ValidateArchiveIcon(project, error))
+        return false;
     const auto root = project.GetFile().parent_path();
     std::filesystem::path bundleDirectory;
     BundledImages bundled;
@@ -815,7 +835,7 @@ bool CreateProjectBackup(const EditorProject& project, std::filesystem::path& ba
                          std::string& error) {
     error.clear();
     backup.clear();
-    if (!ValidateProjectStartupReferences(project, error))
+    if (!ValidateArchiveIcon(project, error) || !ValidateProjectStartupReferences(project, error))
         return false;
     const auto metadata = project.GetFile().parent_path() / ".lux";
     const auto directory = metadata / "backups";
@@ -836,14 +856,10 @@ bool RestoreProjectBackup(const EditorProject& project, const std::filesystem::p
     error.clear();
     const auto root = project.GetFile().parent_path();
     const auto staging = TemporarySibling(root);
-    if (!StageArchive(backup, staging, error))
+    const auto staged = StageArchive(backup, staging, error);
+    if (!staged)
         return false;
     std::error_code ec;
-    const auto staged = EditorProject::Open(staging / EditorProject::FileName, error);
-    if (!staged || !ValidateProjectStartupReferences(*staged, error)) {
-        std::filesystem::remove_all(staging, ec);
-        return false;
-    }
     // Keep the caller's manifest path valid when restoring an older .luxproj project.
     if (project.GetFile().filename() != EditorProject::FileName) {
         std::filesystem::rename(staging / EditorProject::FileName,

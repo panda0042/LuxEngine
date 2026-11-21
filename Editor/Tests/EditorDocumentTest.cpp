@@ -1149,6 +1149,105 @@ void TestExcludedStartScene() {
           "a legacy project can select a valid start scene");
 }
 
+void TestExcludedProjectIcon() {
+    using namespace LuxEditor;
+    namespace fs = std::filesystem;
+    TempDirectory files;
+    std::string error;
+    const auto root = files.path / "project";
+    auto project = EditorProject::Create(root, "Icon paths", ProjectTemplate::Empty, error);
+    Check(bool(project), "icon path fixture creates");
+    const auto excluded = fs::path("Out") / "Project.png";
+    fs::create_directories(root / excluded.parent_path());
+    LuxUI::Image image(16, 16, LuxUI::Image::Format_RGBA8888);
+    image.fill(LuxUI::Color(30, 60, 90));
+    const auto iconPath = root / excluded;
+    Check(image.save(LuxUI::String::fromUtf8(PathUtf8(iconPath))), "excluded icon fixture saves");
+    auto settings = project->GetSettings();
+    settings.icon = excluded;
+    Check(!project->UpdateSettings(settings, error) && project->GetIcon().empty(),
+          "new settings cannot save an icon that will be excluded from an archive");
+    Check(project->SetIcon(iconPath, error) && project->GetIcon().parent_path() == "Assets",
+          "icon selection copies the image into an included project folder");
+    const auto icon = project->GetIcon();
+    const auto archive = files.path / "project.luxpack";
+    fs::path validBackup;
+    Check(CreateProjectBackup(*project, validBackup, error) &&
+              ExportProject(*project, archive, error),
+          "an included icon can be backed up and exported");
+
+    nlohmann::json descriptor;
+    {
+        std::ifstream input(project->GetFile());
+        input >> descriptor;
+    }
+    descriptor["settings"]["icon"] = GenericPathUtf8(excluded);
+    std::ofstream(project->GetFile()) << descriptor;
+    const auto legacy = EditorProject::Open(project->GetFile(), error);
+    Check(legacy && legacy->GetIcon() == excluded, "older manifests still open for repair");
+    fs::path invalidBackup;
+    Check(!CreateProjectBackup(*legacy, invalidBackup, error) && invalidBackup.empty() &&
+              !error.empty(),
+          "a previously excluded icon cannot produce an unusable backup");
+    Check(!ExportProject(*legacy, archive, error) && !error.empty(),
+          "a previously excluded icon cannot replace a readable archive");
+    const auto imported = ImportProject(archive, files.path / "imported", error);
+    Check(imported && imported->GetIcon() == icon, "the previous export retains its valid icon");
+    Check(RestoreProjectBackup(*legacy, validBackup, error),
+          "restoring a valid backup can repair an older project");
+    const auto restored = EditorProject::Open(project->GetFile(), error);
+    Check(restored && restored->GetIcon() == icon && fs::is_regular_file(root / icon),
+          "the restored manifest and icon are usable");
+    fs::remove(root / icon);
+    Check(!CreateProjectBackup(*restored, invalidBackup, error) && invalidBackup.empty() &&
+              !ExportProject(*restored, archive, error),
+          "deleting an icon before archiving reports a failure");
+}
+
+void TestMissingNestedSceneImport() {
+    using namespace LuxEditor;
+    using namespace LuxEngine;
+    namespace fs = std::filesystem;
+    TempDirectory files;
+    std::string error;
+    const auto root = files.path / "project";
+    auto project = EditorProject::Create(root, "Nested scenes", ProjectTemplate::Empty, error);
+    Check(bool(project), "import path fixture creates");
+    const auto leafFile = root / "Scenes/Nested.lux";
+    Scene leaf, start;
+    leaf.CreateEntity("Nested object");
+    Check(leaf.Serialize(PathUtf8(leafFile)), "import fixture nested scene saves");
+    SceneManager manager;
+    const auto reference =
+        manager.AddSceneInstance(start, leafFile, SceneReferenceMode::Nested, error);
+    Check(reference != 0, "import fixture contains a nested reference");
+    for (const bool unloaded : {false, true}) {
+        if (unloaded)
+            Check(manager.ConfigureStreaming(start, reference, {0, 0}, 2, 4, error) &&
+                      manager.UnloadInstance(start, reference, error),
+                  "import fixture can defer its nested scene until streaming");
+        Check(SceneManager::Save(start, project->GetSceneFile(), {}, error),
+              "starting scene and reference save");
+        const auto archive = files.path / (unloaded ? "streaming.luxpack" : "nested.luxpack");
+        Check(ExportProject(*project, archive, error), "complete archive exports");
+        const auto completeDir = files.path / (unloaded ? "complete-stream" : "complete");
+        const auto complete = ImportProject(archive, completeDir, error);
+        Check(complete && bool(manager.Load(complete->GetSceneFile(), error)),
+              "a complete package imports and its startup scene opens");
+        int zipError = 0;
+        auto* zip = zip_open(PathUtf8(archive).c_str(), 0, &zipError);
+        Check(zip != nullptr, "test archive opens for editing");
+        const auto entry = zip_name_locate(zip, "Scenes/Nested.lux", 0);
+        Check(entry >= 0 && zip_delete(zip, static_cast<zip_uint64_t>(entry)) == 0 &&
+                  zip_close(zip) == 0,
+              "test archive deliberately omits the required scene");
+        const auto incompleteDir = files.path / (unloaded ? "incomplete-stream" : "incomplete");
+        Check(!ImportProject(archive, incompleteDir, error) && !fs::exists(incompleteDir) &&
+                  error.find("Nested.lux") != std::string::npos,
+              "import rejects a missing reference before creating a destination project");
+    }
+}
+
 void TestCustomProjectManifest() {
     using namespace LuxEditor;
     namespace fs = std::filesystem;
@@ -1309,6 +1408,8 @@ int main(int argc, char** argv) {
         TestBackupRetentionAfterRestore();
         TestBackupValidationAndLocalFiles();
         TestExcludedStartScene();
+        TestExcludedProjectIcon();
+        TestMissingNestedSceneImport();
         TestCustomProjectManifest();
         TestIcnsImagePayload();
         TestPortableAnimationArchive();
