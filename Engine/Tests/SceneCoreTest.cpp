@@ -120,6 +120,25 @@ void SavePathSafety() {
     Check(originalPath == "Art/Badge.png" && fs::equivalent(source.ResolveAssetPath(originalPath),
                                                             target.ResolveAssetPath(importedPath)),
           "import preserves the original texture without rewriting the source scene");
+
+    struct RestoreWorkingDirectory {
+        fs::path previous = fs::current_path();
+
+        ~RestoreWorkingDirectory() {
+            std::error_code error;
+            fs::current_path(previous, error);
+        }
+    } workingDirectory;
+
+    fs::current_path(sourceFolder);
+    source.SetSourcePath({});
+    const auto importedFromUnsaved = target.ImportEntities(source, {sourceId});
+    Check(importedFromUnsaved.contains(sourceId), "import from an unsaved scene succeeds");
+    const auto& unsavedTexture =
+        target.GetComponent<SpriteRendererComponent>(importedFromUnsaved.at(sourceId)).texturePath;
+    Check(fs::equivalent(source.ResolveAssetPath(originalPath),
+                         target.ResolveAssetPath(unsavedTexture)),
+          "import from an unsaved scene preserves assets relative to the working directory");
 }
 
 void MeshAssetMetadata() {

@@ -19,15 +19,6 @@ fs::path Path(const std::string& text) {
     return fs::path(std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size()));
 }
 
-std::unique_ptr<Scene> Clone(Scene& source) {
-    std::string data;
-    auto result = std::make_unique<Scene>();
-    if (!source.SerializeToString(data) || !result->DeserializeFromString(data))
-        throw std::runtime_error("프리팹 편집을 위한 씬 상태를 복사할 수 없습니다.");
-    result->SetSourcePath(source.GetSourcePath());
-    return result;
-}
-
 fs::path ValidatePath(const fs::path& requested, const Scene* owner = nullptr) {
     if (!PrefabLibrary::IsPrefabPath(requested) ||
         requested.native().find(fs::path::value_type{}) != fs::path::string_type::npos)
@@ -95,7 +86,7 @@ bool PrefabLibrary::Save(Scene& source, uint32 root, const fs::path& requested,
         std::unique_ptr<Scene> staged;
         if (const auto* reference = source.TryGetComponent<SceneReferenceComponent>(root);
             reference && IsPrefabPath(Path(reference->path)) && !reference->loaded) {
-            staged = Clone(source);
+            staged = SceneManager::CloneForComposition(source);
             Materialize(*staged, root);
         }
         Scene asset;
@@ -173,7 +164,7 @@ bool PrefabLibrary::Unpack(Scene& target, uint32 root, std::string& error) {
     error.clear();
     try {
         SourcePath(target, root);
-        auto staged = Clone(target);
+        auto staged = SceneManager::CloneForComposition(target);
         Materialize(*staged, root);
         staged->RemoveComponent<SceneReferenceComponent>(root);
         for (const auto id : staged->GetComponentEntityIds<InstanceSourceComponent>())

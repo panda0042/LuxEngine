@@ -836,7 +836,7 @@ void MutedEvents(const std::filesystem::path& root) {
     const auto path = (root / "event-boundary.luxanim").string();
     Check(clip.Save(path, error), error.c_str());
     for (const double weight : {0., .000001, 1.})
-        for (const double dt : {0., 1. / 60, .2})
+        for (const double dt : {0., 1. / 60, .1, .2})
             for (const bool emit : {false, true}) {
                 auto controller = CreateRef<AnimatorController>();
                 AnimatorLayer layer;
@@ -851,6 +851,13 @@ void MutedEvents(const std::filesystem::path& root) {
                 Check(frame.events.size() == expected,
                       "start and interval events obey the same layer weight and emit policy");
                 Check(player.Update(0, emit).events.empty(), "start event is not repeated");
+                if (!emit) {
+                    const auto resumed = player.Update(0, true);
+                    const size_t expectedStart = dt == 0 && weight > 0 ? 1 : 0;
+                    Check(resumed.events.size() == expectedStart &&
+                              (resumed.events.empty() || resumed.events.front().name == "Start"),
+                          "silent progress cannot replay an event when emission resumes");
+                }
             }
 }
 

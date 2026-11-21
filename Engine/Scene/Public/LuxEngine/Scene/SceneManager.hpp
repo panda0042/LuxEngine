@@ -61,6 +61,7 @@ public:
 private:
     friend class Scene;
     friend class PrefabLibrary;
+    static std::unique_ptr<Scene> CloneForComposition(Scene& source);
     static void RebaseImportedEntityPaths(Scene& target, uint32 entity,
                                           const std::string& sourcePath);
     static void RebaseSuspended(Scene& target, SceneReferenceComponent& reference, uint32 root,
