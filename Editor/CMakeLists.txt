@@ -273,6 +273,9 @@ if(LUX_BUILD_TESTS)
     add_test(NAME Editor_document COMMAND LuxEditorDocumentTests)
     add_test(NAME Editor_archive_limits COMMAND LuxEditorDocumentTests archive-limits)
     set_tests_properties(Editor_archive_limits PROPERTIES TIMEOUT 180 LABELS "headless;editor")
+    add_test(NAME Editor_content_formats
+        COMMAND LuxEditorDocumentTests content-formats "${CMAKE_COMMAND}")
+    set_tests_properties(Editor_content_formats PROPERTIES TIMEOUT 60 LABELS "headless;editor;assets")
     add_executable(LuxEditorBuildTests
         Build/Private/LuxEditor/Build/ProjectBuild.cpp
         Project/Private/LuxEditor/Project/PathEncoding.cpp

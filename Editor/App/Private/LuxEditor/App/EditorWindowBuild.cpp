@@ -1,6 +1,7 @@
 #include <LuxEditor/App/EditorWindow.hpp>
 #include <LuxEditor/Build/BuildOutput.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
+#include <LuxEditor/Project/ProjectTemplates.hpp>
 #include <LuxEditor/Scene/SceneDependencies.hpp>
 #include <LuxEditor/Scripting/ScriptWorkspace.hpp>
 #include <LuxUI/Widgets.hpp>
@@ -86,6 +87,10 @@ void EditorWindow::StartBuild(BuildConfiguration configuration, bool clean,
     auto plan = PlanBuild(project_->GetFile().parent_path(), configuration, tools, GameExecutable,
                           error, project_->GetFile());
     if (!plan) {
+        ShowError(LUX_UI_TEXT("빌드"), LuxUI::String::fromUtf8(error));
+        return;
+    }
+    if (!UpgradeTemplateContentSync(plan->projectDirectory, error)) {
         ShowError(LUX_UI_TEXT("빌드"), LuxUI::String::fromUtf8(error));
         return;
     }

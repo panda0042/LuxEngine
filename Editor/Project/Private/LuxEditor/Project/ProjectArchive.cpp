@@ -762,8 +762,13 @@ std::optional<EditorProject> ImportProject(const std::filesystem::path& archive,
         return std::nullopt;
     }
     const auto staging = TemporarySibling(destination);
-    if (!StageArchive(archive, staging, error))
+    const auto staged = StageArchive(archive, staging, error);
+    if (!staged)
         return std::nullopt;
+    if (!ValidateProjectScenes(*staged, error)) {
+        std::filesystem::remove_all(staging, ec);
+        return std::nullopt;
+    }
     RenameProjectPath(staging, destination, ec);
     if (ec) {
         error = "프로젝트 폴더를 최종 위치로 옮기지 못했습니다.";
