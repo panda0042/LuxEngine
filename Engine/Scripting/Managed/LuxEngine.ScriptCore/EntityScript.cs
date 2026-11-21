@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 namespace LuxEngine {
 
 [StructLayout(LayoutKind.Sequential)]
+/// <summary>A three-component vector with double-precision coordinates.</summary>
 public struct Vector3d {
     public double X, Y, Z;
 
@@ -35,12 +36,15 @@ public struct Vector3d {
 }
 
 [StructLayout(LayoutKind.Sequential)]
+/// <summary>A snapshot of an entity’s local transform relative to its parent.</summary>
 public struct Transform {
     public Vector3d Position;
+    /// <summary>Local Euler angles in radians.</summary>
     public Vector3d Rotation;
     public Vector3d Scale;
 }
 
+/// <summary>A handle to an entity in the running scene.</summary>
 public sealed class Entity {
     private readonly ulong world;
     public uint Id { get; }
@@ -50,17 +54,44 @@ public sealed class Entity {
         Id = id;
     }
 
+    /// <summary>Whether the referenced entity still exists in its scene.</summary>
     public bool IsValid {
         get { return NativeBridge.IsAlive(world, Id); }
+    }
+
+    /// <summary>Gets a handle to the sprite renderer on this entity.</summary>
+    public SpriteRenderer SpriteRenderer {
+        get { return new SpriteRenderer(world, Id); }
     }
 
     public Animator Animator {
         get { return new Animator(world, Id); }
     }
 
+    /// <summary>Gets or replaces the local transform. Assign a modified snapshot back to save changes.</summary>
     public Transform Transform {
         get { return NativeBridge.GetTransform(world, Id); }
         set { NativeBridge.SetTransform(world, Id, value); }
+    }
+}
+
+/// <summary>Controls the sprite renderer attached to an entity.</summary>
+public sealed class SpriteRenderer {
+    private readonly ulong world;
+    private readonly uint entity;
+
+    internal SpriteRenderer(ulong world, uint entity) {
+        this.world = world;
+        this.entity = entity;
+    }
+
+    /// <summary>Gets or sets the sprite's RGBA tint. Values from 0 to 1 represent normal channels.</summary>
+    /// <exception cref="System.InvalidOperationException">
+    /// The component is unavailable, the call is off the scene thread, or a channel is not finite.
+    /// </exception>
+    public Vector4 Color {
+        get { return NativeBridge.GetSpriteColor(world, entity); }
+        set { NativeBridge.SetSpriteColor(world, entity, value); }
     }
 }
 
@@ -111,19 +142,25 @@ public sealed class Animator {
     }
 }
 
+/// <summary>Base class for game scripts attached to entities.</summary>
 public abstract class EntityScript {
     public Entity Entity { get; internal set; } = null!;
 
+    /// <summary>Called once after authored fields are applied to this instance.</summary>
     protected virtual void OnCreate() {}
 
+    /// <summary>Called when the scene updates this script.</summary>
+    /// <param name="deltaTime">Elapsed time in seconds.</param>
     protected virtual void OnUpdate(double deltaTime) {}
 
+    /// <summary>Called when the engine releases this script instance.</summary>
     protected virtual void OnDestroy() {}
 
     internal void Create() {
         OnCreate();
     }
 
+    /// <summary>Called when the entity’s Animator delivers an event.</summary>
     protected virtual void OnAnimationEvent(string name, string payload) {}
 
     internal void AnimationEvent(string name, string payload) {
@@ -140,6 +177,7 @@ public abstract class EntityScript {
 }
 
 public static class Input {
+    /// <summary>Returns whether the specified key is currently held.</summary>
     public static bool IsKeyPressed(LuxKey key) {
         return NativeBridge.IsKeyPressed((int)key);
     }

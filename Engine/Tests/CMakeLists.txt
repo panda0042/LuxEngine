@@ -150,8 +150,20 @@ add_custom_command(OUTPUT "${_lux_test_scripts}/Scripts.dll"
         -p:NuGetAudit=false
     DEPENDS LuxScriptCore Scripting/Scripts.csproj Scripting/Scripts.cs VERBATIM)
 add_custom_target(LuxTestScripts DEPENDS "${_lux_test_scripts}/Scripts.dll")
-add_dependencies(LuxScriptRuntimeTests LuxTestScripts)
-add_test(NAME Engine_csharp COMMAND LuxScriptRuntimeTests "${_lux_test_scripts}/Scripts.dll")
+set(_lux_first_game "${CMAKE_SOURCE_DIR}/samples/FirstCSharpGame")
+add_custom_command(OUTPUT "${_lux_test_scripts}/first-game/GameScripts.dll"
+    COMMAND "${LUX_DOTNET_EXECUTABLE}" build "${_lux_first_game}/Scripts/GameScripts.csproj"
+        --configuration Release --output "${_lux_test_scripts}/first-game"
+        --artifacts-path "${CMAKE_BINARY_DIR}/first-game-script-artifacts"
+        "-p:LuxEngineScriptCore=${LUX_MANAGED_OUTPUT}/LuxEngine.ScriptCore.dll"
+        "-p:RestoreConfigFile=${CMAKE_SOURCE_DIR}/Engine/Scripting/Managed/NuGet.Config"
+        -p:NuGetAudit=false
+    DEPENDS LuxScriptCore "${_lux_first_game}/Scripts/GameScripts.csproj"
+        "${_lux_first_game}/Scripts/BeaconRun.cs" VERBATIM)
+add_custom_target(LuxFirstGameScripts DEPENDS "${_lux_test_scripts}/first-game/GameScripts.dll")
+add_dependencies(LuxScriptRuntimeTests LuxTestScripts LuxFirstGameScripts)
+add_test(NAME Engine_csharp COMMAND LuxScriptRuntimeTests "${_lux_test_scripts}/Scripts.dll"
+    "${_lux_test_scripts}/first-game/GameScripts.dll" "${_lux_first_game}/Scene.lux")
 set_tests_properties(Engine_csharp PROPERTIES LABELS "headless;scripting" TIMEOUT 60
     ENVIRONMENT "DOTNET_ROOT=${LUX_DOTNET_ROOT};DOTNET_ROOT_X64=${LUX_DOTNET_ROOT}")
 
