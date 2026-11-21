@@ -238,10 +238,19 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
         }
     }
     auto rootDelta = frame.rootDelta;
-    if (rootMotion && rootDelta)
+    if (rootMotion && rootDelta) {
+        bool allBindingsMissing = !frame.childRootMotion.empty();
         for (const auto& sample : frame.childRootMotion) {
             const auto target = bindings.Resolve(owner, sample.target);
-            if (!target || target == owner)
+            if (!target || !HasComponent<TransformComponent>(target)) {
+                if (sample.modelBinding)
+                    allBindingsMissing = false;
+                else
+                    *rootDelta = *rootDelta - sample.delta;
+                continue;
+            }
+            allBindingsMissing = false;
+            if (target == owner)
                 continue;
             auto delta = sample.delta;
             for (auto parent = GetParent(target); parent && parent != owner;
@@ -250,6 +259,9 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
                     delta = transform->GetTransform().TransformDirection(delta);
             *rootDelta += delta - sample.delta;
         }
+        if (allBindingsMissing && rootDelta->x == 0 && rootDelta->y == 0 && rootDelta->z == 0)
+            rootDelta.reset();
+    }
     if (frame.models.empty()) {
         if (rootDelta)
             applyMotion(*rootDelta);
@@ -461,7 +473,8 @@ void Scene::UpdateAnimations(double dt, bool emitEvents, RootMotionDeltas* physi
         AnimationFrame frame;
         frame.rootDelta = clip.RootDelta(playback.previousCursor, playback.cursor);
         if (frame.rootDelta && !clip.rootMotionTarget.empty())
-            frame.childRootMotion.push_back({clip.rootMotionTarget, *frame.rootDelta});
+            frame.childRootMotion.push_back(
+                {clip.rootMotionTarget, *frame.rootDelta, !clip.modelPath.empty()});
         frame.samples = clip.SampleTracks(playback.cursor);
         frame.spriteSheet = clip.spriteSheet;
         frame.spriteColumns = clip.spriteColumns;

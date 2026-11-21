@@ -115,6 +115,31 @@ public sealed class LiveFields : EntityScript {
     }
 }
 
+public sealed class AnimatorPlayProbe : EntityScript {
+    public string State = "";
+
+    protected override void OnCreate() {
+        Entity.Animator.Pause();
+        if (State.Length == 0)
+            return;
+        var result = Entity.Animator.Play(State, 0);
+        Transform value = Entity.Transform;
+        value.Position.Z = result ? 1 : -1;
+        Entity.Transform = value;
+    }
+}
+
+public sealed class AnimationQueueProbe : EntityScript {
+    protected override void OnAnimationEvent(string name, string payload) {
+        Transform value = Entity.Transform;
+        if (name == "clip")
+            value.Position.X += 1;
+        else if (name == "step")
+            value.Position.Y += 1;
+        Entity.Transform = value;
+    }
+}
+
 public sealed class DebugProbe : EntityScript {
     public int Counter = 0;
 

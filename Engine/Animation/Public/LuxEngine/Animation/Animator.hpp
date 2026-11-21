@@ -84,6 +84,7 @@ struct AnimationFrame {
     struct RootMotionSample {
         std::string target;
         Vec3 delta;
+        bool modelBinding = false;
     };
 
     std::vector<RootMotionSample> childRootMotion{};

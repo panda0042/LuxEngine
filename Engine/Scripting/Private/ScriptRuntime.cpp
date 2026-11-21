@@ -135,8 +135,10 @@ double LUX_SCRIPT_CALL AnimationCommand(uint64 id, uint32 entity, int operation,
         const std::string name(text ? text : "", static_cast<size_t>(length));
         switch (operation) {
         case 0:
+            if (!component->player->Play(name, value))
+                return 0;
             component->playing = true;
-            return component->player->Play(name, value) ? 1 : 0;
+            return 1;
         case 1:
             return component->player->SetParameter(name, value) ? 1 : 0;
         case 2:
@@ -167,11 +169,13 @@ int LUX_SCRIPT_CALL AnimationEventNext(uint64 id, uint32 entity, char* destinati
         if (!world)
             return 0;
         std::vector<AnimationEvent>* events = nullptr;
-        if (auto* component = world->scene->TryGetComponent<AnimatorComponent>(entity))
-            events = &component->pendingEvents;
-        else if (auto* component = world->scene->TryGetComponent<AnimationComponent>(entity))
-            events = &component->pendingEvents;
-        if (!events || events->empty())
+        if (auto* animator = world->scene->TryGetComponent<AnimatorComponent>(entity);
+            animator && !animator->pendingEvents.empty())
+            events = &animator->pendingEvents;
+        else if (auto* animation = world->scene->TryGetComponent<AnimationComponent>(entity);
+                 animation && !animation->pendingEvents.empty())
+            events = &animation->pendingEvents;
+        if (!events)
             return 0;
         const auto& event = events->front();
         const auto json = nlohmann::json{{"name", event.name}, {"payload", event.payload}}.dump();
