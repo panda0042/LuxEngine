@@ -164,7 +164,8 @@ struct AnimatorPlayer::Impl {
     }
 
     AnimationFrame Sample(const Sources& sources, const AnimationPlayback& playback,
-                          double referenceDuration, const std::vector<std::string>& mask) {
+                          double referenceDuration, const std::vector<std::string>& mask,
+                          bool extractRootMotion) {
         AnimationFrame frame;
         double accumulated = 0;
         for (const auto& [clip, weight] : sources) {
@@ -177,6 +178,10 @@ struct AnimatorPlayer::Impl {
                         playback.previousCursor * clip->duration / referenceDuration, cursor))
                     frame.rootDelta = frame.rootDelta.value_or(Vec3{}) + *delta * weight;
             part.samples = clip->SampleTracks(cursor);
+            if (extractRootMotion)
+                std::erase_if(part.samples, [](const AnimationSample& sample) {
+                    return sample.rootMotionPosition;
+                });
             part.spriteSheet = clip->spriteSheet;
             part.spriteColumns = clip->spriteColumns;
             part.spriteRows = clip->spriteRows;
@@ -386,11 +391,11 @@ double AnimatorPlayer::GetDuration(size_t layer) const {
 }
 
 AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents) {
-    return Update(dt, emitEvents, {});
+    return Update(dt, emitEvents, {}, false);
 }
 
 AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
-                                      const PropertyReader& readProperty) {
+                                      const PropertyReader& readProperty, bool extractRootMotion) {
     AnimationFrame result;
     if (!impl_->controller || !std::isfinite(dt) || dt < 0)
         return result;
@@ -450,7 +455,8 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
             }
         } else
             runtime.playback.previousCursor = runtime.playback.cursor;
-        auto frame = impl_->Sample(sources, runtime.playback, clip->duration, layer.mask);
+        auto frame =
+            impl_->Sample(sources, runtime.playback, clip->duration, layer.mask, extractRootMotion);
         if (runtime.fade > 0 && runtime.elapsed < runtime.fade) {
             if (impl_->playing) {
                 runtime.elapsed += dt;
@@ -462,9 +468,9 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
                 runtime.previousPlayback.previousCursor = runtime.previousPlayback.cursor;
             const double factor = std::clamp(runtime.elapsed / runtime.fade, 0.0, 1.0);
             const auto& previousState = layer.states[runtime.previous];
-            auto previous =
-                impl_->Sample(impl_->BlendSources(previousState), runtime.previousPlayback,
-                              impl_->Primary(previousState)->duration, layer.mask);
+            auto previous = impl_->Sample(
+                impl_->BlendSources(previousState), runtime.previousPlayback,
+                impl_->Primary(previousState)->duration, layer.mask, extractRootMotion);
             // Preserve the weighted model pose contributors for skeleton-space mixing.
             for (auto& model : previous.models)
                 model.weight *= 1 - factor;

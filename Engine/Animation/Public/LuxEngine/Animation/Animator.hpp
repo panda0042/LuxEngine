@@ -107,7 +107,8 @@ private:
     friend class Scene;
     using PropertyReader =
         std::function<std::optional<std::array<double, 4>>(const AnimationSample&)>;
-    AnimationFrame Update(double dt, bool emitEvents, const PropertyReader& readProperty);
+    AnimationFrame Update(double dt, bool emitEvents, const PropertyReader& readProperty,
+                          bool extractRootMotion);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
