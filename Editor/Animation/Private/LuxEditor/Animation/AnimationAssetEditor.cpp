@@ -1806,12 +1806,17 @@ void AnimationAssetEditor::Seek(double seconds) {
 }
 
 void AnimationAssetEditor::Play(bool playing) {
-    if (playing && (!impl_->target || impl_->SourceChanged(true)))
-        impl_->ResetPreview();
-    impl_->playback.playing = playing;
-    impl_->clock.restart();
-    if (impl_->animator)
-        impl_->animator->SetPlaying(playing);
+    auto& p = *impl_;
+    if (playing && (!p.target || p.SourceChanged(true)))
+        p.ResetPreview();
+    const auto& state = p.document.State();
+    if (playing && !p.playback.playing && !state.isController && p.playback.cursor == 0 &&
+        p.speed->value() < 0 && state.clip.GetWrap() == AnimationWrap::Once)
+        Seek(state.clip.duration);
+    p.playback.playing = playing;
+    p.clock.restart();
+    if (p.animator)
+        p.animator->SetPlaying(playing);
 }
 
 double AnimationAssetEditor::Time() const {

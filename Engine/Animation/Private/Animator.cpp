@@ -39,6 +39,16 @@ void Merge(AnimationFrame& destination, const AnimationFrame& source, double wei
             *destination.rootDelta += *source.rootDelta * weight;
         else
             *destination.rootDelta += (*source.rootDelta - *destination.rootDelta) * weight;
+        if (!additive) {
+            if (weight >= 1)
+                destination.childRootMotion.clear();
+            else
+                for (auto& contribution : destination.childRootMotion)
+                    contribution.delta = contribution.delta * (1 - weight);
+        }
+        for (const auto& contribution : source.childRootMotion)
+            destination.childRootMotion.push_back(
+                {contribution.target, contribution.delta * weight});
     }
     for (const auto& sample : source.samples) {
         const bool sprite = sample.property == AnimationProperty::SpriteFrame;
@@ -175,8 +185,12 @@ struct AnimatorPlayer::Impl {
             AnimationFrame part;
             if (MaskIncludes(mask, clip->rootMotionTarget))
                 if (const auto delta = clip->RootDelta(
-                        playback.previousCursor * clip->duration / referenceDuration, cursor))
-                    frame.rootDelta = frame.rootDelta.value_or(Vec3{}) + *delta * weight;
+                        playback.previousCursor * clip->duration / referenceDuration, cursor)) {
+                    const auto weighted = *delta * weight;
+                    frame.rootDelta = frame.rootDelta.value_or(Vec3{}) + weighted;
+                    if (!clip->rootMotionTarget.empty())
+                        frame.childRootMotion.push_back({clip->rootMotionTarget, weighted});
+                }
             part.samples = clip->SampleTracks(cursor);
             if (extractRootMotion)
                 std::erase_if(part.samples, [](const AnimationSample& sample) {
@@ -498,12 +512,9 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
                     previous.samples.push_back(std::move(startingSample));
                 }
             }
-            auto motion = std::optional<Vec3>{};
-            if (previous.rootDelta || frame.rootDelta)
-                motion = previous.rootDelta.value_or(Vec3{}) * (1 - factor) +
-                         frame.rootDelta.value_or(Vec3{}) * factor;
+            if (previous.rootDelta && !frame.rootDelta)
+                frame.rootDelta = Vec3{};
             Merge(previous, frame, factor);
-            previous.rootDelta = motion;
             if (factor >= 1)
                 runtime.fadeOrigins.clear();
 
