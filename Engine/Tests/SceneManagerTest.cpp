@@ -815,23 +815,49 @@ void TestLiveRuntimeState(const fs::path& directory) {
     Check(target.GetComponent<Rigidbody2DComponent>(bodyId).isGrounded,
           "runtime body rests on its original contact before composition");
     Check(target.GetCollisionEvents2D().empty(), "settled contacts do not emit fresh begin events");
-    const auto cursor = target.GetComponent<AnimationComponent>(actorId).currentTime;
+    std::string error;
+    const auto clipPath = Utf8(directory / "Scenes/Live.luxanim");
+    const auto controllerPath = Utf8(directory / "Scenes/Live.luxanimator");
+    Check(AnimationClip{}.Save(clipPath, error), "save live animation: " + error);
+    AnimatorController controller;
+    AnimatorLayer layer;
+    layer.entry = "Idle";
+    layer.states = {{"Idle", clipPath}, {"Running", clipPath}};
+    controller.layers = {layer};
+    controller.parameters = {{"Pace", AnimationParameterType::Float, 1}};
+    Check(controller.Save(controllerPath, error), "save live controller: " + error);
+    const auto animatorId = target.CreateEntity("animator").GetId();
+    target.AddComponent<AnimatorComponent>(animatorId).controllerPath = controllerPath;
+    target.UpdateAnimations(0);
+    auto player = target.GetComponent<AnimatorComponent>(animatorId).player;
+    Check(player && player->Play("Running") && player->SetParameter("Pace", 2) &&
+              player->SetSpeed(.5),
+          "animator accepts live state, parameter and speed changes");
+    target.UpdateAnimations(.25);
+    const auto animationCursor = target.GetComponent<AnimationComponent>(actorId).currentTime;
+    const auto animatorCursor = player->GetTime();
     Scene chunk;
     AddSprite(chunk, "new chunk", 50);
     const auto file = directory / "Scenes/live-chunk.lux";
     Save(chunk, file);
     SceneManager manager;
-    std::string error;
     const auto root = manager.AddSceneInstance(target, file, SceneReferenceMode::Additive, error);
     Check(root != 0, "live additive scene loads: " + error);
-    Check(target.GetComponent<AnimationComponent>(actorId).currentTime == cursor &&
+    Check(target.GetComponent<AnimationComponent>(actorId).currentTime == animationCursor &&
               target.GetComponent<Rigidbody2DComponent>(bodyId).isGrounded,
           "composition keeps unrelated animation cursors and grounded state");
+    auto currentPlayer = target.GetComponent<AnimatorComponent>(animatorId).player;
+    Check(currentPlayer && currentPlayer->GetState() == "Running" &&
+              currentPlayer->GetTime() == animatorCursor &&
+              currentPlayer->GetParameter("Pace") == 2 && currentPlayer->GetSpeed() == .5,
+          "composition keeps the active animator state, time, parameters and speed");
     target.OnUpdate(1.0 / 60);
     Check(target.GetCollisionEvents2D().empty(),
           "adding an unrelated scene preserves existing native physics contacts");
-    Check(target.GetComponent<AnimationComponent>(actorId).currentTime > cursor,
+    Check(target.GetComponent<AnimationComponent>(actorId).currentTime > animationCursor,
           "existing animation resumes rather than restarting after composition");
+    Check(currentPlayer->GetState() == "Running" && currentPlayer->GetTime() > animatorCursor,
+          "existing animator resumes without entering the default state");
     Check(manager.UnloadInstance(target, root, error), "live scene unloads");
     target.OnUpdate(1.0 / 60);
     Check(target.GetCollisionEvents2D().empty(),

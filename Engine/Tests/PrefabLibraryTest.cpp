@@ -192,11 +192,21 @@ void RoundTrip(const fs::path& directory) {
     Check(!PrefabLibrary::Instantiate(target, bundle / "wrong.lux", error),
           "Non-prefab paths must be rejected");
     const auto secondAuthored = Local(target, second, authoredId);
+    auto& animation = target.AddComponent<AnimationComponent>(externalTarget);
+    animation.clip.loop = false;
+    animation.clip.AddKeyframe({0, {0, 0, 0}, {}, {1, 1, 1}});
+    animation.clip.AddKeyframe({1, {8, 0, 0}, {}, {1, 1, 1}});
+    target.UpdateAnimations(.5);
     Check(PrefabLibrary::Unpack(target, second, error) &&
               !target.HasComponent<SceneReferenceComponent>(second) &&
               !PrefabLibrary::FindInstanceRoot(target, secondAuthored) &&
               target.IsAlive(secondAuthored),
           "Unpack must retain authored objects and remove their prefab connection");
+    Check(target.GetComponent<AnimationComponent>(externalTarget).currentTime == .5,
+          "Unpacking must keep an unrelated animation's playhead");
+    target.UpdateAnimations(.25);
+    Check(target.GetComponent<TransformComponent>(externalTarget).position.x == 6,
+          "Unrelated animation must continue advancing without a pose jump");
     Check(PrefabLibrary::Refresh(target, first, error), error);
     Check(SceneManager::Save(target, bundle / "main.lux", {}, error), error);
     const auto relocated = directory / "relocated";

@@ -60,24 +60,14 @@ bool SamePath(const fs::path& first, const fs::path& second) {
     return fs::equivalent(first, second, error) && !error;
 }
 
-std::shared_ptr<Scene> Clone(Scene& source) {
+std::unique_ptr<Scene> CloneAuthoredScene(Scene& source) {
     std::string data;
     if (!source.SerializeToString(data))
         throw std::runtime_error("씬 상태를 복사할 수 없습니다.");
-    auto result = std::make_shared<Scene>();
+    auto result = std::make_unique<Scene>();
     if (!result->DeserializeFromString(data))
         throw std::runtime_error("씬 상태를 복원할 수 없습니다.");
     result->SetSourcePath(source.GetSourcePath());
-    for (auto entity : source.GetEntities()) {
-        if (const auto* animation = entity.TryGetComponent<AnimationComponent>()) {
-            auto& copy = result->GetComponent<AnimationComponent>(entity.GetId());
-            copy.currentTime = animation->currentTime;
-            copy.playbackStarted = animation->playbackStarted;
-        }
-        if (const auto* body = entity.TryGetComponent<Rigidbody2DComponent>())
-            result->GetComponent<Rigidbody2DComponent>(entity.GetId()).isGrounded =
-                body->isGrounded;
-    }
     return result;
 }
 
@@ -416,7 +406,32 @@ void CheckSaveDependencies(Scene& scene, const fs::path& owner, std::vector<fs::
 
 void SceneManager::RebaseImportedEntityPaths(Scene& target, uint32 entity,
                                              const std::string& sourcePath) {
-    RewriteEntityPaths(Entity(entity, &target), Canonical(Path(sourcePath)), nullptr, 0);
+    const auto owner = sourcePath.empty() ? fs::path{} : Canonical(Path(sourcePath));
+    RewriteEntityPaths(Entity(entity, &target), owner, nullptr, 0);
+}
+
+std::unique_ptr<Scene> SceneManager::CloneForComposition(Scene& source) {
+    auto result = CloneAuthoredScene(source);
+    for (auto entity : source.GetEntities()) {
+        const auto id = entity.GetId();
+        if (const auto* animation = entity.TryGetComponent<AnimationComponent>()) {
+            auto& copy = result->GetComponent<AnimationComponent>(id);
+            copy.currentTime = animation->currentTime;
+            copy.playbackStarted = animation->playbackStarted;
+            copy.asset = animation->asset;
+            copy.loadedPath = animation->loadedPath;
+            copy.pendingEvents = animation->pendingEvents;
+        }
+        if (const auto* animator = entity.TryGetComponent<AnimatorComponent>()) {
+            auto& copy = result->GetComponent<AnimatorComponent>(id);
+            copy.player = animator->player;
+            copy.loadedPath = animator->loadedPath;
+            copy.pendingEvents = animator->pendingEvents;
+        }
+        if (const auto* body = entity.TryGetComponent<Rigidbody2DComponent>())
+            result->GetComponent<Rigidbody2DComponent>(id).isGrounded = body->isGrounded;
+    }
+    return result;
 }
 
 struct SceneManager::State {
@@ -1065,7 +1080,7 @@ uint32 SceneManager::AddSceneInstance(Scene& target, const fs::path& path, Scene
         }
         const auto sourcePath = Canonical(path, Path(target.GetSourcePath()));
         auto source = state_->LoadResolved(sourcePath, context);
-        auto staged = Clone(target);
+        auto staged = CloneForComposition(target);
         const auto root = staged->CreateEntity(Utf8(sourcePath.stem())).GetId();
         auto& hierarchy = staged->AddComponent<HierarchyComponent>(root);
         hierarchy.group = true;
@@ -1096,7 +1111,7 @@ bool SceneManager::RefreshInstances(Scene& target, std::string& error) {
             std::lock_guard lock(state_->mutex);
             context.cacheGeneration = state_->generation;
         }
-        auto staged = Clone(target);
+        auto staged = CloneForComposition(target);
         for (const auto root : ReferenceRoots(*staged)) {
             if (!staged->IsAlive(root))
                 continue;
@@ -1130,7 +1145,7 @@ bool SceneManager::RefreshInstance(Scene& target, uint32 root, std::string& erro
         }
         const auto path = Canonical(Path(reference->path), Path(target.GetSourcePath()));
         auto source = state_->LoadResolved(path, context);
-        auto staged = Clone(target);
+        auto staged = CloneForComposition(target);
         state_->RefreshOne(*staged, root, *source);
         Commit(target, *staged);
         return true;
@@ -1153,7 +1168,7 @@ bool SceneManager::RevertInstance(Scene& target, uint32 root, std::string& error
         }
         const auto path = Canonical(Path(reference->path), Path(target.GetSourcePath()));
         auto source = state_->LoadResolved(path, context);
-        auto staged = Clone(target);
+        auto staged = CloneForComposition(target);
         state_->RefreshOne(*staged, root, *source, true);
         Commit(target, *staged);
         return true;
@@ -1487,7 +1502,7 @@ bool SceneManager::Save(Scene& scene, const fs::path& targetPath, const fs::path
         size_t references = 0;
         std::set<std::string> validated;
         CheckSaveDependencies(scene, owner, dependencies, bytes, references, validated);
-        auto diskCopy = Clone(scene);
+        auto diskCopy = CloneAuthoredScene(scene);
         RewritePaths(*diskCopy, owner, &destination);
         if (!diskCopy->Serialize(Utf8(destination))) {
             error = Scene::GetLastSaveError();

@@ -443,31 +443,31 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
         runtime.playback.speed = current.speed * impl_->speed;
         if (impl_->playing) {
             runtime.playback.Advance(dt, clip->duration, clip->GetWrap(), {});
-            runtime.positioned |= runtime.playback.previousCursor != runtime.playback.cursor;
-            if (emitEvents) {
-                if (layer.weight > 0) {
-                    const auto& eventClip = *std::max_element(sources.rbegin(), sources.rend(),
-                                                              [](const auto& a, const auto& b) {
-                                                                  return a.second < b.second;
-                                                              })
-                                                 ->first;
-                    const double ratio = eventClip.duration / clip->duration;
-                    const double from = runtime.playback.previousCursor * ratio;
-                    const double to = runtime.playback.cursor * ratio;
-                    if (runtime.fresh) {
-                        const double initial =
-                            AnimationTime(from, eventClip.duration, eventClip.GetWrap());
-                        for (const auto& event : eventClip.events)
-                            if (event.time == initial)
-                                result.events.push_back(event);
-                    }
-                    AnimationPlayback eventPlayback{from, to - from, true};
-                    auto events = eventPlayback.Advance(1, eventClip.duration, eventClip.GetWrap(),
-                                                        eventClip.events);
-                    result.events.insert(result.events.end(), events.begin(), events.end());
+            const bool advanced = runtime.playback.previousCursor != runtime.playback.cursor;
+            runtime.positioned |= advanced;
+            if (emitEvents && layer.weight > 0) {
+                const auto& eventClip = *std::max_element(sources.rbegin(), sources.rend(),
+                                                          [](const auto& a, const auto& b) {
+                                                              return a.second < b.second;
+                                                          })
+                                             ->first;
+                const double ratio = eventClip.duration / clip->duration;
+                const double from = runtime.playback.previousCursor * ratio;
+                const double to = runtime.playback.cursor * ratio;
+                if (runtime.fresh) {
+                    const double initial =
+                        AnimationTime(from, eventClip.duration, eventClip.GetWrap());
+                    for (const auto& event : eventClip.events)
+                        if (event.time == initial)
+                            result.events.push_back(event);
                 }
-                runtime.fresh = false;
+                AnimationPlayback eventPlayback{from, to - from, true};
+                auto events = eventPlayback.Advance(1, eventClip.duration, eventClip.GetWrap(),
+                                                    eventClip.events);
+                result.events.insert(result.events.end(), events.begin(), events.end());
             }
+            if (emitEvents || advanced)
+                runtime.fresh = false;
         } else
             runtime.playback.previousCursor = runtime.playback.cursor;
         auto frame =
