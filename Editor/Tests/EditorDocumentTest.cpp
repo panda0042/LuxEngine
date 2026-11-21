@@ -1311,6 +1311,8 @@ void TestGeneratedContentFormats(const std::filesystem::path& cmake) {
             "../Art/" + std::string(name);
     }
     std::ofstream(root / "Art/skipped.notes") << "This is not texture data.";
+    const auto notes = root / "Source/editor-session.notes";
+    std::ofstream(notes) << "Local editor output";
     Check(SceneManager::Save(scene, project->GetSceneFile(), {}, error) &&
               ValidateProjectScenes(*project, error),
           "project validation accepts both image payloads");
@@ -1320,22 +1322,51 @@ void TestGeneratedContentFormats(const std::filesystem::path& cmake) {
     const auto option = [](const std::string& name, const fs::path& path) {
         return LuxUI::String::fromUtf8("-D" + name + "=" + GenericPathUtf8(path));
     };
-    LuxUI::Process process;
-    process.setProcessChannelMode(LuxUI::Process::MergedChannels);
-    process.start(LuxUI::String::fromStdU16String(cmake.u16string()),
-                  {option("SOURCE_ROOT", root), option("BINARY_ROOT", output),
-                   option("PROJECT_MANIFEST", project->GetFile()), option("CONTENT_ROOT", content),
-                   option("MANAGED_ROOT", files.path / "managed"),
-                   option("MANIFEST", output / "content.txt"), LUX_UI_TEXT("-P"),
-                   LuxUI::String::fromStdU16String((root / "SyncContent.cmake").u16string())});
-    if (!process.waitForStarted() || !process.waitForFinished(30000) || process.exitCode() != 0) {
-        std::cerr << process.readAll().toStdString() << '\n';
+    const auto synchronize = [&] {
+        LuxUI::Process process;
+        process.setProcessChannelMode(LuxUI::Process::MergedChannels);
+        process.start(LuxUI::String::fromStdU16String(cmake.u16string()),
+                      {option("SOURCE_ROOT", root), option("BINARY_ROOT", output),
+                       option("PROJECT_MANIFEST", project->GetFile()),
+                       option("CONTENT_ROOT", content),
+                       option("MANAGED_ROOT", files.path / "managed"),
+                       option("MANIFEST", output / "content.txt"), LUX_UI_TEXT("-P"),
+                       LuxUI::String::fromStdU16String((root / "SyncContent.cmake").u16string())});
+        const bool success = process.waitForStarted() && process.waitForFinished(30000) &&
+                             process.exitStatus() == LuxUI::Process::NormalExit &&
+                             process.exitCode() == 0;
+        return std::pair{success, process.readAll().toStdString()};
+    };
+#ifdef _WIN32
+    const auto lock = CreateFileW(notes.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+    Check(lock != INVALID_HANDLE_VALUE, "lock the unrelated file during synchronization");
+#endif
+    const auto [synchronized, diagnostics] = synchronize();
+#ifdef _WIN32
+    CloseHandle(lock);
+#endif
+    if (!synchronized) {
+        std::cerr << diagnostics << '\n';
         throw std::runtime_error("generated content synchronization fails");
     }
     Check(AssetManager::ValidateTextureFile(PathUtf8(content / "Art/Normal.png")) &&
               AssetManager::ValidateTextureFile(PathUtf8(content / "Art/Badge.image")) &&
-              !fs::exists(content / "Art/skipped.notes"),
-          "generated content includes recognized images with alternate suffixes");
+              !fs::exists(content / "Art/skipped.notes") &&
+              !fs::exists(content / "Source/editor-session.notes"),
+          "generated content accepts alternate image suffixes and skips unrelated locked files");
+#ifdef _WIN32
+    const auto imageLock = CreateFileW((root / "Art/Badge.image").c_str(), GENERIC_READ, 0, nullptr,
+                                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    Check(imageLock != INVALID_HANDLE_VALUE, "lock an image already recorded in the manifest");
+    const auto [copiedLockedImage, errorOutput] = synchronize();
+    CloseHandle(imageLock);
+    Check(!copiedLockedImage &&
+              errorOutput.find("Could not read previously copied content") != std::string::npos &&
+              AssetManager::ValidateTextureFile(PathUtf8(content / "Art/Badge.image")),
+          "a temporarily locked tracked image preserves the previous generated content");
+    Check(synchronize().first, "synchronization succeeds after the image becomes readable again");
+#endif
 }
 
 void TestCustomProjectManifest() {

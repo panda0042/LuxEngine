@@ -137,13 +137,13 @@ bool SkipInPackage(const fs::path& relative) {
                                                             ".lastbuildstate",
                                                             ".recipe"};
     const std::string extension = LowerAscii(PathUtf8(relative.extension()));
-    const bool meshContent = extension == ".obj" && !relative.empty() &&
-                             LowerAscii(PathUtf8(*relative.begin())) == "content";
-    if (skippedExtensions.contains(extension) && !meshContent)
+    const bool content = !relative.empty() && LowerAscii(PathUtf8(*relative.begin())) == "content";
+    if (!content && skippedExtensions.contains(extension))
         return true;
     for (const auto& part : relative) {
         const std::string name = PathUtf8(part);
-        if (name == "CMakeFiles" || name == ".git" || name == ".lux" || name.ends_with(".dir"))
+        if (name == "CMakeFiles" || name == ".git" || name == ".lux" ||
+            (!content && name.ends_with(".dir")))
             return true;
     }
     return false;

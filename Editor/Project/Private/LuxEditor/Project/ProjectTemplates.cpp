@@ -82,13 +82,46 @@ if(WIN32)
 endif()
 )LUX";
 
+constexpr auto ImageHeaderScript = R"LUX(if(DEFINED LUX_CONTENT_IMAGE_HEADER_PATH)
+    file(READ "${LUX_CONTENT_IMAGE_HEADER_PATH}" header LIMIT 92 HEX)
+    message("${header}")
+    return()
+endif()
+
+)LUX";
+
+constexpr auto DirectImageHeaderRead = R"LUX(    file(READ "${path}" header LIMIT 92 HEX)
+)LUX";
+
+constexpr auto OptionalImageHeaderRead = R"LUX(    execute_process(
+        COMMAND "${CMAKE_COMMAND}" "-DLUX_CONTENT_IMAGE_HEADER_PATH=${path}"
+            -P "${CMAKE_SCRIPT_MODE_FILE}"
+        RESULT_VARIABLE readResult ERROR_VARIABLE header OUTPUT_QUIET TIMEOUT 5)
+    if(NOT readResult STREQUAL "0")
+        if(EXISTS "${MANIFEST}")
+            file(READ "${MANIFEST}" previousContent)
+            path_lines("${previousContent}" previousPaths)
+            cmake_path(RELATIVE_PATH path BASE_DIRECTORY "${sourceRoot}" OUTPUT_VARIABLE relative)
+            encode_paths("${relative}" encoded)
+            if(caseInsensitivePaths)
+                string(TOLOWER "${encoded}" encoded)
+                string(TOLOWER "${previousPaths}" previousPaths)
+            endif()
+            if(encoded IN_LIST previousPaths)
+                message(FATAL_ERROR "Could not read previously copied content: ${path}")
+            endif()
+        endif()
+        return()
+    endif()
+    string(STRIP "${header}" header)
+)LUX";
+
 constexpr auto ImageContentCheck = R"LUX(function(is_image_content path result)
     set(${result} FALSE PARENT_SCOPE)
     if(NOT EXISTS "${path}")
         return()
     endif()
-    file(READ "${path}" header LIMIT 92 HEX)
-    if(header MATCHES "^(89504e470d0a1a0a|ffd8ff|474946383[79]61|384250530001000000000000|233f52414449414e43450a|233f524742450a|503[56](09|0a|0b|0c|0d|20))")
+@IMAGE_HEADER_READ@    if(header MATCHES "^(89504e470d0a1a0a|ffd8ff|474946383[79]61|384250530001000000000000|233f52414449414e43450a|233f524742450a|503[56](09|0a|0b|0c|0d|20))")
         set(${result} TRUE PARENT_SCOPE)
         return()
     endif()
@@ -643,13 +676,25 @@ endif()
 clean_transaction()
 )LUX";
 
-std::string ContentSyncScript(bool legacy) {
+enum class ContentSyncVersion { Legacy, ImageSignatures, Current };
+
+std::string ContentSyncScript(ContentSyncVersion version = ContentSyncVersion::Current) {
     std::string script = SyncContent;
     const auto substitute = [&](std::string_view marker, std::string_view code) {
         script.replace(script.find(marker), marker.size(), code);
     };
-    substitute("@IMAGE_CHECK@", legacy ? "" : ImageContentCheck);
-    substitute("@CONTENT_SELECTION@", legacy ? LegacyContentSelection : ContentSelection);
+    if (version == ContentSyncVersion::Legacy) {
+        substitute("@IMAGE_CHECK@", "");
+        substitute("@CONTENT_SELECTION@", LegacyContentSelection);
+    } else {
+        const bool current = version == ContentSyncVersion::Current;
+        std::string imageCheck = current ? ImageHeaderScript : "";
+        imageCheck += ImageContentCheck;
+        substitute("@IMAGE_CHECK@", imageCheck);
+        substitute("@IMAGE_HEADER_READ@",
+                   current ? OptionalImageHeaderRead : DirectImageHeaderRead);
+        substitute("@CONTENT_SELECTION@", ContentSelection);
+    }
     return script;
 }
 
@@ -966,7 +1011,7 @@ bool CreateTemplateFiles(const std::filesystem::path& directory, ProjectTemplate
         error = "프로젝트 소스 폴더를 만들 수 없습니다.";
         return false;
     }
-    const auto syncContent = ContentSyncScript(false);
+    const auto syncContent = ContentSyncScript();
     const std::pair<const char*, std::string_view> scriptFiles[] = {
         {"Scripts/GameScripts.csproj", ScriptProject},
         {"Scripts/Mover.cs", ScriptSource},
@@ -1004,19 +1049,26 @@ bool UpgradeTemplateContentSync(const std::filesystem::path& directory, std::str
     std::error_code ec;
     if (std::filesystem::is_symlink(path, ec) || ec)
         return true;
-    const auto legacy = ContentSyncScript(true);
-    std::string existing(legacy.size(), '\0');
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec)
+        return true;
+    const auto legacy = ContentSyncScript(ContentSyncVersion::Legacy);
+    const auto signatures = ContentSyncScript(ContentSyncVersion::ImageSignatures);
+    if (size != legacy.size() && size != signatures.size())
+        return true;
+    std::string existing(static_cast<size_t>(size), '\0');
     std::ifstream input(path, std::ios::binary);
     if (!input.read(existing.data(), static_cast<std::streamsize>(existing.size())) ||
-        input.peek() != std::char_traits<char>::eof() || existing != legacy)
+        input.peek() != std::char_traits<char>::eof() ||
+        (existing != legacy && existing != signatures))
         return true;
     input.close();
 
     LuxUI::SaveFile destination(LuxUI::String::fromStdU16String(path.u16string()));
-    const auto script = ContentSyncScript(false);
-    const auto size = static_cast<qint64>(script.size());
+    const auto script = ContentSyncScript();
+    const auto scriptSize = static_cast<qint64>(script.size());
     if (!destination.open(LuxUI::IODevice::WriteOnly) ||
-        destination.write(script.data(), size) != size || !destination.commit()) {
+        destination.write(script.data(), scriptSize) != scriptSize || !destination.commit()) {
         error = "프로젝트 콘텐츠 복사 스크립트를 갱신할 수 없습니다.";
         return false;
     }
