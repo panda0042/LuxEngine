@@ -854,6 +854,31 @@ void MutedEvents(const std::filesystem::path& root) {
             }
 }
 
+void ExplicitFbxRoot(const std::filesystem::path& root) {
+    std::ifstream source(LUX_FBX_ANIMATED_FIXTURE, std::ios::binary);
+    std::string model(std::istreambuf_iterator<char>(source), {});
+    const std::string boneConnection = "C:\"OP\",6003,3001,\"Lcl Translation\"";
+    const auto connection = model.find(boneConnection);
+    Check(connection != std::string::npos,
+          "the authored FBX contains the expected animation channel");
+    model.replace(connection, boneConnection.size(), "C:\"OP\",6003,2001,\"Lcl Translation\"");
+    const auto path = (root / "mesh-root-motion.fbx").string();
+    std::ofstream(path, std::ios::binary) << model;
+    for (const bool valid : {false, true}) {
+        Scene scene;
+        auto owner = scene.CreateEntity("Root motion");
+        auto& animation = owner.AddComponent<AnimationComponent>();
+        animation.clip.loop = false;
+        animation.clip.modelPath = path;
+        animation.clip.modelClip = 0;
+        animation.clip.rootMotionTarget = valid ? "Triangle" : "MisspelledRoot";
+        animation.rootMotion = true;
+        scene.UpdateAnimations(.5);
+        Check(Near(owner.GetComponent<TransformComponent>().position.x, valid ? 1 : 0),
+              "only a valid explicit FBX root can transfer its motion to the owner");
+    }
+}
+
 void SkeletalBlend() {
     std::string error;
     auto model = ModelAsset::LoadFbx(LUX_FBX_ANIMATED_FIXTURE, error);
@@ -929,6 +954,7 @@ int main() {
         AssetsAndAnimator(root);
         MutedEvents(root);
         SkeletalBlend();
+        ExplicitFbxRoot(root);
         World64();
         std::filesystem::remove_all(root);
         std::cout << "Animation curves/assets/events/animator/scene/world64 passed\n";

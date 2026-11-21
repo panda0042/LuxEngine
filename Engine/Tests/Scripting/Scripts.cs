@@ -140,6 +140,14 @@ public sealed class AnimationQueueProbe : EntityScript {
     }
 }
 
+public sealed class ControllerSwitchProbe : EntityScript {
+    protected override void OnUpdate(double deltaTime) {
+        Transform value = Entity.Transform;
+        value.Position.Z = Entity.Animator.Play("NewMove", 0) ? 1 : -1;
+        Entity.Transform = value;
+    }
+}
+
 public sealed class DebugProbe : EntityScript {
     public int Counter = 0;
 

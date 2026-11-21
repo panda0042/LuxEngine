@@ -129,6 +129,37 @@ void TestScriptAnimatorPlay(const ScriptRuntimeConfig& config, const std::string
           "a rejected Play must preserve the previously paused Animator");
 }
 
+void TestControllerSwitchBeforeScriptUpdate(const ScriptRuntimeConfig& config,
+                                            const std::string& controller,
+                                            const std::filesystem::path& directory) {
+    std::string error;
+    auto replacement = AnimatorController::Load(controller, error);
+    Check(bool(replacement), "load the controller fixture");
+    auto& layer = replacement->layers.front();
+    layer.states[1].name = "NewMove";
+    layer.transitions.clear();
+    const auto next = (directory / "replacement.luxanimator").string();
+    Check(replacement->Save(next, error), error.c_str());
+    Scene scene;
+    auto actor = scene.CreateEntity("Controller switch");
+    auto& animator = actor.AddComponent<AnimatorComponent>();
+    animator.controllerPath = controller;
+    actor.AddComponent<ScriptComponent>() = {"ScriptTests.ControllerSwitchProbe", true};
+    scene.UpdateAnimations(.1);
+    Check(animator.player && animator.player->GetState() == "Idle",
+          "original controller is active");
+    ScriptRuntime runtime;
+    CheckRuntime(runtime.Initialize(scene, config), runtime);
+    animator.controllerPath = next;
+    CheckRuntime(runtime.Update(.1), runtime);
+    Check(actor.GetComponent<TransformComponent>().position.z == 1 &&
+              animator.player->GetState() == "NewMove",
+          "C# Play uses the newly assigned controller before the scene's next animation update");
+    scene.UpdateAnimations(.1);
+    Check(animator.player->GetState() == "NewMove",
+          "the subsequent animation update keeps the state selected from C#");
+}
+
 void TestScriptAnimationQueues(const ScriptRuntimeConfig& config, const std::string& controller) {
     Scene scene;
     auto plain = scene.CreateEntity("Clip only");
@@ -369,6 +400,7 @@ int main(int argc, char** argv) {
                   "Managed animation event callback");
             runtime.Shutdown();
             TestScriptAnimatorPlay(config, controllerPath);
+            TestControllerSwitchBeforeScriptUpdate(config, controllerPath, root);
             TestScriptAnimationQueues(config, controllerPath);
             TestStreamingAndAnimatedFields(config, root);
             std::filesystem::remove_all(root);
