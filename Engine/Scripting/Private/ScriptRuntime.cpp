@@ -81,6 +81,32 @@ int LUX_SCRIPT_CALL SetTransform(uint64 id, uint32 entity, const TransformCompon
     return 1;
 }
 
+static_assert(sizeof(Vec4) == 4 * sizeof(float));
+static_assert(std::is_standard_layout_v<Vec4>);
+
+int LUX_SCRIPT_CALL GetSpriteColor(uint64 id, uint32 entity, Vec4* value) {
+    const auto world = FindWorld(id);
+    if (!world || !value)
+        return 0;
+    const auto* sprite = world->scene->TryGetComponent<SpriteRendererComponent>(entity);
+    if (!sprite)
+        return 0;
+    *value = sprite->color;
+    return 1;
+}
+
+int LUX_SCRIPT_CALL SetSpriteColor(uint64 id, uint32 entity, const Vec4* value) {
+    const auto world = FindWorld(id);
+    if (!world || !value || !std::isfinite(value->x) || !std::isfinite(value->y) ||
+        !std::isfinite(value->z) || !std::isfinite(value->w))
+        return 0;
+    auto* sprite = world->scene->TryGetComponent<SpriteRendererComponent>(entity);
+    if (!sprite)
+        return 0;
+    sprite->color = *value;
+    return 1;
+}
+
 int LUX_SCRIPT_CALL IsKeyPressed(int key) {
     return Input::IsKeyPressed(key) ? 1 : 0;
 }
@@ -282,15 +308,17 @@ struct DotnetHost {
             error = "C# 스크립트 코어 진입점을 찾을 수 없습니다.";
             return false;
         }
-        const Managed::NativeApi native = {6,
+        const Managed::NativeApi native = {7,
                                            sizeof(Managed::NativeApi),
                                            IsAlive,
                                            GetTransform,
                                            SetTransform,
+                                           GetSpriteColor,
+                                           SetSpriteColor,
                                            IsKeyPressed,
                                            AnimationCommand,
                                            AnimationEventNext};
-        if (!getApi(&native, &api) || api.version != 6 || api.size != sizeof(api)) {
+        if (!getApi(&native, &api) || api.version != 7 || api.size != sizeof(api)) {
             api = {};
             error = "C# 스크립트 ABI가 엔진과 일치하지 않습니다.";
             return false;

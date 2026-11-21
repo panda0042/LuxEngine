@@ -1,0 +1,74 @@
+name: Documentation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'doc/**'
+      - 'samples/FirstCSharpGame/**'
+      - 'Engine/Scripting/Managed/**'
+      - '.github/workflows/documentation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'doc/**'
+      - 'samples/FirstCSharpGame/**'
+      - 'Engine/Scripting/Managed/**'
+      - '.github/workflows/documentation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build guides, C# API reference and tutorial sample
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore DocFX and build the site
+        working-directory: doc
+        run: |
+          dotnet tool restore
+          dotnet docfx metadata docfx.json --warningsAsErrors
+          dotnet docfx build docfx.json --warningsAsErrors
+      - name: Build ScriptCore and the tutorial
+        run: |
+          config="$GITHUB_WORKSPACE/Engine/Scripting/Managed/NuGet.Config"
+          dotnet build Engine/Scripting/Managed/LuxEngine.ScriptCore/LuxEngine.ScriptCore.csproj \
+            -c Release -o "$RUNNER_TEMP/tutorial-core" --warnaserror \
+            --artifacts-path "$RUNNER_TEMP/tutorial-core-build" -p:RestoreConfigFile="$config"
+          dotnet build samples/FirstCSharpGame/Scripts/GameScripts.csproj \
+            -c Release --warnaserror --artifacts-path "$RUNNER_TEMP/tutorial-build" \
+            -p:RestoreConfigFile="$config" \
+            -p:LuxEngineScriptCore="$RUNNER_TEMP/tutorial-core/LuxEngine.ScriptCore.dll"
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: doc/_site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: pages

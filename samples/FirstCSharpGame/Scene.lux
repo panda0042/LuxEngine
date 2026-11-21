@@ -1,0 +1,238 @@
+{
+  "format": "LuxEngine.Scene",
+  "version": 1,
+  "settings": {
+    "clear_color": [
+      0.055,
+      0.08,
+      0.13,
+      1
+    ],
+    "exposure": 1.0,
+    "gravity2d": [
+      0.0,
+      -9.8100004196167
+    ],
+    "gravity3d": [
+      0.0,
+      -9.8100004196167,
+      0.0
+    ],
+    "override_gravity": false,
+    "fixed_step": 0.01666666753590107,
+    "physics_substeps": 1,
+    "render3d": {
+      "mode": 0,
+      "sun_direction": [
+        0.5,
+        -1.0,
+        0.5
+      ],
+      "sun_color": [
+        1.0,
+        0.9800000190734863,
+        0.949999988079071
+      ],
+      "sun_intensity": 1.0,
+      "environment_color": [
+        0.15000000596046448,
+        0.15000000596046448,
+        0.15000000596046448
+      ],
+      "environment_intensity": 1.0,
+      "environment_rotation": 0.0,
+      "environment": "",
+      "image_based_lighting": true,
+      "skybox": false,
+      "tone_mapping": true,
+      "shadows": true,
+      "shadow_resolution": 2048,
+      "shadow_range": 50.0,
+      "shadow_depth_bias": 0.0005000000237487257,
+      "shadow_normal_bias": 0.019999999552965164
+    }
+  },
+  "entities": [
+    {
+      "id": 1,
+      "components": {
+        "tag": {
+          "name": "Runner"
+        },
+        "transform": {
+          "position": [
+            0,
+            0,
+            1
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            0.48,
+            0.48,
+            1
+          ]
+        },
+        "sprite": {
+          "color": [
+            0.3,
+            0.65,
+            1,
+            1
+          ]
+        },
+        "script": {
+          "type": "FirstGame.BeaconRun",
+          "enabled": true,
+          "fields": {
+            "Beacon": {
+              "type": 7,
+              "value": 2
+            },
+            "Timer": {
+              "type": 7,
+              "value": 3
+            },
+            "Speed": {
+              "type": 2,
+              "value": 4
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "components": {
+        "tag": {
+          "name": "Beacon"
+        },
+        "transform": {
+          "position": [
+            2.5,
+            1.5,
+            1
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            0.36,
+            0.36,
+            1
+          ]
+        },
+        "sprite": {
+          "color": [
+            1,
+            0.75,
+            0.2,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "components": {
+        "tag": {
+          "name": "Timer"
+        },
+        "transform": {
+          "position": [
+            0,
+            2.5,
+            1
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            7,
+            0.12,
+            1
+          ]
+        },
+        "sprite": {
+          "color": [
+            0.65,
+            0.76,
+            0.9,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "components": {
+        "tag": {
+          "name": "Arena"
+        },
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            7.6,
+            4.6,
+            1
+          ]
+        },
+        "sprite": {
+          "color": [
+            0.105,
+            0.155,
+            0.23,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "components": {
+        "tag": {
+          "name": "Camera"
+        },
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "camera": {
+          "primary": true,
+          "perspective": false,
+          "fov": 60,
+          "ortho_size": 3
+        }
+      }
+    }
+  ]
+}

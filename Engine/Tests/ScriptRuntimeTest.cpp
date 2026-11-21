@@ -1,3 +1,4 @@
+#include <LuxEngine/Platform/Input.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
 #include <LuxEngine/Scene/SceneManager.hpp>
@@ -101,11 +102,66 @@ void TestStreamingAndAnimatedFields(const ScriptRuntimeConfig& config,
     Check(streamed.x == 1 && streamed.y == 2,
           "A newly streamed script must start in the existing runtime");
 }
+
+void TestFirstGame(const char* assemblyPath, const char* scenePath) {
+    Scene scene;
+    Check(scene.Deserialize(scenePath), "First game scene did not load");
+    const auto scripts = scene.GetComponentEntityIds<ScriptComponent>();
+    Check(scripts.size() == 1, "First game scene must contain one script");
+    const auto player = scripts.front();
+    const auto& fields = scene.GetComponent<ScriptComponent>(player).fields;
+    const auto beacon =
+        scene.ResolveScriptEntityReference(std::get<ScriptEntityReference>(fields.at("Beacon")));
+    const auto timer =
+        scene.ResolveScriptEntityReference(std::get<ScriptEntityReference>(fields.at("Timer")));
+    auto& playerTransform = scene.GetComponent<TransformComponent>(player);
+    const auto& beaconTransform = scene.GetComponent<TransformComponent>(beacon);
+    const auto& playerSprite = scene.GetComponent<SpriteRendererComponent>(player);
+    const auto& beaconSprite = scene.GetComponent<SpriteRendererComponent>(beacon);
+    const auto& bar = scene.GetComponent<TransformComponent>(timer);
+
+    ScriptRuntime runtime;
+    ScriptRuntimeConfig config;
+    config.assemblyPath = assemblyPath;
+    CheckRuntime(runtime.Initialize(scene, config), runtime);
+    CheckRuntime(runtime.PrepareInstances(), runtime);
+    const auto fullWidth = bar.scale.x;
+    const auto startX = playerTransform.position.x;
+    Input::SetExternalKey(LuxKey::D, true);
+    const bool moved = runtime.Update(.125);
+    Input::SetExternalKey(LuxKey::D, false);
+    CheckRuntime(moved, runtime);
+    Check(playerTransform.position.x > startX && bar.scale.x < fullWidth,
+          "First game input or countdown did not reach the scene");
+
+    const auto beaconX = beaconTransform.position.x;
+    for (int i = 0; i < 3; ++i) {
+        playerTransform.position = beaconTransform.position;
+        CheckRuntime(runtime.Update(.125), runtime);
+        if (i == 0)
+            Check(beaconTransform.position.x != beaconX, "First game beacon did not move");
+    }
+    Check(playerSprite.color.y == 1 && beaconSprite.color.w == 0,
+          "First game win did not update the sprite colors");
+
+    Input::SetExternalKey(LuxKey::Space, true);
+    const bool restarted = runtime.Update(.125);
+    Input::SetExternalKey(LuxKey::Space, false);
+    CheckRuntime(restarted, runtime);
+    Check(playerTransform.position.x == startX && bar.scale.x == fullWidth &&
+              beaconSprite.color.w == 1,
+          "First game restart did not restore the round");
+    for (int frame = 0; frame < 80; ++frame)
+        CheckRuntime(runtime.Update(.125), runtime);
+    Check(playerSprite.color.x == 1 && bar.scale.x == 0,
+          "First game timeout did not update the sprite and timer");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     try {
-        Check(argc == 2, "Script test assembly is required");
+        Check(argc == 4, "Script test assembly, sample assembly and sample scene are required");
         Scene scene;
         auto entity = scene.CreateEntity("C# regression");
         entity.AddComponent<ScriptComponent>() = {"ScriptTests.Mover", true};
@@ -259,6 +315,7 @@ int main(int argc, char** argv) {
             TestStreamingAndAnimatedFields(config, root);
             std::filesystem::remove_all(root);
         }
+        TestFirstGame(argv[2], argv[3]);
         config.assemblyPath += ".missing";
         Check(!runtime.Initialize(scene, config), "Missing assembly was accepted");
         std::cout
