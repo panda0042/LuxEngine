@@ -95,6 +95,31 @@ void SavePathSafety() {
     Check(!manager.Load(invalidPath) && !manager.LoadAsync(invalidPath).get() &&
               !manager.PreloadAsync(invalidPath).get(),
           "synchronous and asynchronous loading reject embedded NUL paths");
+
+    const auto sourceFolder = files.root / "source";
+    const auto targetFolder = files.root / "target";
+    fs::create_directories(sourceFolder / "Art");
+    fs::create_directories(targetFolder);
+    std::ofstream(sourceFolder / "Art/Badge.png") << "asset path fixture";
+    Scene authored;
+    authored.CreateEntity("Badge").AddComponent<SpriteRendererComponent>().texturePath =
+        "Art/Badge.png";
+    const auto sourceFile = (sourceFolder / "Source.lux").string();
+    const auto targetFile = (targetFolder / "Target.lux").string();
+    Check(authored.Serialize(sourceFile) && Scene().Serialize(targetFile),
+          "cross-folder import fixtures save");
+    Scene source, target;
+    Check(source.Deserialize(sourceFile) && target.Deserialize(targetFile),
+          "raw scene loading retains relative asset paths");
+    const auto sourceId = source.GetEntities().front().GetId();
+    const auto imported = target.ImportEntities(source, {sourceId});
+    Check(imported.contains(sourceId), "import succeeds across scene folders");
+    const auto& originalPath = source.GetComponent<SpriteRendererComponent>(sourceId).texturePath;
+    const auto& importedPath =
+        target.GetComponent<SpriteRendererComponent>(imported.at(sourceId)).texturePath;
+    Check(originalPath == "Art/Badge.png" && fs::equivalent(source.ResolveAssetPath(originalPath),
+                                                            target.ResolveAssetPath(importedPath)),
+          "import preserves the original texture without rewriting the source scene");
 }
 
 void MeshAssetMetadata() {

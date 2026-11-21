@@ -93,6 +93,74 @@ endif()
 constexpr auto DirectImageHeaderRead = R"LUX(    file(READ "${path}" header LIMIT 92 HEX)
 )LUX";
 
+constexpr auto RequiredImageCheck =
+    R"LUX(function(has_image_reference document owner target depth result)
+    set(${result} FALSE PARENT_SCOPE)
+    if(depth GREATER 16)
+        return()
+    endif()
+    get_filename_component(directory "${owner}" DIRECTORY)
+    string(CONCAT pattern
+        [=["(texture|sprite_sheet|base_color_texture|normal_texture|metallic_texture|roughness_texture|occlusion_texture|environment|baseline|suspended)"]=]
+        "[ \r\n\t]*:[ \r\n\t]*" [=[("(\\.|[^"\\])*")]=])
+    while(document MATCHES "${pattern}")
+        set(match "${CMAKE_MATCH_0}")
+        set(field "${CMAKE_MATCH_1}")
+        set(quoted "${CMAKE_MATCH_2}")
+        string(FIND "${document}" "${match}" offset)
+        string(LENGTH "${match}" length)
+        math(EXPR offset "${offset} + ${length}")
+        string(SUBSTRING "${document}" ${offset} -1 document)
+        string(JSON value ERROR_VARIABLE parseError GET "[${quoted}]" 0)
+        if(NOT parseError STREQUAL "NOTFOUND" OR value STREQUAL "")
+            continue()
+        endif()
+        if(field STREQUAL "baseline" OR field STREQUAL "suspended")
+            math(EXPR nextDepth "${depth} + 1")
+            has_image_reference("${value}" "${owner}" "${target}" ${nextDepth} referenced)
+        else()
+            cmake_path(ABSOLUTE_PATH value BASE_DIRECTORY "${directory}" NORMALIZE)
+            if(caseInsensitivePaths)
+                string(TOLOWER "${value}" value)
+            endif()
+            set(referenced FALSE)
+            if(value STREQUAL target)
+                set(referenced TRUE)
+            endif()
+        endif()
+        if(referenced)
+            set(${result} TRUE PARENT_SCOPE)
+            return()
+        endif()
+    endwhile()
+endfunction()
+
+function(require_readable_referenced_image path)
+    cmake_path(NORMAL_PATH path OUTPUT_VARIABLE target)
+    if(caseInsensitivePaths)
+        string(TOLOWER "${target}" target)
+    endif()
+    foreach(encodedDocument IN LISTS assets)
+        decode_path("${encodedDocument}" document)
+        string(TOLOWER "${document}" lowerDocument)
+        if(NOT lowerDocument MATCHES "[.](lux|luxprefab|luxanim|luxanimator)$" OR
+           lowerDocument MATCHES "(^|/)([.]git|[.]lux)(/|$)|^(build|out|cmake-build[^/]*)(/|$)")
+            continue()
+        endif()
+        set(owner "${sourceRoot}/${document}")
+        if(IS_DIRECTORY "${owner}" OR NOT EXISTS "${owner}")
+            continue()
+        endif()
+        file(READ "${owner}" data)
+        has_image_reference("${data}" "${owner}" "${target}" 0 referenced)
+        if(referenced)
+            message(FATAL_ERROR "Could not read referenced content: ${path} (referenced by ${document})")
+        endif()
+    endforeach()
+endfunction()
+
+)LUX";
+
 constexpr auto OptionalImageHeaderRead = R"LUX(    execute_process(
         COMMAND "${CMAKE_COMMAND}" "-DLUX_CONTENT_IMAGE_HEADER_PATH=${path}"
             -P "${CMAKE_SCRIPT_MODE_FILE}"
@@ -111,7 +179,7 @@ constexpr auto OptionalImageHeaderRead = R"LUX(    execute_process(
                 message(FATAL_ERROR "Could not read previously copied content: ${path}")
             endif()
         endif()
-        return()
+@CHECK_REFERENCED_IMAGE@        return()
     endif()
     string(STRIP "${header}" header)
 )LUX";
@@ -676,7 +744,7 @@ endif()
 clean_transaction()
 )LUX";
 
-enum class ContentSyncVersion { Legacy, ImageSignatures, Current };
+enum class ContentSyncVersion { Legacy, ImageSignatures, OptionalHeaders, Current };
 
 std::string ContentSyncScript(ContentSyncVersion version = ContentSyncVersion::Current) {
     std::string script = SyncContent;
@@ -687,12 +755,18 @@ std::string ContentSyncScript(ContentSyncVersion version = ContentSyncVersion::C
         substitute("@IMAGE_CHECK@", "");
         substitute("@CONTENT_SELECTION@", LegacyContentSelection);
     } else {
+        const bool optional = version != ContentSyncVersion::ImageSignatures;
         const bool current = version == ContentSyncVersion::Current;
-        std::string imageCheck = current ? ImageHeaderScript : "";
+        std::string imageCheck = optional ? ImageHeaderScript : "";
+        if (current)
+            imageCheck += RequiredImageCheck;
         imageCheck += ImageContentCheck;
         substitute("@IMAGE_CHECK@", imageCheck);
         substitute("@IMAGE_HEADER_READ@",
-                   current ? OptionalImageHeaderRead : DirectImageHeaderRead);
+                   optional ? OptionalImageHeaderRead : DirectImageHeaderRead);
+        if (optional)
+            substitute("@CHECK_REFERENCED_IMAGE@",
+                       current ? "        require_readable_referenced_image(\"${path}\")\n" : "");
         substitute("@CONTENT_SELECTION@", ContentSelection);
     }
     return script;
@@ -1054,13 +1128,14 @@ bool UpgradeTemplateContentSync(const std::filesystem::path& directory, std::str
         return true;
     const auto legacy = ContentSyncScript(ContentSyncVersion::Legacy);
     const auto signatures = ContentSyncScript(ContentSyncVersion::ImageSignatures);
-    if (size != legacy.size() && size != signatures.size())
+    const auto optionalHeaders = ContentSyncScript(ContentSyncVersion::OptionalHeaders);
+    if (size != legacy.size() && size != signatures.size() && size != optionalHeaders.size())
         return true;
     std::string existing(static_cast<size_t>(size), '\0');
     std::ifstream input(path, std::ios::binary);
     if (!input.read(existing.data(), static_cast<std::streamsize>(existing.size())) ||
         input.peek() != std::char_traits<char>::eof() ||
-        (existing != legacy && existing != signatures))
+        (existing != legacy && existing != signatures && existing != optionalHeaders))
         return true;
     input.close();
 
