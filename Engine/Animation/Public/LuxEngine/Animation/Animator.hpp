@@ -80,6 +80,13 @@ struct AnimationFrame {
     std::vector<AnimationModelSample> models{};
     std::string spriteSheet{};
     uint32 spriteColumns = 1, spriteRows = 1;
+
+    struct RootMotionSample {
+        std::string target;
+        Vec3 delta;
+    };
+
+    std::vector<RootMotionSample> childRootMotion{};
 };
 
 class LUX_API AnimatorPlayer {

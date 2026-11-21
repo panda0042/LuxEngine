@@ -4,6 +4,7 @@
 #include <LuxEngine/Scene/Scene.hpp>
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <map>
 #include <string_view>
 
@@ -236,9 +237,22 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
             }
         }
     }
+    auto rootDelta = frame.rootDelta;
+    if (rootMotion && rootDelta)
+        for (const auto& sample : frame.childRootMotion) {
+            const auto target = bindings.Resolve(owner, sample.target);
+            if (!target || target == owner)
+                continue;
+            auto delta = sample.delta;
+            for (auto parent = GetParent(target); parent && parent != owner;
+                 parent = GetParent(parent))
+                if (const auto* transform = TryGetComponent<TransformComponent>(parent))
+                    delta = transform->GetTransform().TransformDirection(delta);
+            *rootDelta += delta - sample.delta;
+        }
     if (frame.models.empty()) {
-        if (frame.rootDelta)
-            applyMotion(*frame.rootDelta);
+        if (rootDelta)
+            applyMotion(*rootDelta);
         return;
     }
     const auto& path = frame.models.front().path;
@@ -300,7 +314,7 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
     }
 
     if (rootMotion) {
-        Vec3 delta = frame.rootDelta.value_or(Vec3{});
+        Vec3 delta = rootDelta.value_or(Vec3{});
         double total = 0;
         for (size_t index = 0; index < poses.size(); ++index) {
             const auto& sample = *evaluated[index];
@@ -318,7 +332,7 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
                 }
             if (!model->NodeMatchesMask(root, sample.mask))
                 continue;
-            if (!frame.rootDelta) {
+            if (!rootDelta) {
                 ModelPose previous;
                 if (!model->Evaluate(sample.previousTime, sample.clip, previous, error)) {
                     Fail(error);
@@ -347,9 +361,9 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
             extraction.position = model->nodes[root].localTransform.position;
             overrides.push_back(extraction);
         }
-        if (!frame.rootDelta && total > 1)
+        if (!rootDelta && total > 1)
             delta = delta * (1 / total);
-        if (frame.rootDelta || total > 0)
+        if (rootDelta || total > 0)
             applyMotion(delta);
     }
     auto mixed = CreateRef<ModelPose>();
@@ -428,11 +442,26 @@ void Scene::UpdateAnimations(double dt, bool emitEvents, RootMotionDeltas* physi
             std::isfinite(clip.duration) && clip.duration > 0)
             playback.cursor = clip.duration;
         auto events = playback.Advance(dt, clip.duration, wrap, clip.events);
-        animation->playbackStarted |= playback.cursor != playback.previousCursor;
+        const bool advanced = playback.cursor != playback.previousCursor;
+        if (emitEvents && advanced && !animation->playbackStarted) {
+            const auto start = AnimationTime(playback.previousCursor, clip.duration, wrap);
+            std::vector<AnimationEvent> startingEvents;
+            for (const auto& event : clip.events)
+                if (event.time == start)
+                    startingEvents.push_back(event);
+            if (!startingEvents.empty()) {
+                startingEvents.insert(startingEvents.end(), std::make_move_iterator(events.begin()),
+                                      std::make_move_iterator(events.end()));
+                events.swap(startingEvents);
+            }
+        }
+        animation->playbackStarted |= advanced;
         animation->currentTime = playback.cursor;
         animation->playing = playback.playing;
         AnimationFrame frame;
         frame.rootDelta = clip.RootDelta(playback.previousCursor, playback.cursor);
+        if (frame.rootDelta && !clip.rootMotionTarget.empty())
+            frame.childRootMotion.push_back({clip.rootMotionTarget, *frame.rootDelta});
         frame.samples = clip.SampleTracks(playback.cursor);
         frame.spriteSheet = clip.spriteSheet;
         frame.spriteColumns = clip.spriteColumns;

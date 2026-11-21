@@ -3,6 +3,7 @@
 #include <LuxEditor/Project/ProjectArchive.hpp>
 #include <LuxEditor/Project/ProjectFileOperations.hpp>
 #include <LuxEditor/Scene/EditorDocument.hpp>
+#include <LuxEditor/Scene/SceneDependencies.hpp>
 #include <LuxEngine/Animation/Animator.hpp>
 #include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/Scene/SceneManager.hpp>
@@ -1248,6 +1249,95 @@ void TestMissingNestedSceneImport() {
     }
 }
 
+void TestMissingPackagedTexture() {
+    using namespace LuxEditor;
+    using namespace LuxEngine;
+    namespace fs = std::filesystem;
+    TempDirectory files;
+    std::string error;
+    const auto root = files.path / "project";
+    auto project = EditorProject::Create(root, "Texture package", ProjectTemplate::Empty, error);
+    Check(bool(project), "texture package project creates");
+    const auto texture = root / "Assets/Badge.png";
+    LuxUI::Image image(4, 4, LuxUI::Image::Format_RGBA8888);
+    image.fill(LuxUI::Color(40, 80, 120));
+    Check(image.save(LuxUI::String::fromStdU16String(texture.u16string()), "PNG"),
+          "texture file saves");
+    Scene scene;
+    scene.CreateEntity("Badge").AddComponent<SpriteRendererComponent>().texturePath =
+        "../Assets/Badge.png";
+    Check(SceneManager::Save(scene, project->GetSceneFile(), {}, error),
+          "start scene saves its texture reference");
+    const auto complete = files.path / "complete.luxpack";
+    Check(ExportProject(*project, complete, error) &&
+              bool(ImportProject(complete, files.path / "complete", error)),
+          "an intact package imports");
+    const auto incomplete = files.path / "incomplete.luxpack";
+    fs::copy_file(complete, incomplete);
+    int zipError = 0;
+    auto* zip = zip_open(PathUtf8(incomplete).c_str(), 0, &zipError);
+    Check(zip != nullptr, "fixture archive opens for editing");
+    const auto entry = zip_name_locate(zip, "Assets/Badge.png", 0);
+    Check(entry >= 0 && zip_delete(zip, static_cast<zip_uint64_t>(entry)) == 0 &&
+              zip_close(zip) == 0,
+          "only the referenced texture is removed");
+    const auto destination = files.path / "incomplete";
+    Check(!ImportProject(incomplete, destination, error) && !fs::exists(destination) &&
+              error.find("Badge.png") != std::string::npos,
+          "import rejects a missing texture before installing the project");
+    Check(RestoreProjectBackup(*project, incomplete, error) &&
+              bool(SceneManager().Load(project->GetSceneFile())),
+          "restoring a backup still allows artwork to be repaired later");
+}
+
+void TestGeneratedContentFormats(const std::filesystem::path& cmake) {
+    using namespace LuxEditor;
+    using namespace LuxEngine;
+    namespace fs = std::filesystem;
+    TempDirectory files;
+    std::string error;
+    const auto root = files.path / "project";
+    auto project = EditorProject::Create(root, "Content formats", ProjectTemplate::Empty, error);
+    Check(bool(project), "content fixture project creates");
+    fs::create_directory(root / "Art");
+    Scene scene;
+    LuxUI::Image image(4, 4, LuxUI::Image::Format_RGBA8888);
+    image.fill(LuxUI::Color(40, 80, 120));
+    for (const auto* name : {"Normal.png", "Badge.image"}) {
+        const auto texture = root / "Art" / name;
+        Check(image.save(LuxUI::String::fromStdU16String(texture.u16string()), "PNG"),
+              "control and alternate-suffix textures save");
+        scene.CreateEntity(name).AddComponent<SpriteRendererComponent>().texturePath =
+            "../Art/" + std::string(name);
+    }
+    std::ofstream(root / "Art/skipped.notes") << "This is not texture data.";
+    Check(SceneManager::Save(scene, project->GetSceneFile(), {}, error) &&
+              ValidateProjectScenes(*project, error),
+          "project validation accepts both image payloads");
+    const auto output = files.path / "built";
+    fs::create_directory(output);
+    const auto content = output / "Content";
+    const auto option = [](const std::string& name, const fs::path& path) {
+        return LuxUI::String::fromUtf8("-D" + name + "=" + GenericPathUtf8(path));
+    };
+    LuxUI::Process process;
+    process.setProcessChannelMode(LuxUI::Process::MergedChannels);
+    process.start(LuxUI::String::fromStdU16String(cmake.u16string()),
+                  {option("SOURCE_ROOT", root), option("BINARY_ROOT", output),
+                   option("PROJECT_MANIFEST", project->GetFile()), option("CONTENT_ROOT", content),
+                   option("MANAGED_ROOT", files.path / "managed"),
+                   option("MANIFEST", output / "content.txt"), LUX_UI_TEXT("-P"),
+                   LuxUI::String::fromStdU16String((root / "SyncContent.cmake").u16string())});
+    if (!process.waitForStarted() || !process.waitForFinished(30000) || process.exitCode() != 0) {
+        std::cerr << process.readAll().toStdString() << '\n';
+        throw std::runtime_error("generated content synchronization fails");
+    }
+    Check(AssetManager::ValidateTextureFile(PathUtf8(content / "Art/Normal.png")) &&
+              AssetManager::ValidateTextureFile(PathUtf8(content / "Art/Badge.image")) &&
+              !fs::exists(content / "Art/skipped.notes"),
+          "generated content includes recognized images with alternate suffixes");
+}
+
 void TestCustomProjectManifest() {
     using namespace LuxEditor;
     namespace fs = std::filesystem;
@@ -1394,6 +1484,12 @@ void TestProjectSharingLocks() {
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 3 && std::string_view(argv[1]) == "content-formats") {
+            LuxUI::CoreApplication application(argc, argv);
+            TestGeneratedContentFormats(argv[2]);
+            std::cout << "Generated content format checks passed\n";
+            return 0;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "archive-limits") {
             TestArchiveSizeLimits();
             std::cout << "Archive size-limit checks passed\n";
@@ -1410,6 +1506,7 @@ int main(int argc, char** argv) {
         TestExcludedStartScene();
         TestExcludedProjectIcon();
         TestMissingNestedSceneImport();
+        TestMissingPackagedTexture();
         TestCustomProjectManifest();
         TestIcnsImagePayload();
         TestPortableAnimationArchive();

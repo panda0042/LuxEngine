@@ -286,6 +286,81 @@ void CrossfadeFromChildRootMotion(const std::filesystem::path& root) {
     }
 }
 
+void RotatedChildRootMotion(const std::filesystem::path& root) {
+    AnimationClip clip;
+    clip.loop = false;
+    clip.rootMotionTarget = "Rig/Motion";
+    auto track = Track(AnimationProperty::Position, 0, 2);
+    track.target = clip.rootMotionTarget;
+    clip.tracks = {track};
+    std::string error;
+    const auto clipPath = (root / "rotated-root.luxanim").string();
+    const auto controllerPath = (root / "rotated-root.luxanimator").string();
+    Check(clip.Save(clipPath, error), error.c_str());
+    AnimatorController controller;
+    AnimatorLayer layer;
+    layer.entry = "Move";
+    layer.states = {{"Move", clipPath}};
+    controller.layers = {layer};
+    Check(controller.Save(controllerPath, error), error.c_str());
+
+    for (const bool useAnimator : {false, true}) {
+        for (const bool extract : {false, true}) {
+            Scene scene;
+            auto actor = scene.CreateEntity("Actor");
+            auto rig = scene.CreateEntity("Rig");
+            auto motion = scene.CreateEntity("Motion");
+            auto& transform = rig.GetComponent<TransformComponent>();
+            transform.rotation.z = ToRadians(90);
+            transform.scale = {2, 3, 1};
+            Check(scene.SetParent(rig.GetId(), actor.GetId(), false) &&
+                      scene.SetParent(motion.GetId(), rig.GetId(), false),
+                  "a rotated and scaled intermediate parent is bound");
+            if (useAnimator) {
+                auto& animator = actor.AddComponent<AnimatorComponent>();
+                animator.controllerPath = controllerPath;
+                animator.rootMotion = extract;
+            } else {
+                auto& animation = actor.AddComponent<AnimationComponent>();
+                animation.clip = clip;
+                animation.rootMotion = extract;
+            }
+            scene.UpdateAnimations(.5);
+            const auto child = scene.GetWorldTransform(motion.GetId()).position;
+            const auto owner = actor.GetComponent<TransformComponent>().position;
+            Check(Near(child.x, 0) && Near(child.y, 2) && Near(owner.x, 0) &&
+                      Near(owner.y, extract ? 2 : 0),
+                  "extracting child motion preserves the authored world direction and scale");
+        }
+    }
+}
+
+void ClipStartEvents(const std::filesystem::path& root) {
+    AnimationClip clip;
+    clip.duration = 1;
+    clip.loop = false;
+    clip.events = {{0, "start", ""}, {.5, "midpoint", ""}, {1, "end", ""}};
+    std::string error;
+    const auto path = (root / "clip-start-events.luxanim").string();
+    Check(clip.Save(path, error), error.c_str());
+    for (const double speed : {1., -1.}) {
+        Scene scene;
+        auto actor = scene.CreateEntity("Actor");
+        auto& animation = actor.AddComponent<AnimationComponent>();
+        animation.assetPath = path;
+        animation.speed = speed;
+        scene.UpdateAnimations(0, false);
+        scene.UpdateAnimations(.25);
+        Check(animation.pendingEvents.size() == 1 &&
+                  animation.pendingEvents.front().name == (speed > 0 ? "start" : "end"),
+              "the first actual update emits the event at the starting endpoint");
+        scene.UpdateAnimations(.25);
+        Check(animation.pendingEvents.size() == 1 &&
+                  animation.pendingEvents.front().name == "midpoint",
+              "subsequent updates still deliver crossed events without a duplicate start");
+    }
+}
+
 void ChildRootMotion(const std::filesystem::path& root) {
     AnimationClip clip;
     clip.loop = false;
@@ -838,6 +913,8 @@ int main() {
         AnimationFileRoundTrip(root);
         ReverseOneShotFromSavedScene(root);
         CrossfadeFromChildRootMotion(root);
+        RotatedChildRootMotion(root);
+        ClipStartEvents(root);
         ChildRootMotion(root);
         RootMotionWithoutCollider();
         FixedStepRootMotion();

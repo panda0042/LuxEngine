@@ -1,6 +1,8 @@
 #include <LuxEditor/Project/ProjectTemplates.hpp>
+#include <LuxUI/Widgets.hpp>
 
 #include <fstream>
+#include <string_view>
 
 namespace LuxEditor {
 namespace {
@@ -80,6 +82,67 @@ if(WIN32)
 endif()
 )LUX";
 
+constexpr auto ImageContentCheck = R"LUX(function(is_image_content path result)
+    set(${result} FALSE PARENT_SCOPE)
+    if(NOT EXISTS "${path}")
+        return()
+    endif()
+    file(READ "${path}" header LIMIT 92 HEX)
+    if(header MATCHES "^(89504e470d0a1a0a|ffd8ff|474946383[79]61|384250530001000000000000|233f52414449414e43450a|233f524742450a|503[56](09|0a|0b|0c|0d|20))")
+        set(${result} TRUE PARENT_SCOPE)
+        return()
+    endif()
+    string(LENGTH "${header}" length)
+    if(length GREATER_EQUAL 36)
+        string(SUBSTRING "${header}" 28 8 dib)
+        if(header MATCHES "^424d" AND dib MATCHES "^(0c|28|38|6c|7c)000000$")
+            set(${result} TRUE PARENT_SCOPE)
+            return()
+        endif()
+        if(header MATCHES "^[0-9a-f][0-9a-f](000[23ab]|010[19])")
+            string(SUBSTRING "${header}" 24 4 width)
+            string(SUBSTRING "${header}" 28 4 height)
+            string(SUBSTRING "${header}" 32 2 depth)
+            if(NOT width STREQUAL "0000" AND NOT height STREQUAL "0000" AND
+               depth MATCHES "^(08|0f|10|18|20)$")
+                set(${result} TRUE PARENT_SCOPE)
+                return()
+            endif()
+        endif()
+    endif()
+    if(length GREATER_EQUAL 184 AND header MATCHES "^5380f634")
+        string(SUBSTRING "${header}" 176 8 picture)
+        if(picture STREQUAL "50494354")
+            set(${result} TRUE PARENT_SCOPE)
+        endif()
+    endif()
+endfunction()
+
+)LUX";
+
+constexpr auto LegacyContentSelection = R"LUX(    if(matchPath MATCHES "^Assets/" OR
+       (lowerPath MATCHES "[.](lux|luxprefab|luxanim|luxanimator|obj|fbx|png|jpg|jpeg|bmp|tga|hdr)$" AND
+        NOT path MATCHES "(^|/)([.]git|[.]lux)(/|$)" AND
+        NOT path MATCHES "^(build|out|cmake-build[^/]*)(/|$)"))
+        add_content("${source}" "${encoded}")
+    endif()
+)LUX";
+
+constexpr auto ContentSelection = R"LUX(    if(matchPath MATCHES "^Assets/")
+        add_content("${source}" "${encoded}")
+    elseif(NOT lowerPath MATCHES "(^|/)([.]git|[.]lux)(/|$)" AND
+           NOT lowerPath MATCHES "^(build|out|cmake-build[^/]*)(/|$)")
+        if(lowerPath MATCHES "[.](lux|luxprefab|luxanim|luxanimator|obj|fbx|png|jpg|jpeg|bmp|tga|hdr)$")
+            add_content("${source}" "${encoded}")
+        else()
+            is_image_content("${source}" image)
+            if(image)
+                add_content("${source}" "${encoded}")
+            endif()
+        endif()
+    endif()
+)LUX";
+
 constexpr const char* SyncContent =
     R"LUX(cmake_minimum_required(VERSION 3.24)
 function(encode_paths text output)
@@ -156,7 +219,7 @@ function(scan_tree directory output)
     set(${output} "${paths}" PARENT_SCOPE)
 endfunction()
 
-function(add_content source encodedPath)
+@IMAGE_CHECK@function(add_content source encodedPath)
     decode_path("${encodedPath}" path)
     set(key "${path}")
     if(caseInsensitivePaths)
@@ -244,13 +307,7 @@ foreach(encoded IN LISTS assets)
         string(REGEX REPLACE "^[aA][sS][sS][eE][tT][sS]/" "Assets/" matchPath "${matchPath}")
     endif()
     string(TOLOWER "${path}" lowerPath)
-    if(matchPath MATCHES "^Assets/" OR
-       (lowerPath MATCHES "[.](lux|luxprefab|luxanim|luxanimator|obj|fbx|png|jpg|jpeg|bmp|tga|hdr)$" AND
-        NOT path MATCHES "(^|/)([.]git|[.]lux)(/|$)" AND
-        NOT path MATCHES "^(build|out|cmake-build[^/]*)(/|$)"))
-        add_content("${source}" "${encoded}")
-    endif()
-endforeach()
+@CONTENT_SELECTION@endforeach()
 foreach(encoded IN LISTS scripts)
     decode_path("${encoded}" path)
     if(NOT IS_DIRECTORY "${MANAGED_ROOT}/${path}")
@@ -586,6 +643,16 @@ endif()
 clean_transaction()
 )LUX";
 
+std::string ContentSyncScript(bool legacy) {
+    std::string script = SyncContent;
+    const auto substitute = [&](std::string_view marker, std::string_view code) {
+        script.replace(script.find(marker), marker.size(), code);
+    };
+    substitute("@IMAGE_CHECK@", legacy ? "" : ImageContentCheck);
+    substitute("@CONTENT_SELECTION@", legacy ? LegacyContentSelection : ContentSelection);
+    return script;
+}
+
 constexpr const char* GameSource = R"LUX(#include <LuxEngine/LuxEngine.hpp>
 #include <SDL3/SDL_filesystem.h>
 #include <LuxEngine/EntryPoint.hpp>
@@ -899,11 +966,12 @@ bool CreateTemplateFiles(const std::filesystem::path& directory, ProjectTemplate
         error = "프로젝트 소스 폴더를 만들 수 없습니다.";
         return false;
     }
-    const std::pair<const char*, const char*> scriptFiles[] = {
+    const auto syncContent = ContentSyncScript(false);
+    const std::pair<const char*, std::string_view> scriptFiles[] = {
         {"Scripts/GameScripts.csproj", ScriptProject},
         {"Scripts/Mover.cs", ScriptSource},
         {".editorconfig", ScriptFormatting},
-        {"SyncContent.cmake", SyncContent},
+        {"SyncContent.cmake", syncContent},
         {"Scripts/NuGet.Config",
          "<configuration><packageSources><clear /></packageSources></configuration>\n"}};
     for (const auto& [path, content] : scriptFiles) {
@@ -926,6 +994,30 @@ bool CreateTemplateFiles(const std::filesystem::path& directory, ProjectTemplate
     sourceFile.close();
     if (!buildFile || !sourceFile) {
         error = "프로젝트 시작 코드를 저장할 수 없습니다.";
+        return false;
+    }
+    return true;
+}
+
+bool UpgradeTemplateContentSync(const std::filesystem::path& directory, std::string& error) {
+    const auto path = directory / "SyncContent.cmake";
+    std::error_code ec;
+    if (std::filesystem::is_symlink(path, ec) || ec)
+        return true;
+    const auto legacy = ContentSyncScript(true);
+    std::string existing(legacy.size(), '\0');
+    std::ifstream input(path, std::ios::binary);
+    if (!input.read(existing.data(), static_cast<std::streamsize>(existing.size())) ||
+        input.peek() != std::char_traits<char>::eof() || existing != legacy)
+        return true;
+    input.close();
+
+    LuxUI::SaveFile destination(LuxUI::String::fromStdU16String(path.u16string()));
+    const auto script = ContentSyncScript(false);
+    const auto size = static_cast<qint64>(script.size());
+    if (!destination.open(LuxUI::IODevice::WriteOnly) ||
+        destination.write(script.data(), size) != size || !destination.commit()) {
+        error = "프로젝트 콘텐츠 복사 스크립트를 갱신할 수 없습니다.";
         return false;
     }
     return true;
