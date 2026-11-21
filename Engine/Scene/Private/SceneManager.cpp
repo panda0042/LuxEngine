@@ -261,6 +261,63 @@ bool SameEntity(Scene& current, uint32 local, Scene& previous, uint32 source, co
                EntitySignature(previous, source, sourceReferences);
 }
 
+void RewritePaths(Scene& scene, const fs::path& owner, const fs::path* destination, size_t depth);
+
+void RewriteEntityPaths(Entity entity, const fs::path& owner, const fs::path* destination,
+                        size_t depth) {
+    auto rebaseAnimationAsset = [&](std::string& resource) {
+        if (resource.empty())
+            return;
+        const auto absolute = Canonical(Path(resource), owner);
+        const auto relative =
+            destination ? absolute.lexically_relative(destination->parent_path()) : fs::path{};
+        resource = Utf8(destination && !relative.empty() ? relative : absolute);
+    };
+    if (auto* animation = entity.TryGetComponent<AnimationComponent>()) {
+        rebaseAnimationAsset(animation->assetPath);
+        rebaseAnimationAsset(animation->clip.modelPath);
+        rebaseAnimationAsset(animation->clip.spriteSheet);
+        animation->loadedPath.clear();
+        animation->asset.reset();
+    }
+    if (auto* animation = entity.TryGetComponent<AnimatorComponent>()) {
+        rebaseAnimationAsset(animation->controllerPath);
+        animation->loadedPath.clear();
+        animation->player.reset();
+    }
+    if (auto* sprite = entity.TryGetComponent<SpriteRendererComponent>())
+        rebaseAnimationAsset(sprite->texturePath);
+    if (auto* animation = entity.TryGetComponent<ModelAnimationComponent>())
+        rebaseAnimationAsset(animation->modelPath);
+    if (auto* mesh = entity.TryGetComponent<MeshRendererComponent>())
+        for (auto* resource : {&mesh->meshPath, &mesh->material.baseColorTexture,
+                               &mesh->material.normalTexture, &mesh->material.metallicTexture,
+                               &mesh->material.roughnessTexture, &mesh->material.occlusionTexture})
+            rebaseAnimationAsset(*resource);
+    auto* reference = entity.TryGetComponent<SceneReferenceComponent>();
+    if (!reference)
+        return;
+    const auto absolute = Canonical(Path(reference->path), owner);
+    if (destination) {
+        if (SamePath(absolute, *destination))
+            throw std::runtime_error("씬 자신을 참조하는 경로에 저장할 수 없습니다.");
+        std::error_code error;
+        const auto relative = fs::relative(absolute, destination->parent_path(), error);
+        reference->path = !error && !relative.empty() ? Utf8(relative) : Utf8(absolute);
+    } else
+        reference->path = Utf8(absolute);
+    for (std::string* snapshot : {&reference->baseline, &reference->suspended}) {
+        if (snapshot->empty())
+            continue;
+        Scene nested;
+        if (!nested.DeserializeFromString(*snapshot))
+            throw std::runtime_error("씬 참조 스냅샷 형식이 올바르지 않습니다.");
+        RewritePaths(nested, owner, destination, depth + 1);
+        if (!nested.SerializeToString(*snapshot))
+            throw std::runtime_error("씬 참조 경로를 저장할 수 없습니다.");
+    }
+}
+
 // Persisted metadata can contain previous source and unloaded-subtree snapshots. Their reference
 // paths use the same owning-file context as the outer scene, including after project relocation.
 void RewritePaths(Scene& scene, const fs::path& owner, const fs::path* destination,
@@ -277,71 +334,8 @@ void RewritePaths(Scene& scene, const fs::path& owner, const fs::path* destinati
         if (!scene.SetSettings(settings))
             throw std::runtime_error("Invalid rebased environment path");
     }
-    for (auto entity : scene.GetEntities()) {
-        auto rebaseAnimationAsset = [&](std::string& resource) {
-            if (resource.empty())
-                return;
-            const auto absolute = Canonical(Path(resource), owner);
-            const auto relative =
-                destination ? absolute.lexically_relative(destination->parent_path()) : fs::path{};
-            resource = Utf8(destination && !relative.empty() ? relative : absolute);
-        };
-        if (auto* animation = entity.TryGetComponent<AnimationComponent>()) {
-            rebaseAnimationAsset(animation->assetPath);
-            rebaseAnimationAsset(animation->clip.modelPath);
-            rebaseAnimationAsset(animation->clip.spriteSheet);
-            animation->loadedPath.clear();
-            animation->asset.reset();
-        }
-        if (auto* animation = entity.TryGetComponent<AnimatorComponent>()) {
-            rebaseAnimationAsset(animation->controllerPath);
-            animation->loadedPath.clear();
-            animation->player.reset();
-        }
-        if (auto* sprite = entity.TryGetComponent<SpriteRendererComponent>())
-            rebaseAnimationAsset(sprite->texturePath);
-        if (auto* animation = entity.TryGetComponent<ModelAnimationComponent>()) {
-            const auto absolute = Canonical(Path(animation->modelPath), owner);
-            const auto relative =
-                destination ? absolute.lexically_relative(destination->parent_path()) : fs::path{};
-            animation->modelPath = Utf8(destination && !relative.empty() ? relative : absolute);
-        }
-        if (auto* mesh = entity.TryGetComponent<MeshRendererComponent>())
-            for (auto* resource :
-                 {&mesh->meshPath, &mesh->material.baseColorTexture, &mesh->material.normalTexture,
-                  &mesh->material.metallicTexture, &mesh->material.roughnessTexture,
-                  &mesh->material.occlusionTexture}) {
-                if (resource->empty())
-                    continue;
-                const auto absolute = Canonical(Path(*resource), owner);
-                const auto relative = destination
-                                          ? absolute.lexically_relative(destination->parent_path())
-                                          : fs::path{};
-                *resource = Utf8(destination && !relative.empty() ? relative : absolute);
-            }
-        auto* reference = entity.TryGetComponent<SceneReferenceComponent>();
-        if (!reference)
-            continue;
-        const auto absolute = Canonical(Path(reference->path), owner);
-        if (destination) {
-            if (SamePath(absolute, *destination))
-                throw std::runtime_error("씬 자신을 참조하는 경로에 저장할 수 없습니다.");
-            std::error_code error;
-            const auto relative = fs::relative(absolute, destination->parent_path(), error);
-            reference->path = !error && !relative.empty() ? Utf8(relative) : Utf8(absolute);
-        } else
-            reference->path = Utf8(absolute);
-        for (std::string* snapshot : {&reference->baseline, &reference->suspended}) {
-            if (snapshot->empty())
-                continue;
-            Scene nested;
-            if (!nested.DeserializeFromString(*snapshot))
-                throw std::runtime_error("씬 참조 스냅샷 형식이 올바르지 않습니다.");
-            RewritePaths(nested, owner, destination, depth + 1);
-            if (!nested.SerializeToString(*snapshot))
-                throw std::runtime_error("씬 참조 경로를 저장할 수 없습니다.");
-        }
-    }
+    for (auto entity : scene.GetEntities())
+        RewriteEntityPaths(entity, owner, destination, depth);
 }
 
 struct Stamp {
@@ -419,6 +413,11 @@ void CheckSaveDependencies(Scene& scene, const fs::path& owner, std::vector<fs::
     }
 }
 } // namespace
+
+void SceneManager::RebaseImportedEntityPaths(Scene& target, uint32 entity,
+                                             const std::string& sourcePath) {
+    RewriteEntityPaths(Entity(entity, &target), Canonical(Path(sourcePath)), nullptr, 0);
+}
 
 struct SceneManager::State {
     struct CacheEntry {

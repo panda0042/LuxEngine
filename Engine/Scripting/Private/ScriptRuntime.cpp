@@ -120,15 +120,15 @@ double LUX_SCRIPT_CALL AnimationCommand(uint64 id, uint32 entity, int operation,
         auto* component = world->scene->TryGetComponent<AnimatorComponent>(entity);
         if (!component)
             return 0;
-        if (!component->player) {
+        const auto path = world->scene->ResolveAssetPath(component->controllerPath);
+        if (!component->player || component->loadedPath != path) {
             std::string error;
-            auto controller = AnimatorController::Load(
-                world->scene->ResolveAssetPath(component->controllerPath), error);
+            auto controller = AnimatorController::Load(path, error);
             auto player = CreateRef<AnimatorPlayer>();
             if (!controller || !player->SetController(controller, error))
                 return 0;
             component->player = player;
-            component->loadedPath = world->scene->ResolveAssetPath(component->controllerPath);
+            component->loadedPath = path;
             for (const auto& p : component->parameters)
                 player->SetParameter(p.name, p.value);
         }

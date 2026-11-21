@@ -717,6 +717,8 @@ std::unordered_map<uint32, uint32> Scene::ImportEntitiesInternal(const Scene& so
             const auto destination = mapping.at(id);
             if (!CopyEntityComponents(source, id, destination))
                 throw std::runtime_error("Cannot import unsupported scene component");
+            if (!restoreLocal && !source.sourcePath_.empty() && source.sourcePath_ != sourcePath_)
+                SceneManager::RebaseImportedEntityPaths(*this, destination, source.sourcePath_);
             const auto originalParent = source.GetParent(id);
             const bool parentIncluded = mapping.contains(originalParent);
             HierarchyComponent hierarchy;

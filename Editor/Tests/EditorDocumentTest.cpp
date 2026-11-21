@@ -1338,6 +1338,15 @@ void TestGeneratedContentFormats(const std::filesystem::path& cmake) {
         return std::pair{success, process.readAll().toStdString()};
     };
 #ifdef _WIN32
+    const auto requiredLock = CreateFileW((root / "Art/Badge.image").c_str(), GENERIC_READ, 0,
+                                          nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    Check(requiredLock != INVALID_HANDLE_VALUE, "lock a required image before the first copy");
+    const auto [copiedFirstLockedImage, firstError] = synchronize();
+    CloseHandle(requiredLock);
+    Check(!copiedFirstLockedImage &&
+              firstError.find("Could not read referenced content") != std::string::npos &&
+              !fs::exists(output / "content.txt"),
+          "first synchronization rejects an unreadable referenced image before writing output");
     const auto lock = CreateFileW(notes.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
                                   FILE_ATTRIBUTE_NORMAL, nullptr);
     Check(lock != INVALID_HANDLE_VALUE, "lock the unrelated file during synchronization");

@@ -332,16 +332,21 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
             const auto& sample = *evaluated[index];
             if (sample.weight <= 0 || sample.path != path)
                 continue;
-            uint32 root = model->submeshes.front().node;
+            std::optional<uint32> selectedRoot;
+            if (sample.rootMotionTarget.empty() && !model->submeshes.empty())
+                selectedRoot = model->submeshes.front().node;
             for (uint32 node = 0; node < model->nodes.size(); ++node)
                 if ((!sample.rootMotionTarget.empty() &&
                      model->nodes[node].name == sample.rootMotionTarget) ||
                     (sample.rootMotionTarget.empty() && model->nodes[node].bone &&
                      (model->nodes[node].parent < 0 ||
                       !model->nodes[model->nodes[node].parent].bone))) {
-                    root = node;
+                    selectedRoot = node;
                     break;
                 }
+            if (!selectedRoot)
+                continue;
+            const auto root = *selectedRoot;
             if (!model->NodeMatchesMask(root, sample.mask))
                 continue;
             if (!rootDelta) {
