@@ -380,21 +380,28 @@ void TestMeshPackaging() {
     const auto executable = out / "game.exe";
     Write(executable, "binary");
     Write(out / "Content/Assets" / PathFromUtf8("한글 모델.OBJ"), "model");
+    Write(out / "Content/Art/Styled.log", "texture with an alternate suffix");
+    Write(out / "Content/Art/Ui.dir/Badge.png", "texture in a project folder");
     Write(out / "compiler.obj", "skip");
+    Write(out / "compiler.log", "skip");
+    Write(out / "compiler.dir/Badge.png", "skip");
     Write(out / "Content/CMakeFiles/compiler.obj", "skip");
     const auto archive = files.path / "mesh.zip";
     std::string error;
     const auto result = CreateDistributionArchive(executable, archive, "Game", error);
-    Check(result && result->fileCount == 2,
-          "OBJ content is included while compiler objects remain excluded");
+    Check(result && result->fileCount == 4,
+          "content is included while compiler files remain excluded");
     int code = 0;
     zip_t* zip = zip_open(PathUtf8(archive).c_str(), ZIP_RDONLY, &code);
     Check(zip != nullptr, "mesh package opens");
     const bool mesh =
         zip_name_locate(zip, "Game/Content/Assets/한글 모델.OBJ", ZIP_FL_ENC_UTF_8) >= 0;
     const bool compiler = zip_name_locate(zip, "Game/compiler.obj", 0) >= 0;
+    const bool alternateSuffix = zip_name_locate(zip, "Game/Content/Art/Styled.log", 0) >= 0;
+    const bool projectFolder = zip_name_locate(zip, "Game/Content/Art/Ui.dir/Badge.png", 0) >= 0;
     zip_close(zip);
-    Check(mesh && !compiler, "distribution ZIP distinguishes meshes from build artifacts");
+    Check(mesh && alternateSuffix && projectFolder && !compiler,
+          "distribution ZIP distinguishes project content from build artifacts");
 }
 } // namespace
 

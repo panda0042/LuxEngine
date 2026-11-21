@@ -48,7 +48,7 @@ void Merge(AnimationFrame& destination, const AnimationFrame& source, double wei
         }
         for (const auto& contribution : source.childRootMotion)
             destination.childRootMotion.push_back(
-                {contribution.target, contribution.delta * weight});
+                {contribution.target, contribution.delta * weight, contribution.modelBinding});
     }
     for (const auto& sample : source.samples) {
         const bool sprite = sample.property == AnimationProperty::SpriteFrame;
@@ -189,7 +189,8 @@ struct AnimatorPlayer::Impl {
                     const auto weighted = *delta * weight;
                     frame.rootDelta = frame.rootDelta.value_or(Vec3{}) + weighted;
                     if (!clip->rootMotionTarget.empty())
-                        frame.childRootMotion.push_back({clip->rootMotionTarget, weighted});
+                        frame.childRootMotion.push_back(
+                            {clip->rootMotionTarget, weighted, !clip->modelPath.empty()});
                 }
             part.samples = clip->SampleTracks(cursor);
             if (extractRootMotion)

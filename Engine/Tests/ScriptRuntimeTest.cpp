@@ -103,6 +103,62 @@ void TestStreamingAndAnimatedFields(const ScriptRuntimeConfig& config,
           "A newly streamed script must start in the existing runtime");
 }
 
+void TestScriptAnimatorPlay(const ScriptRuntimeConfig& config, const std::string& controller) {
+    Scene scene;
+    auto rejected = scene.CreateEntity("Rejected state");
+    auto control = scene.CreateEntity("Paused control");
+    auto accepted = scene.CreateEntity("Accepted state");
+    for (auto actor : {rejected, control, accepted}) {
+        actor.AddComponent<AnimatorComponent>().controllerPath = controller;
+        actor.AddComponent<ScriptComponent>() = {"ScriptTests.AnimatorPlayProbe", true};
+    }
+    rejected.GetComponent<ScriptComponent>().fields["State"] = std::string("No such state");
+    accepted.GetComponent<ScriptComponent>().fields["State"] = std::string("Run");
+    ScriptRuntime runtime;
+    CheckRuntime(runtime.Initialize(scene, config), runtime);
+    CheckRuntime(runtime.PrepareInstances(), runtime);
+    Check(rejected.GetComponent<TransformComponent>().position.z == -1 &&
+              accepted.GetComponent<TransformComponent>().position.z == 1,
+          "C# Play returns false for an invalid state and true for a valid state");
+    scene.UpdateAnimations(.25);
+    const auto& invalid = rejected.GetComponent<AnimatorComponent>();
+    const auto& paused = control.GetComponent<AnimatorComponent>();
+    const auto& running = accepted.GetComponent<AnimatorComponent>();
+    Check(!invalid.playing && invalid.player->GetTime() == 0 && !paused.playing &&
+              paused.player->GetTime() == 0 && running.playing && running.player->GetTime() == .25,
+          "a rejected Play must preserve the previously paused Animator");
+}
+
+void TestScriptAnimationQueues(const ScriptRuntimeConfig& config, const std::string& controller) {
+    Scene scene;
+    auto plain = scene.CreateEntity("Clip only");
+    auto paused = scene.CreateEntity("Clip with paused Animator");
+    auto active = scene.CreateEntity("Clip with active Animator");
+    for (auto actor : {plain, paused, active}) {
+        auto& clip = actor.AddComponent<AnimationComponent>().clip;
+        clip.loop = false;
+        clip.events = {{0, "clip", ""}, {.125, "clip", ""}};
+        actor.AddComponent<ScriptComponent>() = {"ScriptTests.AnimationQueueProbe", true};
+    }
+    auto& pausedAnimator = paused.AddComponent<AnimatorComponent>();
+    pausedAnimator.controllerPath = controller;
+    pausedAnimator.playing = false;
+    active.AddComponent<AnimatorComponent>().controllerPath = controller;
+
+    ScriptRuntime runtime;
+    CheckRuntime(runtime.Initialize(scene, config), runtime);
+    scene.UpdateAnimations(.25);
+    CheckRuntime(runtime.Update(.25), runtime);
+    const auto count = [](Entity actor) {
+        return actor.GetComponent<TransformComponent>().position;
+    };
+    Check(count(plain).x == 2 && count(plain).y == 0 && count(paused).x == 2 &&
+              count(paused).y == 0 && count(active).x == 2 && count(active).y == 1 &&
+              active.GetComponent<AnimationComponent>().pendingEvents.empty() &&
+              active.GetComponent<AnimatorComponent>().pendingEvents.empty(),
+          "C# drains both animation queues even when an Animator is present");
+}
+
 void TestFirstGame(const char* assemblyPath, const char* scenePath) {
     Scene scene;
     Check(scene.Deserialize(scenePath), "First game scene did not load");
@@ -312,6 +368,8 @@ int main(int argc, char** argv) {
             Check(character.GetComponent<TransformComponent>().scale.z == 2,
                   "Managed animation event callback");
             runtime.Shutdown();
+            TestScriptAnimatorPlay(config, controllerPath);
+            TestScriptAnimationQueues(config, controllerPath);
             TestStreamingAndAnimatedFields(config, root);
             std::filesystem::remove_all(root);
         }

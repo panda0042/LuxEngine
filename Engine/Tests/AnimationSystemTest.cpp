@@ -331,6 +331,11 @@ void RotatedChildRootMotion(const std::filesystem::path& root) {
             Check(Near(child.x, 0) && Near(child.y, 2) && Near(owner.x, 0) &&
                       Near(owner.y, extract ? 2 : 0),
                   "extracting child motion preserves the authored world direction and scale");
+            scene.DestroyEntity(motion);
+            scene.UpdateAnimations(.25);
+            const auto afterRemoval = actor.GetComponent<TransformComponent>().position;
+            Check(Near(afterRemoval.x, owner.x) && Near(afterRemoval.y, owner.y),
+                  "a missing child binding cannot move the owner");
         }
     }
 }
