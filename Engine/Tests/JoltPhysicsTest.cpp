@@ -79,6 +79,25 @@ void SmallBodies() {
 
 int Run(int, char**) {
     using namespace LuxEngine;
+    {
+        PhysicsWorld world;
+        PhysicsBodyDescription body;
+        body.entity = 1;
+        const std::span bodies{&body, 1};
+        const auto hitsAt = [&](double x) {
+            RaycastHit3D hit;
+            return world.Raycast({x, 0, 4}, {0, 0, -1}, 8, hit);
+        };
+        Check(world.Synchronize(bodies) && hitsAt(0), "initial collision shape is at the origin");
+        body.position.x = 10;
+        Check(world.Synchronize(bodies) && hitsAt(10) && world.GetState(1)->position.x == 10,
+              "immediate synchronization publishes the moved body");
+        body.position.x = 0;
+        Check(world.Synchronize(bodies) && hitsAt(0) && !hitsAt(10),
+              "a second synchronization before stepping restores the collision shape");
+        world.Step(1.0 / 60, {});
+        Check(world.GetState(1)->position.x == 0, "stepping retains the latest synchronized pose");
+    }
     for (bool planar : {false, true}) {
         for (const double skipped : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
                                      std::numeric_limits<double>::infinity(), 1.0 / 120}) {

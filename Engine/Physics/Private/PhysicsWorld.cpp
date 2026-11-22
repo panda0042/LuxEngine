@@ -314,7 +314,8 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input, do
         auto& entry = found->second;
         const bool poseChanged = !Same(entry.state.position, description.position) ||
                                  !Same(entry.state.rotation, description.rotation);
-        if (poseChanged) {
+        const bool hadKinematicTarget = entry.movingToTarget;
+        if (poseChanged || hadKinematicTarget) {
             const auto position =
                 JPH::RVec3(description.position.x, description.position.y, description.position.z);
             const auto rotation = JPH::Quat::sEulerAngles(Vector(description.rotation));
@@ -324,10 +325,20 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input, do
             } else {
                 bodies.SetPositionAndRotation(entry.body, position, rotation,
                                               JPH::EActivation::Activate);
+                entry.state.position = description.position;
+                entry.state.rotation = description.rotation;
+                entry.movingToTarget = false;
             }
         }
-        if (!entry.movingToTarget && !Same(entry.state.velocity, description.velocity))
-            bodies.SetLinearVelocity(entry.body, Vector(description.velocity));
+        if (!entry.movingToTarget &&
+            (hadKinematicTarget || !Same(entry.state.velocity, description.velocity))) {
+            if (hadKinematicTarget)
+                bodies.SetLinearAndAngularVelocity(entry.body, Vector(description.velocity),
+                                                   JPH::Vec3::sZero());
+            else
+                bodies.SetLinearVelocity(entry.body, Vector(description.velocity));
+            entry.state.velocity = description.velocity;
+        }
         if (description.type != BodyType::Static)
             bodies.SetGravityFactor(entry.body, description.gravityScale);
         entry.description = description;

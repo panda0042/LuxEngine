@@ -387,7 +387,7 @@ bool ScriptRuntime::Initialize(Scene& scene, const ScriptRuntimeConfig& config) 
         const auto assembly = Utf8(std::filesystem::canonical(config.assemblyPath));
         impl_->world = std::make_shared<WorldState>();
         impl_->world->scene = &scene;
-        impl_->world->lifetime = scene.Lifetime();
+        impl_->world->lifetime = scene.scriptLifetime_;
         impl_->world->owner = std::this_thread::get_id();
         impl_->nativeId = ++nextWorld;
         {

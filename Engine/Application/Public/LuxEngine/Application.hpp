@@ -49,6 +49,8 @@ protected:
 
     virtual void OnRender(float /*elapsedSeconds*/);
 
+    virtual void OnFramePresented() {}
+
     virtual void OnShutdown();
 
 private:

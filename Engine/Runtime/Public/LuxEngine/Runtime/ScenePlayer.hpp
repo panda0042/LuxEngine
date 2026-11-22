@@ -58,7 +58,8 @@ struct ScenePlayerCameras {
 ScenePlayerCameras ResolveScenePlayerCameras(Scene& scene, double aspect,
                                              const ScenePlayerView& fallback);
 
-// Parses: <scene> [--title T] [--size W H] [--fullscreen] [--view X Y HALF_HEIGHT] [--frames N]
+// Parses: <scene> [--title T] [--size W H] [--fullscreen] [--view X Y HALF_HEIGHT]
+//         [--frames N] [--scripts DLL]
 // Returns std::nullopt and sets error on invalid arguments.
 std::optional<ScenePlayerOptions> ParseScenePlayerArguments(const std::vector<std::string>& args,
                                                             std::string& error);
@@ -72,11 +73,13 @@ public:
 
     bool LoadedScene() const;
     bool RuntimeFailed() const;
+    uint64 GetPresentedFrameCount() const noexcept;
 
 protected:
     void OnInit() override;
     void OnUpdate(double dt) override;
     void OnRender(float elapsedSeconds) override;
+    void OnFramePresented() override;
     void OnShutdown() override;
 
 private:
@@ -97,7 +100,7 @@ private:
     double fittedAspect_ = 0;
     bool loaded_ = false;
     bool runtimeFailed_ = false;
-    uint32 frames_ = 0;
+    uint64 presentedFrames_ = 0;
     double streamingAccumulator_ = 0;
     std::string lastStreamingError_;
 };

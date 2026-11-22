@@ -18,7 +18,7 @@ function Expect-RuntimeFailure {
     if (-not $failed) { throw "A missing or empty runtime file was accepted: $Missing" }
 }
 
-$testDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "Lux packaging 한글 $([guid]::NewGuid())"
+$testDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "Lux packaging [한글] $([guid]::NewGuid())"
 try {
     $source = Join-Path $testDirectory "build/bin/Release"
     foreach ($relative in (Get-LuxWindowsRuntimeFiles)) {

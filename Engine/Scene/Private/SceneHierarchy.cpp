@@ -318,6 +318,11 @@ void Scene::RepairReferenceLinks() {
 }
 
 bool Scene::CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 targetId) {
+    return CopyEntityComponents(source, sourceId, targetId, false);
+}
+
+bool Scene::CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 targetId,
+                                 bool preserveAnimatorPlayback) {
     if (!source.IsAlive(sourceId) || !IsAlive(targetId))
         return false;
     if (&source == this && sourceId == targetId)
@@ -338,6 +343,22 @@ bool Scene::CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 ta
             auto& destination = GetPool<T>().values;
             destination.reserve(destination.size() + 1);
         });
+        if (preserveAnimatorPlayback) {
+            const auto* current = TryGetComponent<AnimatorComponent>(targetId);
+            auto* replacement = prepared.TryGetComponent<AnimatorComponent>(targetId);
+            if (current && replacement && current->controllerPath == replacement->controllerPath &&
+                current->playing == replacement->playing &&
+                current->rootMotion == replacement->rootMotion &&
+                std::ranges::equal(current->parameters, replacement->parameters,
+                                   [](const auto& left, const auto& right) {
+                                       return left.name == right.name && left.type == right.type &&
+                                              left.value == right.value;
+                                   })) {
+                replacement->player = current->player;
+                replacement->loadedPath = current->loadedPath;
+                replacement->pendingEvents = current->pendingEvents;
+            }
+        }
     } catch (...) {
         return false;
     }
@@ -353,9 +374,14 @@ bool Scene::CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 ta
 }
 
 bool Scene::ApplyState(Scene& prepared) {
+    return ApplyState(prepared, false);
+}
+
+bool Scene::ApplyState(Scene& prepared, bool preserveScriptRuntime) {
     if (&prepared == this)
         return true;
     std::shared_ptr<int> nextLifetime, preparedLifetime;
+    std::shared_ptr<int> nextScriptLifetime, preparedScriptLifetime;
     std::vector<uint32> removedBodies;
     try {
         std::string validation;
@@ -363,6 +389,9 @@ bool Scene::ApplyState(Scene& prepared) {
             return false;
         nextLifetime = std::make_shared<int>(0);
         preparedLifetime = std::make_shared<int>(0);
+        if (!preserveScriptRuntime)
+            nextScriptLifetime = std::make_shared<int>(0);
+        preparedScriptLifetime = std::make_shared<int>(0);
         removedBodies.reserve(entities_.size());
         for (const auto id : entities_) {
             const bool had2D = HasComponent<BoxCollider2DComponent>(id) &&
@@ -393,6 +422,9 @@ bool Scene::ApplyState(Scene& prepared) {
             body->isGrounded = false;
     lifetime_ = std::move(nextLifetime);
     prepared.lifetime_ = std::move(preparedLifetime);
+    if (!preserveScriptRuntime)
+        scriptLifetime_ = std::move(nextScriptLifetime);
+    prepared.scriptLifetime_ = std::move(preparedScriptLifetime);
     if (timingChanged)
         ResetPhysicsTiming();
     std::erase_if(collisionEvents2D_, [this](const auto& event) {

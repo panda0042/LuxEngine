@@ -68,6 +68,8 @@ void Parse() {
         {"a.lux", "--view", "1x", "0", "3"},
         {"a.lux", "--view", "1,5", "0", "3"},
         {"a.lux", "--frames", "-1"},
+        {"a.lux", "--scripts"},
+        {"a.lux", "--scripts", "--fullscreen", "--frames", "1"},
         {"a.lux", "--unknown"},
     };
     for (const auto& args : invalid) {
@@ -77,6 +79,10 @@ void Parse() {
     }
     Check(ParseScenePlayerArguments({"scene.lux"}, error).has_value() && error.empty(),
           "successful parsing clears an earlier error");
+    options = ParseScenePlayerArguments(
+        {"scene.lux", "--scripts", "./-scripts.dll", "--fullscreen"}, error);
+    Check(options && options->scriptAssemblyPath == "./-scripts.dll" && options->fullscreen,
+          "a relative script path with a dash needs no special quoting inside the parser");
 }
 
 void Fit() {
@@ -316,6 +322,65 @@ int CameraClippingGpu(const std::filesystem::path& directory) {
     return 0;
 }
 
+void LegacyLightingAndFrameLimitGpu(const std::filesystem::path& directory) {
+    using namespace LuxEngine;
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.clearColor = {.01f, .01f, .01f, 1};
+    settings.render3D.mode = Render3DMode::Legacy;
+    settings.render3D.sun.direction = {0, 0, -1};
+    settings.render3D.sun.intensity = 3;
+    scene.CreateEntity("Camera").AddComponent<CameraComponent>().isPerspective = true;
+    auto cube = scene.CreateEntity("White cube");
+    cube.GetComponent<TransformComponent>().position = {0, 0, -3};
+    cube.AddComponent<MeshRendererComponent>().material.albedoColor = {.7f, .7f, .7f, 1};
+    const auto render = [&](Vec3 color) {
+        settings.render3D.sun.color = color;
+        Check(scene.SetSettings(settings), "save the authored Legacy light settings");
+        const auto file = (directory / "legacy-light.lux").u8string();
+        ScenePlayerOptions options;
+        options.scenePath.assign(reinterpret_cast<const char*>(file.data()), file.size());
+        options.width = 320;
+        options.height = 240;
+        Check(scene.Serialize(options.scenePath), "write a Legacy lighting fixture");
+        ScenePlayer player(options);
+        Check(player.Initialize(), "start the Legacy lighting fixture");
+        Check(player.GetGpuDevice().RequestFrameCapture(), "queue a Legacy frame capture");
+        Check(player.RunFrame() == Application::FrameResult::Continue, "render the Legacy scene");
+        GpuFrameCapture image;
+        Check(player.GetGpuDevice().ReadFrameCapture(image), "read the Legacy frame");
+        const auto offset =
+            (static_cast<size_t>(image.height / 2) * image.width + image.width / 2) * 4;
+        const std::array<int, 3> rgb{image.rgba.at(offset), image.rgba.at(offset + 1),
+                                     image.rgba.at(offset + 2)};
+        player.Shutdown();
+        return rgb;
+    };
+    const auto red = render({1, 0, 0});
+    const auto blue = render({0, 0, 1});
+    Check(red[0] > red[2] + 20 && blue[2] > blue[0] + 20,
+          "the standalone Legacy renderer respects authored directional light colors");
+
+    const auto file = (directory / "legacy-light.lux").u8string();
+    ScenePlayerOptions options;
+    options.scenePath.assign(reinterpret_cast<const char*>(file.data()), file.size());
+    options.width = 320;
+    options.height = 240;
+    options.maxFrames = 1;
+    ScenePlayer player(options);
+    Check(player.Initialize(), "start the one-frame fixture");
+    SDL_Delay(40);
+    Check(player.RunFrame() == Application::FrameResult::Stopped &&
+              player.GetPresentedFrameCount() == 1,
+          "a one-frame budget presents a frame even when physics steps run first");
+    Check(player.Initialize() && player.GetPresentedFrameCount() == 0,
+          "restarting the player resets its presented-frame count");
+    SDL_Delay(40);
+    Check(player.RunFrame() == Application::FrameResult::Stopped &&
+              player.GetPresentedFrameCount() == 1,
+          "the restarted player presents exactly one frame again");
+}
+
 int SceneManagementGpu() {
     namespace fs = std::filesystem;
 
@@ -335,6 +400,7 @@ int SceneManagementGpu() {
 
     if (const int result = CameraClippingGpu(files.root); result != 0)
         return result;
+    LegacyLightingAndFrameLimitGpu(files.root);
 
     const auto text = [](const fs::path& path) {
         const auto bytes = path.u8string();

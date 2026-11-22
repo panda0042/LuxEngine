@@ -28,13 +28,13 @@ try {
     $buildDirResolved = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $root $BuildDir }
     $binSource = Join-Path $buildDirResolved "bin/$Configuration"
     $playerExe = Join-Path $binSource "LuxPlayer.exe"
-    if (-not (Test-Path $playerExe)) {
+    if (-not (Test-Path -LiteralPath $playerExe -PathType Leaf)) {
         throw "Packaging failure: $Configuration executable LuxPlayer.exe not found in $binSource. Build $Configuration first. Silent fallback to other configurations is forbidden for public release packaging."
     }
 
     # Verify no debug CRT runtime DLLs in Release package
     if ($Configuration -eq "Release") {
-        $debugDlls = Get-ChildItem -Path $binSource -Filter "*d.dll" -ErrorAction SilentlyContinue | Where-Object {
+        $debugDlls = Get-ChildItem -LiteralPath $binSource -Filter "*d.dll" -ErrorAction SilentlyContinue | Where-Object {
             $_.Name -match "^(vcruntime.*d|msvcp.*d|ucrtbase.*d|ucrtbased|Qt6.*d|SDL3d)\.dll$"
         }
         if ($debugDlls) {
@@ -43,7 +43,7 @@ try {
     }
 
     # Copy executable
-    Copy-Item -Path $playerExe -Destination $playerStaging -Force
+    Copy-Item -LiteralPath $playerExe -Destination $playerStaging -Force
 
     # Copy the Forge renderer, native shaders, GPU configuration and C# host.
     Copy-LuxWindowsRuntime -Source $binSource -Destination $playerStaging
@@ -52,15 +52,17 @@ try {
     $scenesDir = Join-Path $playerStaging "scenes"
     New-Item -ItemType Directory -Path $scenesDir -Force | Out-Null
     $playerSceneSource = Join-Path $root "samples/ScenePlayer/Scene.lux"
-    if (-not (Test-Path $playerSceneSource -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $playerSceneSource -PathType Leaf)) {
         throw "Packaging failure: Runtime verification scene not found: $playerSceneSource"
     }
-    Copy-Item -Path $playerSceneSource -Destination (Join-Path $scenesDir "ScenePlayer.lux") -Force
+    Copy-Item -LiteralPath $playerSceneSource -Destination (Join-Path $scenesDir "ScenePlayer.lux") -Force
 
     # Copy licenses
     $licensesDir = Join-Path $playerStaging "licenses"
     New-Item -ItemType Directory -Path $licensesDir -Force | Out-Null
-    Copy-Item -Path "$root/docs/licenses/*" -Destination $licensesDir -Recurse -Force
+    Get-ChildItem -LiteralPath (Join-Path $root 'docs/licenses') | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $licensesDir -Recurse -Force
+    }
 
     # Write Standalone Distribution README
     $playerReadme = @"
@@ -85,7 +87,7 @@ See the `licenses/` directory for full license texts and dependency details.
 - The Forge (Apache-2.0)
 - .NET 10 runtime is required to execute C# game scripts
 "@
-    $playerReadme | Out-File -FilePath (Join-Path $playerStaging "README.md") -Encoding utf8
+    $playerReadme | Out-File -LiteralPath (Join-Path $playerStaging "README.md") -Encoding utf8
 
     # Verify essential files strictly (throw immediately on missing file)
     $requiredPlayerFiles = @(
@@ -98,7 +100,7 @@ See the `licenses/` directory for full license texts and dependency details.
 
     foreach ($f in $requiredPlayerFiles) {
         $targetPath = Join-Path $playerStaging $f
-        if (-not (Test-Path $targetPath)) {
+        if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
             throw "Packaging integrity failure: required Runtime file missing: $f"
         }
     }
@@ -107,7 +109,7 @@ See the `licenses/` directory for full license texts and dependency details.
 
     # Verify no debug runtime DLLs are packaged in Release build
     if ($binSource -like "*Release*") {
-        $debugDlls = Get-ChildItem -Path $playerStaging -Filter "*d.dll" -Recurse | Where-Object {
+        $debugDlls = Get-ChildItem -LiteralPath $playerStaging -Filter "*d.dll" -Recurse | Where-Object {
             $_.Name -match "^(ucrtbase|vcruntime140|msvcp140|SDL3)d\.dll$"
         }
         if ($debugDlls -and $debugDlls.Count -gt 0) {
@@ -117,12 +119,13 @@ See the `licenses/` directory for full license texts and dependency details.
 
     # Create ZIP archive
     Write-Host "Creating Runtime archive: $playerZip"
-    Compress-Archive -Path "$playerStaging/*" -DestinationPath $playerZip -CompressionLevel Optimal
+    [IO.Compression.ZipFile]::CreateFromDirectory(
+        $playerStaging, $playerZip, [IO.Compression.CompressionLevel]::Optimal, $false)
     Publish-LuxPackageOutput -Package $package
     $playerZip = $package.PublishedZip
 
-    $zipSize = (Get-Item $playerZip).Length
-    $zipHash = (Get-FileHash -Path $playerZip -Algorithm SHA256).Hash
+    $zipSize = (Get-Item -LiteralPath $playerZip).Length
+    $zipHash = (Get-FileHash -LiteralPath $playerZip -Algorithm SHA256).Hash
     Write-Host "=== Runtime Packaging Complete ==="
     Write-Host "Package: $playerZip"
     Write-Host "Size   : $([math]::Round($zipSize / 1MB, 2)) MB ($zipSize bytes)"

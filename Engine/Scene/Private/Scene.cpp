@@ -1355,6 +1355,7 @@ bool Scene::DeserializeStream(std::istream& in) {
 
 void Scene::AdoptLoadedScene(Scene& parsed) {
     auto nextLifetime = std::make_shared<int>(0);
+    auto nextScriptLifetime = std::make_shared<int>(0);
     pools_.swap(parsed.pools_);
     entities_.swap(parsed.entities_);
     referenceIdentities_.swap(parsed.referenceIdentities_);
@@ -1368,6 +1369,7 @@ void Scene::AdoptLoadedScene(Scene& parsed) {
     collisionEvents2D_.clear();
     collisionEvents3D_.clear();
     lifetime_ = std::move(nextLifetime);
+    scriptLifetime_ = std::move(nextScriptLifetime);
 }
 
 bool Scene::DeserializeFromString(const std::string& data) {

@@ -131,7 +131,9 @@ public:
     template <class T> void RemoveComponent(uint32 id);
 
 private:
+    friend class PrefabLibrary;
     friend class SceneManager;
+    friend class ScriptRuntime;
     class AnimationBindings;
     using RootMotionDeltas = std::unordered_map<uint32, Vec3>;
     void UpdateAnimations(double dt, bool emitEvents, RootMotionDeltas* physicsMotion);
@@ -159,6 +161,9 @@ private:
     template <class T> Pool<T>& GetPool();
 
     void RequireAlive(uint32 id) const;
+    bool ApplyState(Scene& prepared, bool preserveScriptRuntime);
+    bool CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 targetId,
+                              bool preserveAnimatorPlayback);
     static uint64 NewReferenceIdentity();
     bool SetReferenceIdentity(uint32 id, uint64 identity);
     void EraseReferenceIdentity(uint32 id);
@@ -190,6 +195,7 @@ private:
     void RemovePhysicsBody(uint32 id);
     uint32 nextEntityId_ = 1;
     std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
+    std::shared_ptr<int> scriptLifetime_ = std::make_shared<int>(0);
     std::unordered_set<uint32> entities_;
     std::unordered_map<uint32, uint64> referenceIdentities_;
     std::unordered_map<uint64, uint32> entitiesByReferenceIdentity_;

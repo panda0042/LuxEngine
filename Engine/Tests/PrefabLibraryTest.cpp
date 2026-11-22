@@ -61,6 +61,77 @@ struct Files {
     }
 };
 
+void ExportUnsavedScene(const fs::path& directory) {
+    const auto texture = directory / "Badge.png";
+    std::ofstream(texture) << "asset path fixture";
+
+    struct WorkingDirectory {
+        fs::path previous = fs::current_path();
+
+        ~WorkingDirectory() {
+            std::error_code error;
+            fs::current_path(previous, error);
+        }
+    } workingDirectory;
+
+    fs::current_path(directory);
+
+    Scene author;
+    const auto badge = author.CreateEntity("Badge").GetId();
+    author.AddComponent<SpriteRendererComponent>(badge).texturePath = "Badge.png";
+    const auto file = directory / "bundle/prefabs/Badge.luxprefab";
+    std::string error;
+    Check(PrefabLibrary::Save(author, badge, file, error), error);
+    Scene saved;
+    Check(saved.Deserialize(Utf8(file)), "prefab from an unsaved scene can be reopened");
+    const auto& path = saved.GetComponent<SpriteRendererComponent>(badge).texturePath;
+    Check(saved.ResolveAssetPath(path) == author.ResolveAssetPath("Badge.png"),
+          "the prefab resolves the asset from the original working directory");
+}
+
+void RefreshKeepsAnimatorPlayback(const fs::path& directory) {
+    std::string error;
+    const auto clip = Utf8(directory / "Pose.luxanim");
+    const auto controllerPath = Utf8(directory / "Actor.luxanimator");
+    Check(AnimationClip{}.Save(clip, error), error);
+    AnimatorController controller;
+    AnimatorLayer layer;
+    layer.entry = "Idle";
+    layer.states = {{"Idle", clip}, {"Moving", clip}};
+    controller.layers = {layer};
+    controller.parameters = {{"Pace", AnimationParameterType::Float, 1}};
+    Check(controller.Save(controllerPath, error), error);
+    Scene source;
+    const auto actor = source.CreateEntity("Actor").GetId();
+    auto& animator = source.AddComponent<AnimatorComponent>(actor);
+    animator.controllerPath = controllerPath;
+    const auto file = directory / "bundle/prefabs/Actor.luxprefab";
+    Check(PrefabLibrary::Save(source, actor, file, error), error);
+    Scene target;
+    const auto root = PrefabLibrary::Instantiate(target, file, error);
+    Check(root != 0, error);
+    const auto local = target.GetChildren(root).at(0);
+    target.UpdateAnimations(0);
+    auto player = target.GetComponent<AnimatorComponent>(local).player;
+    Check(player && player->Play("Moving") && player->SetParameter("Pace", 2),
+          "set a live animator state");
+    target.UpdateAnimations(.25);
+    Check(PrefabLibrary::Refresh(target, root, error), error);
+    target.UpdateAnimations(.25);
+    const auto active = target.GetComponent<AnimatorComponent>(local).player;
+    Check(active && active->GetState() == "Moving" && active->GetTime() == .5 &&
+              active->GetParameter("Pace") == 2,
+          "refreshing an unchanged animator preserves its playback and live parameters");
+    animator.parameters = {{"Pace", AnimationParameterType::Float, 3}};
+    Check(PrefabLibrary::Save(source, actor, file, error) &&
+              PrefabLibrary::Refresh(target, root, error),
+          error);
+    target.UpdateAnimations(0);
+    const auto refreshed = target.GetComponent<AnimatorComponent>(local).player;
+    Check(refreshed && refreshed->GetState() == "Idle" && refreshed->GetParameter("Pace") == 3,
+          "an authored animator change is applied on refresh");
+}
+
 void RoundTrip(const fs::path& directory) {
     const auto bundle = directory / "bundle";
     const auto assetPath = bundle / "prefabs" / fs::path(u8"나무 공백.luxprefab");
@@ -264,6 +335,8 @@ void UnloadedPrefabRoundTrip(const fs::path& directory) {
 int main() {
     try {
         Files files;
+        ExportUnsavedScene(files.root);
+        RefreshKeepsAnimatorPlayback(files.root);
         RoundTrip(files.root);
         UnloadedPrefabRoundTrip(files.root);
         std::cout

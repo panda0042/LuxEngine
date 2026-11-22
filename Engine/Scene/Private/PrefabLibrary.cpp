@@ -90,6 +90,7 @@ bool PrefabLibrary::Save(Scene& source, uint32 root, const fs::path& requested,
             Materialize(*staged, root);
         }
         Scene asset;
+        asset.SetSourcePath(Utf8(path));
         const auto mapping = asset.ImportEntities(staged ? *staged : source, {root}, 0, true);
         if (!mapping.contains(root))
             throw std::runtime_error("프리팹 계층 또는 컴포넌트를 복사할 수 없습니다.");
@@ -101,8 +102,7 @@ bool PrefabLibrary::Save(Scene& source, uint32 root, const fs::path& requested,
                 if (asset.GetComponent<InstanceSourceComponent>(id).instanceRoot == copiedRoot)
                     asset.RemoveComponent<InstanceSourceComponent>(id);
         }
-        asset.SetSourcePath(source.GetSourcePath());
-        if (!SceneManager::Save(asset, path, Path(source.GetSourcePath()), error))
+        if (!SceneManager::Save(asset, path, {}, error))
             return false;
         return true;
     } catch (const std::exception& failure) {
@@ -170,7 +170,7 @@ bool PrefabLibrary::Unpack(Scene& target, uint32 root, std::string& error) {
         for (const auto id : staged->GetComponentEntityIds<InstanceSourceComponent>())
             if (staged->GetComponent<InstanceSourceComponent>(id).instanceRoot == root)
                 staged->RemoveComponent<InstanceSourceComponent>(id);
-        if (!target.ApplyState(*staged))
+        if (!target.ApplyState(*staged, true))
             throw std::runtime_error("프리팹 연결을 해제할 수 없습니다.");
         return true;
     } catch (const std::exception& failure) {
