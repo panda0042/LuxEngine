@@ -171,7 +171,7 @@ bool SaveAuthoredScene(LuxEngine::Scene& scene, const fs::path& destination,
         auto copy = CloneAuthoredScene(scene);
         const auto target = CanonicalPath(destination);
         const auto origin = previous.empty() ? PathFromUtf8(scene.GetSourcePath()) : previous;
-        const auto owner = origin.empty() ? target : CanonicalPath(origin);
+        const auto owner = origin.empty() ? fs::path{} : CanonicalPath(origin);
         std::uintmax_t remaining = 128 * 1024 * 1024;
         RebaseSceneReferences(*copy, owner, &target, remaining);
         PathEdits live;

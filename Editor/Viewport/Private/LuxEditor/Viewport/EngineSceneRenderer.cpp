@@ -503,11 +503,8 @@ bool EngineSceneRenderer::RenderGame(LuxEngine::Scene& scene, int pixelWidth, in
             if (settings.mode == LuxEngine::Render3DMode::Pbr) {
                 LuxEngine::Renderer3D::BeginScene(camera.camera3D, settings,
                                                   scene.GetSettings().exposure);
-            } else {
-                LuxEngine::DirectionalLight sun;
-                sun.direction = LuxEngine::Vec3{.5f, -1, .5f}.Normalized();
-                LuxEngine::Renderer3D::BeginScene(camera.camera3D, sun);
-            }
+            } else
+                LuxEngine::Renderer3D::BeginScene(camera.camera3D, settings.sun);
             scene.OnRender3D();
             LuxEngine::Renderer3D::EndScene();
         }
@@ -577,11 +574,6 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
                                        : MakeViewportCamera3D(LuxUI::SizeF(width, height), focus,
                                                               yaw, pitch, distance);
 
-    LuxEngine::DirectionalLight sun;
-    sun.direction = LuxEngine::Vec3(0.5f, -1.0f, 0.5f).Normalized();
-    sun.color = {1.0f, 0.98f, 0.95f};
-    sun.intensity = 1.0f;
-
     s.context3D.Init(&s.gpu);
     LuxEngine::Renderer3D::ScopedContext scope3D(s.context3D);
     try {
@@ -591,10 +583,10 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
             renderSettings.shadows = false;
         if (!renderSettings.environmentPath.empty())
             renderSettings.environmentPath = scene.ResolveAssetPath(renderSettings.environmentPath);
-        if (scene.GetSettings().render3D.mode == LuxEngine::Render3DMode::Pbr)
+        if (renderSettings.mode == LuxEngine::Render3DMode::Pbr)
             LuxEngine::Renderer3D::BeginScene(camera, renderSettings, scene.GetSettings().exposure);
         else
-            LuxEngine::Renderer3D::BeginScene(camera, sun);
+            LuxEngine::Renderer3D::BeginScene(camera, renderSettings.sun);
         for (LuxEngine::Entity entity : scene.GetEntities()) {
             if (backgroundOnly)
                 break;

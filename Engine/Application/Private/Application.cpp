@@ -214,12 +214,15 @@ Application::FrameResult Application::RunFrame() {
         OnRender(static_cast<float>(elapsedSeconds_));
         if (!sdlInitialized_)
             return FrameResult::Stopped;
-        if (!gpuDevice_->EndFrame() && !gpuDevice_->IsReady()) {
+        const bool presented = gpuDevice_->EndFrame();
+        if (!presented && !gpuDevice_->IsReady()) {
             Log::Error(std::string("GPU frame submission failed (") +
                        ToString(gpuDevice_->GetStatus()) + "): " + gpuDevice_->GetLastError());
             Shutdown();
             return FrameResult::Error;
         }
+        if (presented)
+            OnFramePresented();
         if (!running_) {
             Shutdown();
             return FrameResult::Stopped;

@@ -166,7 +166,7 @@ std::optional<ScenePlayerOptions> ParseScenePlayerArguments(const std::vector<st
             return true;
         };
         if (arg == "--scripts") {
-            if (++i >= args.size() || args[i].empty()) {
+            if (++i >= args.size() || args[i].empty() || args[i].front() == '-') {
                 error = "C# 스크립트 어셈블리 경로를 지정해 주세요.";
                 return std::nullopt;
             }
@@ -351,6 +351,7 @@ void ScenePlayer::FindPlayer() {
 }
 
 void ScenePlayer::OnInit() {
+    presentedFrames_ = 0;
     Renderer2D::Init(&GetGpuDevice());
     Renderer3D::Init(&GetGpuDevice());
     PhysicsEngine::Init();
@@ -453,8 +454,6 @@ void ScenePlayer::OnUpdate(double dt) {
             Log::Error(scripts_->GetLastError());
     }
     scene_->OnUpdate(dt);
-    if (options_.maxFrames != 0 && ++frames_ >= options_.maxFrames)
-        Close();
 }
 
 void ScenePlayer::OnRender(float) {
@@ -462,24 +461,30 @@ void ScenePlayer::OnRender(float) {
     const auto clear = scene_->GetSettings().clearColor;
     GetGpuDevice().Clear(clear.x, clear.y, clear.z, clear.w);
     if (perspective_) {
-        DirectionalLight sun;
-        sun.direction = Vec3(0.5f, -1.0f, 0.5f).Normalized();
-        sun.color = {1.0f, 0.98f, 0.95f};
-        sun.intensity = 1.0f;
         auto renderSettings = scene_->GetSettings().render3D;
         if (!renderSettings.environmentPath.empty())
             renderSettings.environmentPath =
                 scene_->ResolveAssetPath(renderSettings.environmentPath);
-        if (scene_->GetSettings().render3D.mode == Render3DMode::Pbr)
+        if (renderSettings.mode == Render3DMode::Pbr)
             Renderer3D::BeginScene(camera3D_, renderSettings, scene_->GetSettings().exposure);
         else
-            Renderer3D::BeginScene(camera3D_, sun);
+            Renderer3D::BeginScene(camera3D_, renderSettings.sun);
         scene_->OnRender3D();
         Renderer3D::EndScene();
     }
     Renderer2D::BeginScene(camera_);
     scene_->OnRender();
     Renderer2D::EndScene();
+}
+
+void ScenePlayer::OnFramePresented() {
+    ++presentedFrames_;
+    if (options_.maxFrames != 0 && presentedFrames_ >= options_.maxFrames)
+        Close();
+}
+
+uint64 ScenePlayer::GetPresentedFrameCount() const noexcept {
+    return presentedFrames_;
 }
 
 void ScenePlayer::OnShutdown() {

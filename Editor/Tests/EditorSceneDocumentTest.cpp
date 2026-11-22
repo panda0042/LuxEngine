@@ -49,6 +49,38 @@ std::string Snapshot(Scene* scene) {
     return data;
 }
 
+void TestFirstSaveKeepsRelativeAssets() {
+    Files files;
+    const auto directory = files.root / "Scenes";
+    fs::create_directories(directory);
+    const auto texture = files.root / "Badge.png";
+    std::ofstream(texture) << "asset path fixture";
+
+    struct WorkingDirectory {
+        fs::path previous = fs::current_path();
+
+        ~WorkingDirectory() {
+            std::error_code error;
+            fs::current_path(previous, error);
+        }
+    } workingDirectory;
+
+    fs::current_path(files.root);
+
+    EditorDocument document;
+    const auto id = document.CreateEntity("Badge").GetId();
+    document.GetScene().AddComponent<SpriteRendererComponent>(id).texturePath = "Badge.png";
+    const auto file = PathUtf8(directory / "First.lux");
+    Check(document.SaveAs(file), "first save with a relative texture succeeds");
+    Scene disk;
+    Check(disk.Deserialize(file), "the first save can be reopened");
+    for (const auto* scene : {&document.GetScene(), &disk}) {
+        const auto& path = scene->GetComponent<SpriteRendererComponent>(id).texturePath;
+        Check(fs::equivalent(PathFromUtf8(scene->ResolveAssetPath(path)), texture),
+              "the texture remains accessible in both the live scene and saved file");
+    }
+}
+
 void TestTabsAndHistory() {
     Files files;
     EditorDocument document;
@@ -633,6 +665,7 @@ void TestBrokenReferenceRepair() {
 int RunDocumentChecks(int, char**) {
     try {
         TestTabsAndHistory();
+        TestFirstSaveKeepsRelativeAssets();
         TestInvalidFilePaths();
         TestMeshAssetPaths();
         TestBaseColorPaths();

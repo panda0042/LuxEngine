@@ -71,14 +71,6 @@ std::unique_ptr<Scene> CloneAuthoredScene(Scene& source) {
     return result;
 }
 
-void Commit(Scene& target, Scene& staged) {
-    if (staged.GetEntityCount() > MaxEntities)
-        throw std::runtime_error("합성 씬의 엔티티 수가 100000개를 넘었습니다.");
-    ValidateInheritance(staged);
-    if (!target.ApplyState(staged))
-        throw std::runtime_error("합성 씬 상태를 적용할 수 없습니다.");
-}
-
 std::vector<uint32> ReferenceRoots(Scene& scene) {
     auto result = scene.GetComponentEntityIds<SceneReferenceComponent>();
     if (result.empty())
@@ -412,6 +404,7 @@ void SceneManager::RebaseImportedEntityPaths(Scene& target, uint32 entity,
 
 std::unique_ptr<Scene> SceneManager::CloneForComposition(Scene& source) {
     auto result = CloneAuthoredScene(source);
+    result->nextEntityId_ = source.nextEntityId_;
     for (auto entity : source.GetEntities()) {
         const auto id = entity.GetId();
         if (const auto* animation = entity.TryGetComponent<AnimationComponent>()) {
@@ -432,6 +425,14 @@ std::unique_ptr<Scene> SceneManager::CloneForComposition(Scene& source) {
             result->GetComponent<Rigidbody2DComponent>(id).isGrounded = body->isGrounded;
     }
     return result;
+}
+
+void SceneManager::CommitComposition(Scene& target, Scene& staged) {
+    if (staged.GetEntityCount() > MaxEntities)
+        throw std::runtime_error("합성 씬의 엔티티 수가 100000개를 넘었습니다.");
+    ValidateInheritance(staged);
+    if (!target.ApplyState(staged, true))
+        throw std::runtime_error("합성 씬 상태를 적용할 수 없습니다.");
 }
 
 struct SceneManager::State {
@@ -756,7 +757,7 @@ void SceneManager::State::RefreshOne(Scene& target, uint32 root, Scene& source, 
         if (const auto* nested = target.TryGetComponent<SceneReferenceComponent>(localId);
             nested && sourceNested && !reset && (!nested->loaded || !sourceNested->loaded))
             retainedReference = *nested;
-        if (!target.CopyEntityComponents(source, sourceId, localId))
+        if (!target.CopyEntityComponents(source, sourceId, localId, !reset && !added))
             throw std::runtime_error("참조된 씬의 엔티티를 복사할 수 없습니다.");
         if (retainedReference) {
             auto& nested = target.GetComponent<SceneReferenceComponent>(localId);
@@ -1090,7 +1091,7 @@ uint32 SceneManager::AddSceneInstance(Scene& target, const fs::path& path, Scene
         reference.mode = mode;
         staged->AddComponent<SceneReferenceComponent>(root, std::move(reference));
         state_->RefreshOne(*staged, root, *source);
-        Commit(target, *staged);
+        CommitComposition(target, *staged);
         return root;
     } catch (const std::exception& failure) {
         error = failure.what();
@@ -1124,7 +1125,7 @@ bool SceneManager::RefreshInstances(Scene& target, std::string& error) {
                 Canonical(Path(reference.path), Path(target.GetSourcePath())), context);
             state_->RefreshOne(*staged, root, *source);
         }
-        Commit(target, *staged);
+        CommitComposition(target, *staged);
         return true;
     } catch (const std::exception& failure) {
         error = failure.what();
@@ -1147,7 +1148,7 @@ bool SceneManager::RefreshInstance(Scene& target, uint32 root, std::string& erro
         auto source = state_->LoadResolved(path, context);
         auto staged = CloneForComposition(target);
         state_->RefreshOne(*staged, root, *source);
-        Commit(target, *staged);
+        CommitComposition(target, *staged);
         return true;
     } catch (const std::exception& failure) {
         error = failure.what();
@@ -1170,7 +1171,7 @@ bool SceneManager::RevertInstance(Scene& target, uint32 root, std::string& error
         auto source = state_->LoadResolved(path, context);
         auto staged = CloneForComposition(target);
         state_->RefreshOne(*staged, root, *source, true);
-        Commit(target, *staged);
+        CommitComposition(target, *staged);
         return true;
     } catch (const std::exception& failure) {
         error = failure.what();

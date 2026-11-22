@@ -103,6 +103,32 @@ void TestStreamingAndAnimatedFields(const ScriptRuntimeConfig& config,
           "A newly streamed script must start in the existing runtime");
 }
 
+void TestCompositionKeepsLiveScripts(const ScriptRuntimeConfig& config,
+                                     const std::filesystem::path& directory) {
+    Scene scene, decor;
+    const auto actor = scene.CreateEntity("Moving script").GetId();
+    scene.AddComponent<ScriptComponent>(actor).typeName = "ScriptTests.Mover";
+    decor.CreateEntity("Unrelated decor");
+    const auto file = directory / "script-composition.lux";
+    std::string error;
+    Check(SceneManager::Save(decor, file, {}, error), "Save the additive scene fixture");
+    ScriptRuntime runtime;
+    CheckRuntime(runtime.Initialize(scene, config), runtime);
+    CheckRuntime(runtime.Update(.25), runtime);
+    SceneManager manager;
+    Check(manager.AddSceneInstance(scene, file, SceneReferenceMode::Additive, error) != 0,
+          "Compose an unrelated scene while a script is active");
+    CheckRuntime(runtime.Update(.25), runtime);
+    const auto position = scene.GetComponent<TransformComponent>(actor).position;
+    Check(position.x == .5 && position.y == 10 && runtime.IsRunning(),
+          "Composition preserves live instances without repeating OnCreate");
+    std::string serialized;
+    Check(scene.SerializeToString(serialized) && scene.DeserializeFromString(serialized),
+          "Replace the full scene with a new snapshot");
+    Check(!runtime.Update(.25) && !runtime.IsRunning(),
+          "Replacing the entire scene still invalidates the old runtime");
+}
+
 void TestScriptAnimatorPlay(const ScriptRuntimeConfig& config, const std::string& controller) {
     Scene scene;
     auto rejected = scene.CreateEntity("Rejected state");
@@ -403,6 +429,7 @@ int main(int argc, char** argv) {
             TestControllerSwitchBeforeScriptUpdate(config, controllerPath, root);
             TestScriptAnimationQueues(config, controllerPath);
             TestStreamingAndAnimatedFields(config, root);
+            TestCompositionKeepsLiveScripts(config, root);
             std::filesystem::remove_all(root);
         }
         TestFirstGame(argv[2], argv[3]);
