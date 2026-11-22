@@ -230,6 +230,22 @@ int RunChecks(int argc, char** argv) {
         LuxUI::CoreApplication::sendEvent(viewport, &press);
         Check(LuxEngine::Input::IsKeyPressed(LuxEngine::LuxKey::W),
               "embedded play keyboard bridge failed");
+        LuxUI::KeyEvent comma(LuxUI::Event::KeyPress, LuxUI::Flags::Key_Comma,
+                              LuxUI::Flags::NoModifier);
+        LuxUI::CoreApplication::sendEvent(viewport, &comma);
+        Check(LuxEngine::Input::IsKeyPressed(LuxEngine::LuxKey::Comma),
+              "embedded Play forwards punctuation supported by the player");
+        LuxUI::KeyEvent keypad(LuxUI::Event::KeyPress, LuxUI::Flags::Key_1,
+                               LuxUI::Flags::KeypadModifier);
+        LuxUI::CoreApplication::sendEvent(viewport, &keypad);
+        Check(LuxEngine::Input::IsKeyPressed(LuxEngine::LuxKey::Numpad1) &&
+                  !LuxEngine::Input::IsKeyPressed(LuxEngine::LuxKey::Num1),
+              "embedded Play distinguishes the keypad from the number row");
+        LuxUI::KeyEvent keypadUp(LuxUI::Event::KeyRelease, LuxUI::Flags::Key_1,
+                                 LuxUI::Flags::KeypadModifier);
+        LuxUI::CoreApplication::sendEvent(viewport, &keypadUp);
+        Check(!LuxEngine::Input::IsKeyPressed(LuxEngine::LuxKey::Numpad1),
+              "embedded Play releases the same keypad key");
         LuxUI::MouseEvent mouse(
             LuxUI::Event::MouseButtonPress, {42, 64}, viewport->mapToGlobal(LuxUI::Point(42, 64)),
             LuxUI::Flags::LeftButton, LuxUI::Flags::LeftButton, LuxUI::Flags::NoModifier);

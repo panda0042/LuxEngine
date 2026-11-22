@@ -336,6 +336,14 @@ void EditorWindow::LoadSceneAsync(const std::filesystem::path& path, bool preloa
     request.origin = document_.GetActiveTabId();
     request.preload = preload;
     try {
+        if (!preload) {
+            std::string error;
+            request.diskRevision = ReadSceneFileRevision(path, error);
+            if (!request.diskRevision) {
+                Log(Q(error), true);
+                return;
+            }
+        }
         request.result = preload ? sceneManager_.PreloadAsync(path) : sceneManager_.LoadAsync(path);
     } catch (const std::exception& error) {
         Log(LUX_UI_TEXT("씬 로드를 시작하지 못했습니다: %1")
@@ -411,7 +419,7 @@ void EditorWindow::PollSceneLoads() {
         sceneProjects_[document_.GetActiveTabId()] = project_;
         const auto previous = document_.GetActiveTabId();
         const auto id = document_.AdoptTab(PathUtf8(request.path), std::move(result.scene), false,
-                                           std::move(warning));
+                                           std::move(warning), std::move(request.diskRevision));
         if (!id) {
             Log(Q(document_.GetLastError()), true);
             continue;

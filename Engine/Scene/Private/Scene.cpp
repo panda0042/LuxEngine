@@ -533,7 +533,8 @@ void Scene::OnRender3D() {
                                           meshComp.modelSubmesh, animation ? animation->clip : -1,
                                           animation ? animation->time : 0.0, entity.GetId(),
                                           animation ? animation->mixedPose.get() : nullptr,
-                                          animation ? animation->poseRevision : 0);
+                                          animation ? animation->poseRevision : 0,
+                                          animation ? animation->mixedPose : nullptr);
             }
         }
     }
@@ -1167,6 +1168,10 @@ std::string Scene::GetLastSaveError() {
 }
 
 bool Scene::Serialize(const std::string& filepath) {
+    return Serialize(filepath, nullptr);
+}
+
+bool Scene::Serialize(const std::string& filepath, std::string* writtenData) {
     if (filepath.empty() || filepath.find('\0') != std::string::npos || !IsValidUtf8(filepath)) {
         SetSaveError("Scene save failed: invalid UTF-8 or embedded NUL in filepath");
         return false;
@@ -1199,6 +1204,8 @@ bool Scene::Serialize(const std::string& filepath) {
     if (!AtomicReplaceFile(tempPath, targetPath, seq))
         return false;
 
+    if (writtenData)
+        writtenData->swap(serialized);
     ClearSaveError();
     return true;
 }

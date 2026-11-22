@@ -102,6 +102,7 @@ public:
     static std::string GetLastSaveError();
 
     bool Serialize(const std::string& filepath);
+    bool Serialize(const std::string& filepath, std::string* writtenData);
     bool Deserialize(const std::string& filepath);
     bool SerializeToString(std::string& out);
     bool DeserializeFromString(const std::string& data);

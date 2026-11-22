@@ -66,6 +66,18 @@ public sealed class Throwing : EntityScript {
     }
 }
 
+public sealed class ThrowingCleanup : EntityScript {
+    protected override void OnUpdate(double deltaTime) {
+        var transform = Entity.Transform;
+        transform.Position.X += 1;
+        Entity.Transform = transform;
+    }
+
+    protected override void OnDestroy() {
+        throw new InvalidOperationException("managed cleanup exception");
+    }
+}
+
 public sealed class AnimationDriver : EntityScript {
     protected override void OnCreate() {
         Transform value = Entity.Transform;

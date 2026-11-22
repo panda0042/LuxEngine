@@ -632,7 +632,8 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
                         scene.ResolveAssetPath(mesh->meshPath), world, material, mesh->modelSubmesh,
                         animation ? animation->clip : -1, animation ? animation->time : 0.0,
                         entity.GetId(), animation ? animation->mixedPose.get() : nullptr,
-                        animation ? animation->poseRevision : 0);
+                        animation ? animation->poseRevision : 0,
+                        animation ? animation->mixedPose : nullptr);
                 }
             } else if (const auto* sprite =
                            entity.TryGetComponent<LuxEngine::SpriteRendererComponent>()) {

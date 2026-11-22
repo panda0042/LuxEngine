@@ -106,6 +106,9 @@ struct Renderer3D::Context::Impl {
         Ref<ModelAsset> model;
         int32 clip = -1;
         double time = std::numeric_limits<double>::quiet_NaN();
+        std::weak_ptr<const ModelPose> pose;
+        uint64 poseRevision = 0;
+        bool usesOverride = false;
         uint64 used = 0;
         size_t bytes = 0;
         uint64 attempted = std::numeric_limits<uint64>::max();
@@ -681,7 +684,8 @@ Ref<GpuTexture> Renderer3D::Context::ResolveBaseColorTexture(const std::string& 
 bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& transform,
                                         const Material3D& material, int32 modelSubmesh, int32 clip,
                                         double time, uint64 instance, const ModelPose* overridePose,
-                                        uint64 poseRevision) {
+                                        uint64 poseRevision,
+                                        const Ref<const ModelPose>& poseOwner) {
     if (!impl_ || !impl_->active || !impl_->LockValidState())
         return false;
     std::string key = path;
@@ -705,8 +709,6 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
     }
     auto& cached = found->second;
     cached.used = ++impl_->sequence;
-    if (overridePose)
-        time = static_cast<double>(poseRevision);
     const auto revision = path.empty() ? uint64{1} : AssetManager::GetMeshRevision(path);
     const bool requiresUv = !material.baseColorTexture.empty() || !material.normalTexture.empty() ||
                             !material.metallicTexture.empty() ||
@@ -715,15 +717,20 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
     if (modelSubmesh >= 0) {
         std::string error;
         auto model = ModelAsset::LoadFbx(path, error);
-        if (!std::isfinite(time) || clip < -1) {
+        if ((!overridePose && !std::isfinite(time)) || clip < -1) {
             model.reset();
             error = "FBX 애니메이션 시간 또는 클립 번호가 올바르지 않습니다.";
         }
         if (model && static_cast<size_t>(modelSubmesh) < model->submeshes.size()) {
             const auto& part = model->submeshes[static_cast<size_t>(modelSubmesh)];
+            const bool ownsPose = overridePose && poseOwner.get() == overridePose;
+            const bool poseMatches = overridePose ? ownsPose && cached.usesOverride &&
+                                                        cached.pose.lock() == poseOwner &&
+                                                        cached.poseRevision == poseRevision
+                                                  : !cached.usesOverride && cached.time == time;
             if (requiresUv && !part.hasTexCoords) {
                 error = "텍스처를 적용할 UV 좌표가 없는 모델입니다: " + path;
-            } else if (cached.model != model || cached.clip != clip || cached.time != time) {
+            } else if (cached.model != model || cached.clip != clip || !poseMatches) {
                 ModelPose pose;
                 const std::vector<ModelVertex>* source = &part.vertices;
                 if (overridePose) {
@@ -768,6 +775,9 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
                         cached.model = std::move(model);
                         cached.clip = clip;
                         cached.time = time;
+                        cached.usesOverride = overridePose != nullptr;
+                        cached.pose = ownsPose ? poseOwner : Ref<const ModelPose>{};
+                        cached.poseRevision = poseRevision;
                         cached.hasUvs = part.hasTexCoords;
                         cached.error.clear();
                     } else {
@@ -1028,13 +1038,13 @@ void Renderer3D::DrawMesh(const Mesh3D& mesh, const Mat4& transform, const Mater
 bool Renderer3D::DrawMeshAsset(const std::string& path, const Mat4& transform,
                                const Material3D& material, int32 modelSubmesh, int32 clip,
                                double time, uint64 instance, const ModelPose* overridePose,
-                               uint64 poseRevision) {
+                               uint64 poseRevision, const Ref<const ModelPose>& poseOwner) {
     if (t_ActiveContext3D)
         return t_ActiveContext3D->DrawMeshAsset(path, transform, material, modelSubmesh, clip, time,
-                                                instance, overridePose, poseRevision);
+                                                instance, overridePose, poseRevision, poseOwner);
     std::lock_guard<std::recursive_mutex> lock(s_DefaultContext3DMutex);
     return DefaultContext3D().DrawMeshAsset(path, transform, material, modelSubmesh, clip, time,
-                                            instance, overridePose, poseRevision);
+                                            instance, overridePose, poseRevision, poseOwner);
 }
 
 void Renderer3D::DrawCube(const Vec3& p, const Vec3& scale, const Material3D& material) {

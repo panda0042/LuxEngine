@@ -59,6 +59,31 @@ try {
     Check-File (Join-Path $extracted "scenes/ScenePlayer.lux")
     Check-File (Join-Path $extracted "licenses/LICENSE-LuxEngine.txt")
     Check-File (Join-Path $extracted "dxil.dll")
+
+    $archiveWithoutExecutables = Join-Path $testDirectory "missing executables.zip"
+    [IO.Compression.ZipFile]::CreateFromDirectory($copy, $archiveWithoutExecutables)
+    $tempBrackets = Join-Path $testDirectory 'verifier temp [QA]'
+    [IO.Directory]::CreateDirectory($tempBrackets) | Out-Null
+    $previousTemp = $env:TEMP
+    $previousTmp = $env:TMP
+    try {
+        $env:TEMP = $tempBrackets
+        $env:TMP = $tempBrackets
+        $childShell = (Get-Process -Id $PID).Path
+        foreach ($kind in @('Editor', 'Runtime')) {
+            $expectedExe = if ($kind -eq 'Editor') { 'LuxEditor.exe' } else { 'LuxPlayer.exe' }
+            $verification = & $childShell -NoProfile -File (Join-Path $repository "tools/Verify${kind}Standalone.ps1") -PackageZip $archiveWithoutExecutables 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0 -or $verification -notmatch ([regex]::Escape("$expectedExe not found"))) {
+                throw "Standalone $kind verification did not reach the executable check: $verification"
+            }
+            if (Get-ChildItem -LiteralPath $tempBrackets -Force | Select-Object -First 1) {
+                throw "Standalone $kind verification left temporary extraction files behind"
+            }
+        }
+    } finally {
+        $env:TEMP = $previousTemp
+        $env:TMP = $previousTmp
+    }
     Write-Host "Windows runtime manifests, missing-file rejection and portable archive contents passed."
 }
 finally {

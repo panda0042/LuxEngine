@@ -14,20 +14,21 @@ Write-Host "=== Testing LuxEditor Standalone Portable Package ==="
 
 $testStaging = $StagingDir
 $cleanup = $false
-if ([string]::IsNullOrWhiteSpace($testStaging)) {
-    $zipPath = if ([IO.Path]::IsPathRooted($PackageZip)) { $PackageZip } else { Join-Path $root $PackageZip }
-    if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) {
-        throw "Editor package zip not found: $zipPath. Run PackageEditor.ps1 first."
-    }
-    $koreanPart = [string]::new([char[]]@(0xD55C, 0xAE00, 0xD14C, 0xC2A4, 0xD2B8)) # "한글테스트"
-    $testStaging = Join-Path ([System.IO.Path]::GetTempPath()) "LuxEditorTest $koreanPart $(Get-Random)"
-    New-Item -ItemType Directory -Path $testStaging -Force | Out-Null
-    Write-Host "Extracting $zipPath to $testStaging..."
-    Expand-Archive -LiteralPath $zipPath -DestinationPath $testStaging -Force
-    $cleanup = $true
-}
 
 try {
+    if ([string]::IsNullOrWhiteSpace($testStaging)) {
+        $zipPath = if ([IO.Path]::IsPathRooted($PackageZip)) { $PackageZip } else { Join-Path $root $PackageZip }
+        if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) {
+            throw "Editor package zip not found: $zipPath. Run PackageEditor.ps1 first."
+        }
+        $tempBase = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath([IO.Path]::GetTempPath()))
+        $koreanPart = [string]::new([char[]]@(0xD55C, 0xAE00, 0xD14C, 0xC2A4, 0xD2B8)) # "한글테스트"
+        $testStaging = Join-Path $tempBase "LuxEditorTest $koreanPart $([guid]::NewGuid())"
+        $cleanup = $true
+        Write-Host "Extracting $zipPath to $testStaging..."
+        [IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $testStaging)
+    }
+
     $editorExe = Join-Path $testStaging "LuxEditor.exe"
     if (-not (Test-Path -LiteralPath $editorExe -PathType Leaf)) {
         throw "LuxEditor.exe not found in $testStaging"
@@ -140,6 +141,6 @@ try {
 }
 finally {
     if ($cleanup -and (Test-Path -LiteralPath $testStaging)) {
-        Remove-LuxPackageDirectory -Path $testStaging -OutputDir ([IO.Path]::GetFullPath((Split-Path -Parent $testStaging)))
+        Remove-LuxPackageDirectory -Path $testStaging -OutputDir $tempBase
     }
 }

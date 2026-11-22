@@ -390,6 +390,32 @@ void TestAdoptionAndDuplication() {
           "null asynchronous results do not mutate tabs");
 }
 
+void TestExternalSceneChanges() {
+    Files files;
+    const auto path = files.root / "shared.lux";
+    const auto filename = PathUtf8(path);
+    EditorDocument first, second;
+    first.CreateEntity("Original");
+    Check(first.SaveAs(filename) && second.OpenTab(filename), "shared scene opens independently");
+    const auto originalTimestamp = std::filesystem::last_write_time(path);
+    const auto originalLength = std::filesystem::file_size(path);
+    auto secondEntities = second.GetScene().GetEntities();
+    secondEntities.front().GetComponent<TagComponent>().tag = "External";
+    second.MarkDirty();
+    Check(second.Save() && std::filesystem::file_size(path) == originalLength,
+          "external edit saves with the same length");
+    std::filesystem::last_write_time(path, originalTimestamp);
+    const auto savedBySecond = Bytes(path);
+    first.CreateEntity("Local change");
+    Check(!first.Save() && !first.SaveAs(filename) && first.IsDirty() &&
+              first.GetScene().GetEntityCount() == 2 && Bytes(path) == savedBySecond,
+          "a stale editor cannot replace the other writer's scene even at the same file size and "
+          "time");
+    const auto copy = PathUtf8(files.root / "local-copy.lux");
+    Check(first.SaveAs(copy) && first.Save() && Bytes(path) == savedBySecond,
+          "Save As to a new path preserves both editors' changes");
+}
+
 void TestExternalAliasesAndNativePaths() {
     Files files;
     EditorDocument document;
@@ -678,6 +704,7 @@ int RunDocumentChecks(int, char**) {
         TestBaseColorPaths();
         TestAdoptionAndDuplication();
         TestExternalAliasesAndNativePaths();
+        TestExternalSceneChanges();
         TestStartScene();
         TestAutosavePreservation();
         TestBrokenReferenceRepair();

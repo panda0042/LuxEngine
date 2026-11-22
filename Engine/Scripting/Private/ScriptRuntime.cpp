@@ -428,11 +428,12 @@ bool ScriptRuntime::PrepareInstances() {
     for (auto iterator = impl_->instances.begin(); iterator != impl_->instances.end();) {
         const auto* component = scene.TryGetComponent<ScriptComponent>(iterator->first);
         if (!component || !component->enabled || component->typeName != iterator->second.first) {
-            if (!Host().api.detach(impl_->context, iterator->first)) {
+            const auto detached = Host().api.detach(impl_->context, iterator->first);
+            iterator = impl_->instances.erase(iterator);
+            if (!detached) {
                 impl_->error = ManagedError();
                 return false;
             }
-            iterator = impl_->instances.erase(iterator);
             continue;
         }
         std::string fields;

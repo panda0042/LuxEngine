@@ -1046,6 +1046,38 @@ void TestBackupRetentionAfterRestore() {
     }
 }
 
+void TestBackupWithNestedMetadata() {
+    using namespace LuxEditor;
+    namespace fs = std::filesystem;
+    TempDirectory files;
+    std::string error;
+    const auto root = files.path / "nested-metadata";
+    auto project = EditorProject::Create(root, "Metadata", ProjectTemplate::Empty, error);
+    Check(project.has_value(), "nested metadata project opens");
+    fs::path original;
+    Check(CreateProjectBackup(*project, original, error), "initial backup creates");
+    const auto vendor = root / "Assets" / "Vendor";
+    fs::create_directories(vendor / ".git");
+    fs::create_directories(vendor / ".lux");
+    std::ofstream(vendor / ".git" / "HEAD") << "ref: refs/heads/main\n";
+    std::ofstream(vendor / ".lux" / "settings") << "local metadata";
+    std::ofstream(vendor / "asset.txt") << "authoring asset";
+    fs::path withVendor;
+    Check(CreateProjectBackup(*project, withVendor, error),
+          "nested Git and editor metadata do not prevent backup");
+    const auto imported = files.path / "imported-metadata";
+    Check(ImportProject(withVendor, imported, error).has_value() &&
+              fs::is_regular_file(imported / "Assets" / "Vendor" / "asset.txt") &&
+              !fs::exists(imported / "Assets" / "Vendor" / ".git") &&
+              !fs::exists(imported / "Assets" / "Vendor" / ".lux"),
+          "archive keeps ordinary nested assets while excluding private metadata");
+    Check(RestoreProjectBackup(*project, original, error) &&
+              fs::is_regular_file(vendor / ".git" / "HEAD") &&
+              fs::is_regular_file(vendor / ".lux" / "settings") &&
+              !fs::exists(vendor / "asset.txt"),
+          "restore preserves nested metadata even when its parent did not exist in the backup");
+}
+
 void TestBackupValidationAndLocalFiles() {
     using namespace LuxEditor;
     using namespace LuxEngine;
@@ -1544,6 +1576,7 @@ int main(int argc, char** argv) {
         TestProjectManagement();
         TestProjectOperations();
         TestBackupRetentionAfterRestore();
+        TestBackupWithNestedMetadata();
         TestBackupValidationAndLocalFiles();
         TestExcludedStartScene();
         TestExcludedProjectIcon();

@@ -275,6 +275,7 @@ private:
         uint64_t generation = 0;
         EditorDocument::TabId origin = 0;
         bool preload = false;
+        std::optional<std::string> diskRevision;
     };
 
     std::vector<PendingSceneLoad> pendingSceneLoads_;

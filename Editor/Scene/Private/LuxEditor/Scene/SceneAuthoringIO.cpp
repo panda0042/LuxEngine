@@ -1,12 +1,22 @@
 #include <LuxEditor/Project/PathEncoding.hpp>
 #include <LuxEditor/Scene/SceneAuthoringIO.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
+#include <LuxUI/Widgets.hpp>
 #include <optional>
 #include <stdexcept>
 
 namespace LuxEditor {
 namespace {
 namespace fs = std::filesystem;
+
+LuxUI::String FileName(const fs::path& path) {
+    const auto utf8 = PathUtf8(path);
+    return LuxUI::String::fromUtf8(utf8.data(), static_cast<std::ptrdiff_t>(utf8.size()));
+}
+
+std::string RevisionHash(const LuxUI::CryptographicHash& hash) {
+    return hash.result().toHex().toStdString();
+}
 
 fs::path CanonicalPath(const fs::path& path) {
     if (path.empty() || path.native().find(fs::path::value_type{}) != fs::path::string_type::npos)
@@ -123,6 +133,33 @@ std::shared_ptr<LuxEngine::Scene> CloneAuthoredScene(LuxEngine::Scene& scene) {
 }
 } // namespace
 
+std::optional<std::string> ReadSceneFileRevision(const fs::path& path, std::string& error) {
+    std::error_code statusError;
+    const auto status = fs::status(path, statusError);
+    if (status.type() == fs::file_type::not_found &&
+        (!statusError || statusError == std::errc::no_such_file_or_directory))
+        return std::string{};
+    LuxUI::File file(FileName(path));
+    constexpr auto limit = 64ll * 1024 * 1024;
+    if (statusError || !fs::is_regular_file(status) || !file.open(LuxUI::File::ReadOnly) ||
+        file.size() > limit) {
+        error = "씬 파일의 현재 상태를 확인할 수 없습니다: " + PathUtf8(path);
+        return std::nullopt;
+    }
+    LuxUI::CryptographicHash hash(LuxUI::CryptographicHash::Sha256);
+    long long total = 0;
+    while (!file.atEnd()) {
+        const auto bytes = file.read(64 * 1024);
+        total += bytes.size();
+        if (bytes.isEmpty() || total > limit) {
+            error = "씬 파일의 현재 상태를 확인할 수 없습니다: " + PathUtf8(path);
+            return std::nullopt;
+        }
+        hash.addData(bytes);
+    }
+    return RevisionHash(hash);
+}
+
 std::shared_ptr<LuxEngine::Scene> ReadAuthoredScene(const fs::path& path, std::string& error) {
     error.clear();
     try {
@@ -165,7 +202,8 @@ bool SerializeAuthoredScene(LuxEngine::Scene& scene, const fs::path& owner, std:
 }
 
 bool SaveAuthoredScene(LuxEngine::Scene& scene, const fs::path& destination,
-                       const fs::path& previous, std::string& error, bool rebaseLive) {
+                       const fs::path& previous, std::string& error, bool rebaseLive,
+                       std::string* diskRevision) {
     error.clear();
     try {
         auto copy = CloneAuthoredScene(scene);
@@ -179,7 +217,32 @@ bool SaveAuthoredScene(LuxEngine::Scene& scene, const fs::path& destination,
             remaining = 128 * 1024 * 1024;
             RebaseSceneReferences(scene, owner, nullptr, remaining, 0, &live);
         }
-        if (copy->Serialize(GenericPathUtf8(target))) {
+        std::optional<LuxUI::LockFile> lock;
+        if (diskRevision) {
+            lock.emplace(FileName(target) + LUX_UI_TEXT(".lux-save-lock"));
+            lock->setStaleLockTime(0);
+            if (!lock->tryLock()) {
+                error = "씬 파일을 저장할 잠금을 얻지 못했습니다: " + PathUtf8(target);
+                return false;
+            }
+            const auto current = ReadSceneFileRevision(target, error);
+            if (!current)
+                return false;
+            if (*current != *diskRevision) {
+                error =
+                    "씬 파일이 외부에서 변경됐습니다. 변경 내용을 확인한 뒤 다시 열어 주세요: " +
+                    PathUtf8(target);
+                return false;
+            }
+        }
+        std::string written;
+        if (copy->Serialize(GenericPathUtf8(target), diskRevision ? &written : nullptr)) {
+            if (diskRevision) {
+                LuxUI::CryptographicHash hash(LuxUI::CryptographicHash::Sha256);
+                hash.addData(LuxUI::ByteArrayView(written.data(),
+                                                  static_cast<std::ptrdiff_t>(written.size())));
+                *diskRevision = RevisionHash(hash);
+            }
             if (rebaseLive)
                 live.Apply(scene);
             return true;

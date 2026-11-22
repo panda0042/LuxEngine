@@ -45,7 +45,8 @@ public:
     TabId NewTab();
     TabId OpenTab(const std::string& path);
     TabId AdoptTab(const std::string& path, std::shared_ptr<LuxEngine::Scene> scene,
-                   bool dirty = false, std::string warning = {});
+                   bool dirty = false, std::string warning = {},
+                   std::optional<std::string> diskRevision = std::nullopt);
     TabId DuplicateTab(TabId tab, const std::string& path);
     bool ActivateTab(TabId tab) noexcept;
     bool CloseTab(TabId tab, bool discardDirty = false);
@@ -110,6 +111,7 @@ private:
         std::unordered_set<LuxEngine::uint32> selectionSet{};
         TransformSpace transformSpace = TransformSpace::World;
         SelectionPivot selectionPivot = SelectionPivot::Median;
+        std::string diskRevision;
     };
 
     TabState& Active() noexcept;

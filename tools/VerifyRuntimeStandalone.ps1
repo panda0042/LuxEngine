@@ -64,19 +64,20 @@ Write-Host "=== Testing LuxPlayer Standalone Portable Package ==="
 
 $testStaging = $StagingDir
 $cleanup = $false
-if ([string]::IsNullOrWhiteSpace($testStaging)) {
-    $zipPath = if ([IO.Path]::IsPathRooted($PackageZip)) { $PackageZip } else { Join-Path $root $PackageZip }
-    if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) {
-        throw "Runtime package zip not found: $zipPath. Run PackageRuntime.ps1 first."
-    }
-    $testStaging = Join-Path ([System.IO.Path]::GetTempPath()) "LuxPlayerTest Path $(Get-Random)"
-    New-Item -ItemType Directory -Path $testStaging -Force | Out-Null
-    Write-Host "Extracting $zipPath to $testStaging..."
-    Expand-Archive -LiteralPath $zipPath -DestinationPath $testStaging -Force
-    $cleanup = $true
-}
 
 try {
+    if ([string]::IsNullOrWhiteSpace($testStaging)) {
+        $zipPath = if ([IO.Path]::IsPathRooted($PackageZip)) { $PackageZip } else { Join-Path $root $PackageZip }
+        if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) {
+            throw "Runtime package zip not found: $zipPath. Run PackageRuntime.ps1 first."
+        }
+        $tempBase = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath([IO.Path]::GetTempPath()))
+        $testStaging = Join-Path $tempBase "LuxPlayerTest Path $([guid]::NewGuid())"
+        $cleanup = $true
+        Write-Host "Extracting $zipPath to $testStaging..."
+        [IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $testStaging)
+    }
+
     $playerExe = Join-Path $testStaging "LuxPlayer.exe"
     if (-not (Test-Path -LiteralPath $playerExe -PathType Leaf)) {
         throw "LuxPlayer.exe not found in $testStaging"
@@ -217,6 +218,6 @@ try {
 }
 finally {
     if ($cleanup -and (Test-Path -LiteralPath $testStaging)) {
-        Remove-LuxPackageDirectory -Path $testStaging -OutputDir ([IO.Path]::GetFullPath((Split-Path -Parent $testStaging)))
+        Remove-LuxPackageDirectory -Path $testStaging -OutputDir $tempBase
     }
 }
