@@ -28,6 +28,19 @@ bool Decompose(const Mat4& matrix, TransformComponent& value, bool requireTrs) {
     Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
     value.scale = {Length(x), Length(y), Length(z)};
     constexpr double epsilon = 1e-6f;
+    if (value.scale.z < epsilon && value.scale.x > 0 && value.scale.y > 0 &&
+        std::abs(x.z) <= epsilon * value.scale.x && std::abs(y.z) <= epsilon * value.scale.y &&
+        std::hypot(z.x, z.y) <= epsilon * value.scale.z) {
+        const Vec3 axisX = x * (1 / value.scale.x), axisY = y * (1 / value.scale.y);
+        const double area = axisX.x * axisY.y - axisX.y * axisY.x;
+        if (std::abs(area) > epsilon && (!requireTrs || std::abs(axisX.Dot(axisY)) <= 1e-4)) {
+            const double sign = area < 0 ? -1 : 1;
+            value.scale.x *= sign;
+            value.rotation = {0, 0, std::atan2(axisX.y * sign, axisX.x * sign)};
+            value.scale.z = z.z;
+            return Finite(value);
+        }
+    }
     if (value.scale.x < epsilon || value.scale.y < epsilon || value.scale.z < epsilon) {
         value.rotation = {};
         return !requireTrs && Finite(value);
@@ -229,15 +242,30 @@ TransformComponent Scene::GetWorldTransform(uint32 id) const {
 }
 
 bool Scene::SetWorldTransform(uint32 id, const TransformComponent& value) {
-    if (!HasComponent<TransformComponent>(id) || !Finite(value))
+    return SetWorldTransform(id, value, false);
+}
+
+bool Scene::SetWorldTransform(uint32 id, const TransformComponent& value, bool planar) {
+    auto* transform = TryGetComponent<TransformComponent>(id);
+    if (!transform || !Finite(value))
         return false;
-    if (!GetParent(id)) {
-        GetComponent<TransformComponent>(id) = value;
+    const auto parent = GetParent(id);
+    if (!parent) {
+        *transform = value;
         return true;
     }
+    auto parentWorld = GetWorldMatrix(parent);
     Mat4 inverse;
-    if (!InverseAffine(GetWorldMatrix(GetParent(id)), inverse))
-        return false;
+    bool collapsedDepth = false;
+    if (!InverseAffine(parentWorld, inverse)) {
+        auto* m = parentWorld.elements;
+        if (!planar || m[2] != 0 || m[6] != 0 || m[8] != 0 || m[9] != 0 || m[10] != 0)
+            return false;
+        m[10] = 1;
+        if (!InverseAffine(parentWorld, inverse))
+            return false;
+        collapsedDepth = true;
+    }
     const auto current = GetWorldTransform(id);
     const auto same = [](const Vec3& a, const Vec3& b) {
         return a.x == b.x && a.y == b.y && a.z == b.z;
@@ -247,18 +275,24 @@ bool Scene::SetWorldTransform(uint32 id, const TransformComponent& value) {
         // original local rotation/scale and transform only the requested world position.
         const auto* m = inverse.elements;
         const auto p = value.position;
-        const Vec3 localPosition{m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12],
-                                 m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13],
-                                 m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14]};
+        Vec3 localPosition{m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12],
+                           m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13],
+                           m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14]};
+        if (collapsedDepth)
+            localPosition.z = transform->position.z;
         if (!Finite(localPosition))
             return false;
-        GetComponent<TransformComponent>(id).position = localPosition;
+        transform->position = localPosition;
         return true;
     }
     TransformComponent local;
     if (!Decompose(inverse * value.GetTransform(), local, true))
         return false;
-    GetComponent<TransformComponent>(id) = local;
+    if (collapsedDepth) {
+        local.position.z = transform->position.z;
+        local.scale.z = transform->scale.z;
+    }
+    *transform = local;
     return true;
 }
 

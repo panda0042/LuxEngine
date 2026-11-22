@@ -176,7 +176,8 @@ void TestPlan() {
     const fs::path project = files.path / PathFromUtf8("게임 프로젝트");
     BuildTools tools;
     tools.cmake = "cmake";
-    tools.enginePackage = files.path / "sdk";
+    const auto sdk = files.path / "sdk";
+    tools.enginePackage = sdk / "lib/cmake/LuxEngine";
     std::string error;
     Check(!PlanBuild(project, BuildConfiguration::Debug, tools, "LuxGame", error) && !error.empty(),
           "plan needs CMakeLists.txt");
@@ -187,6 +188,11 @@ void TestPlan() {
     Check(!PlanBuild(project, BuildConfiguration::Debug, tools, "../x", error) && !error.empty(),
           "executable name cannot escape");
 
+    Check(!PlanBuild(project, BuildConfiguration::Release, tools, "LuxGame", error) &&
+              error.find(GenericPathUtf8(tools.enginePackage)) != std::string::npos &&
+              error.find("LuxEngine.ScriptCore.dll") != std::string::npos,
+          "an old SDK is rejected with its path and missing ScriptCore before configuring");
+    Write(sdk / "share/LuxEngine/managed/LuxEngine.ScriptCore.dll");
     auto plan = PlanBuild(project, BuildConfiguration::Release, tools, "LuxGame", error);
     Check(plan && plan->steps.size() == 2, "plan has configure and build steps");
     Check(plan->buildDirectory == project / ".lux" / "build", "build folder is inside .lux");
@@ -198,6 +204,11 @@ void TestPlan() {
     for (const auto& argument : configure)
         hasEngineDir = hasEngineDir || argument.starts_with("-DLuxEngine_DIR=");
     Check(hasEngineDir, "configure passes the engine package");
+    auto withTrailingSeparator = tools;
+    withTrailingSeparator.enginePackage /= "";
+    Check(PlanBuild(project, BuildConfiguration::Debug, withTrailingSeparator, "LuxGame", error)
+              .has_value(),
+          "SDK package paths ending in a separator keep the same managed directory");
     const auto namedManifest = project / "Named.luxproject";
     const auto namedPlan =
         PlanBuild(project, BuildConfiguration::Debug, tools, "LuxGame", error, namedManifest);

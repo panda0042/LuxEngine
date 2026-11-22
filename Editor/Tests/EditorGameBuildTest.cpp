@@ -332,8 +332,9 @@ bool BuildRunAndPackage(const fs::path& projectDir, BuildConfiguration configura
     std::string output;
     if (!Run(*executable, {LUX_UI_TEXT("--smoke-test")}, executable->parent_path(), 120000,
              output) ||
-        output.find("[LuxEngine WARN]") != std::string::npos) {
-        std::cerr << "game failed to run (" << config << "):\n";
+        output.find("[LuxEngine WARN]") != std::string::npos ||
+        output.find("FIXED_STEP_OK") == std::string::npos) {
+        std::cerr << "game or its fixed-step script failed to run (" << config << "):\n";
         PrintTail(output);
         return false;
     }
@@ -395,7 +396,8 @@ bool BuildRunAndPackage(const fs::path& projectDir, BuildConfiguration configura
                 }
     if (!Run(unpackedExecutable, {LUX_UI_TEXT("--smoke-test")}, unpackedExecutable.parent_path(),
              120000, output) ||
-        output.find("[LuxEngine WARN]") != std::string::npos) {
+        output.find("[LuxEngine WARN]") != std::string::npos ||
+        output.find("FIXED_STEP_OK") == std::string::npos) {
         PrintTail(output);
         return false;
     }
@@ -461,7 +463,27 @@ int main(int argc, char* argv[]) {
         const unsigned char pixels[8] = {128, 128, 128, 129, 64, 64, 64, 129};
         stream.write(reinterpret_cast<const char*>(pixels), 8);
     }
+    alternate.CreateEntity("Fixed step probe").AddComponent<LuxEngine::ScriptComponent>() = {
+        "FixedStepProbe", true};
+    std::ofstream(root / "Scripts/FixedStepProbe.cs") << R"CS(
+using LuxEngine;
+using System;
+
+public sealed class FixedStepProbe : EntityScript {
+    private bool reported;
+
+    protected override void OnUpdate(double step) {
+        if (Math.Abs(step - 1.0 / 30.0) > 1e-7)
+            throw new InvalidOperationException($"Expected a 30 Hz game update, got {step:R}");
+        if (!reported) {
+            Console.WriteLine("FIXED_STEP_OK");
+            reported = true;
+        }
+    }
+}
+)CS";
     auto rendering = alternate.GetSettings();
+    rendering.fixedStep = 1.0f / 30;
     rendering.render3D.mode = LuxEngine::Render3DMode::Pbr;
     rendering.render3D.environmentPath = "../Assets/한글 환경.HdR";
     rendering.render3D.showSkybox = true;

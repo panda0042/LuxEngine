@@ -255,7 +255,7 @@ void Scene::OnUpdate(double dt) {
                     if (!SetWorldTransform(id, pose->second) && !failedPose3D)
                         failedPose3D = id;
                 } else if (const auto pose2D = world2D.find(id); pose2D != world2D.end()) {
-                    if (!SetWorldTransform(id, pose2D->second) && !failedPose2D)
+                    if (!SetWorldTransform(id, pose2D->second, true) && !failedPose2D)
                         failedPose2D = id;
                 }
             }

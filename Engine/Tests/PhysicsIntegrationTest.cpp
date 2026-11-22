@@ -374,11 +374,40 @@ void PlanarColliderHierarchy() {
     Check(scene.GetWorldTransform(child.GetId()).position.x > before &&
               scene.GetLastPhysicsError2D().empty(),
           "correcting the parent transform restores planar motion");
+    auto& local = child.GetComponent<TransformComponent>();
+    local.position.z = 3;
+    local.scale.z = 2;
     parent.GetComponent<TransformComponent>().scale.z = 0;
+    const auto beforeFlattening = scene.GetWorldTransform(child.GetId());
     scene.OnUpdate(settings.fixedStep);
-    Check(scene.GetLastPhysicsError2D().find("simulated pose cannot be applied") !=
-              std::string::npos,
-          "a planar pose that cannot be written back reports failure");
+    const auto afterFlattening = scene.GetWorldTransform(child.GetId());
+    Check(afterFlattening.position.x > beforeFlattening.position.x &&
+              std::abs(afterFlattening.rotation.z - beforeFlattening.rotation.z) < 1e-5 &&
+              local.position.z == 3 && local.scale.z == 2 && scene.GetLastPhysicsError2D().empty(),
+          "a collapsed parent Z axis leaves planar motion, rotation and authored depth intact");
+}
+
+void FlatColliderContact(bool parented) {
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.overrideGravity = true;
+    settings.gravity = {};
+    Check(scene.SetSettings(settings), "flat collider settings");
+    auto wall = scene.CreateEntity("Vertical wall");
+    wall.GetComponent<TransformComponent>().scale = {1, 1, 0};
+    wall.GetComponent<TransformComponent>().rotation.z = ToRadians(90);
+    wall.AddComponent<BoxCollider2DComponent>().size = {4, .25};
+    if (parented) {
+        auto parent = scene.CreateEntity("Parent");
+        Check(scene.SetParent(wall.GetId(), parent.GetId(), false), "flat wall attaches to parent");
+    }
+    auto actor = scene.CreateEntity("Actor");
+    actor.GetComponent<TransformComponent>().position = {0, 1, 0};
+    actor.AddComponent<Rigidbody2DComponent>().type = BodyType::Dynamic;
+    actor.AddComponent<BoxCollider2DComponent>().size = {.2f, .2f};
+    scene.OnUpdate(settings.fixedStep);
+    Check(scene.GetCollisionEvents2D().size() == 1 && scene.GetLastPhysicsError2D().empty(),
+          "a rotated flat collider makes the same contact with or without a parent");
 }
 } // namespace
 
@@ -394,6 +423,8 @@ int main() {
         CapacityAndReplacement();
         StableContactIdentity();
         PlanarColliderHierarchy();
+        FlatColliderContact(false);
+        FlatColliderContact(true);
         std::cout << "Jolt queries, diagnostics, CCD, triggers and live body edits passed\n";
         return 0;
     } catch (const std::exception& error) {

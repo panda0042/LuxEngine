@@ -11,6 +11,15 @@ project(LuxGame LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(LuxEngine CONFIG REQUIRED)
+if(NOT LuxEngine_MANAGED_DIR)
+    message(FATAL_ERROR
+        "LuxEngine SDK at '${LuxEngine_DIR}' does not define LuxEngine_MANAGED_DIR. "
+        "Use a current SDK that includes LuxEngine.ScriptCore.dll.")
+endif()
+set(_lux_script_core "${LuxEngine_MANAGED_DIR}/LuxEngine.ScriptCore.dll")
+if(NOT EXISTS "${_lux_script_core}" OR IS_DIRECTORY "${_lux_script_core}")
+    message(FATAL_ERROR "LuxEngine SDK at '${LuxEngine_DIR}' is missing '${_lux_script_core}'.")
+endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/Dependencies.cmake OPTIONAL)
 add_executable(LuxGame Source/Main.cpp)
 find_program(LUX_GAME_DOTNET dotnet HINTS "$ENV{DOTNET_ROOT}" REQUIRED)
@@ -19,7 +28,7 @@ add_custom_target(LuxGameScripts
     COMMAND "${LUX_GAME_DOTNET}" build "${CMAKE_CURRENT_SOURCE_DIR}/Scripts/GameScripts.csproj"
         --configuration Release --output "${_lux_managed_output}"
         --artifacts-path "${CMAKE_CURRENT_BINARY_DIR}/managed-artifacts"
-        "-p:LuxEngineScriptCore=${LuxEngine_MANAGED_DIR}/LuxEngine.ScriptCore.dll"
+        "-p:LuxEngineScriptCore=${_lux_script_core}"
         "-p:RestoreConfigFile=${CMAKE_CURRENT_SOURCE_DIR}/Scripts/NuGet.Config"
         -p:NuGetAudit=false
     VERBATIM)
@@ -893,6 +902,10 @@ protected:
         }
     }
 
+    double GetFixedUpdateStep() const override {
+        return scene_->GetSettings().fixedStep;
+    }
+
     void OnUpdate(double dt) override {
         if (le::Input::WasActionPressed("Quit"))
             Close();
@@ -948,9 +961,8 @@ protected:
             }
         }
         TickStreaming(dt);
-        if (scripts_.IsRunning() && !scripts_.Update(dt))
+        if (!le::UpdateSceneSimulation(*scene_, scripts_, dt))
             throw std::runtime_error(scripts_.GetLastError());
-        scene_->OnUpdate(dt);
         if (smokeTest_ && ++frames_ >= 10) {
             if (GetGpuDevice().GetCounters().validationErrors != 0)
                 throw std::runtime_error("Vulkan 검증에서 렌더링 오류가 발견되었습니다.");

@@ -53,6 +53,8 @@ protected:
 
     virtual void OnShutdown();
 
+    virtual double GetFixedUpdateStep() const;
+
 private:
     bool OnWindowClose(WindowCloseEvent& e);
     bool OnWindowResize(WindowResizeEvent& e);
@@ -68,7 +70,7 @@ private:
     bool running_ = false;
     bool initHookEntered_ = false;
     uint64 lastTicksNs_ = 0;
-    double accumulator_ = 0.0;
+    FixedStepAccumulator fixedUpdates_;
     double elapsedSeconds_ = 0.0;
 };
 

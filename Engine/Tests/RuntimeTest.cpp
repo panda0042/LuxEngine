@@ -219,12 +219,38 @@ void Primary2DCamera() {
               std::abs(cameras.camera2D.GetRotation() - ToRadians(90)) < 1e-12 &&
               cameras.camera2D.GetProjectionMatrix().elements[0] == .25,
           "primary 2D world position, rotation and size override the editor fallback view");
+    camera.GetComponent<TransformComponent>().scale.z = 0;
+    const auto flatCamera = ResolveScenePlayerCameras(scene, 2, {});
+    Check(std::abs(flatCamera.camera2D.GetRotation() - ToRadians(90)) < 1e-12,
+          "a parented camera retains its authored angle with collapsed local depth");
+    parent.GetComponent<TransformComponent>().scale = {-1, 1, 0};
+    const auto reflectedCamera = ResolveScenePlayerCameras(scene, 2, {});
+    Check(std::abs(reflectedCamera.camera2D.GetRotation() + ToRadians(90)) < 1e-12,
+          "an XY reflection preserves the reflected angle even when world depth is collapsed");
     camera.GetComponent<CameraComponent>().isPrimary = false;
     const auto fallback = ResolveScenePlayerCameras(scene, 2, {3, 4, 5});
     Check(fallback.camera2D.GetPosition().x == 3 && fallback.camera2D.GetPosition().y == 4 &&
               fallback.camera2D.GetRotation() == 0 &&
               fallback.camera2D.GetProjectionMatrix().elements[0] == .1,
           "the explicit view is used when no primary camera is active");
+}
+
+void FixedUpdateTime() {
+    constexpr double step = 1.0 / 30;
+    LuxEngine::FixedStepAccumulator clock;
+    clock.AddElapsed(step / 2);
+    Check(!clock.Consume(step), "a fractional step waits for more elapsed time");
+    clock.AddElapsed(step * 3);
+    for (int i = 0; i < 3; ++i)
+        Check(clock.Consume(step), "a delayed frame performs multiple scene ticks");
+    Check(!clock.Consume(step), "the remaining fraction does not advance an extra tick");
+    clock.AddElapsed(step * .51);
+    Check(clock.Consume(step), "substep time is carried across frames");
+    clock.AddElapsed(5);
+    for (int i = 0; i < clock.MaxUpdatesPerFrame; ++i)
+        Check(clock.Consume(step), "the catch-up cap still permits timely simulation");
+    clock.DropBacklog(step);
+    Check(!clock.Consume(step), "excess backlog is dropped after catch-up");
 }
 
 // Writes a small platformer scene for the LuxPlayer smoke test.
@@ -482,6 +508,7 @@ int main(int argc, char** argv) {
         else if (suite == "fit") {
             Fit();
             Primary2DCamera();
+            FixedUpdateTime();
         } else if (suite == "write-scene" && argc > 2)
             WriteScene(argv[2]);
         else if (suite == "scene-management-gpu")

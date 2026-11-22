@@ -100,6 +100,18 @@ bool HasEnginePackage(const fs::path& directory) {
            IsFile(directory / "LuxEngineTargets.cmake");
 }
 
+fs::path ScriptCorePath(const fs::path& package) {
+    auto prefix = package.lexically_normal();
+    if (!prefix.has_filename())
+        prefix = prefix.parent_path();
+    if (prefix.filename() == "LuxEngine" && prefix.parent_path().filename() == "cmake") {
+        prefix = prefix.parent_path().parent_path();
+        if (prefix.filename() == "lib" || prefix.filename() == "lib64")
+            prefix = prefix.parent_path();
+    }
+    return prefix / "share/LuxEngine/managed/LuxEngine.ScriptCore.dll";
+}
+
 std::string Trim(std::string text) {
     while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())))
         text.pop_back();
@@ -253,6 +265,13 @@ std::optional<BuildPlan> PlanBuild(const fs::path& projectDirectory,
     }
     if (executableName.empty() || executableName.find_first_of("/\\:") != std::string::npos) {
         error = "실행 파일 이름이 올바르지 않습니다.";
+        return std::nullopt;
+    }
+    const auto scriptCore = ScriptCorePath(tools.enginePackage);
+    if (!IsFile(scriptCore)) {
+        error = "게임 빌드용 LuxEngine SDK가 불완전하거나 이전 버전입니다. 선택한 패키지: " +
+                GenericPathUtf8(tools.enginePackage) +
+                "\n필요한 파일: " + GenericPathUtf8(scriptCore);
         return std::nullopt;
     }
     BuildPlan plan;
