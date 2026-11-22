@@ -2,6 +2,7 @@
 #include <LuxEngine/Animation/AnimationEngine.hpp>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 
 namespace LuxEngine {
 enum class AnimationParameterType { Float, Integer, Boolean, Trigger };
@@ -113,7 +114,10 @@ public:
 
 private:
     friend class Scene;
-    bool MatchesController(const AnimatorController& controller) const;
+    friend class SceneManager;
+    bool
+    MatchesController(const AnimatorController& controller,
+                      std::unordered_map<std::string, Ref<AnimationClip>>& refreshedClips) const;
     using PropertyReader =
         std::function<std::optional<std::array<double, 4>>(const AnimationSample&)>;
     AnimationFrame Update(double dt, bool emitEvents, const PropertyReader& readProperty,

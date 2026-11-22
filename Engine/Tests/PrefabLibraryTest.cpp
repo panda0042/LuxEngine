@@ -137,6 +137,36 @@ void RefreshKeepsAnimatorPlayback(const fs::path& directory) {
     const auto refreshed = target.GetComponent<AnimatorComponent>(local).player;
     Check(refreshed && refreshed->GetState() == "Idle" && refreshed->GetParameter("Pace") == 3,
           "an authored animator change is applied on refresh");
+    target.GetComponent<TransformComponent>(local).position.y = 3;
+    AnimationClip updatedClip;
+    updatedClip.events = {{.25, "Edited clip", ""}};
+    Check(updatedClip.Save(clip, error) && PrefabLibrary::Refresh(target, root, error), error);
+    target.UpdateAnimations(.25);
+    const auto& events = target.GetComponent<AnimatorComponent>(local).pendingEvents;
+    Check(events.size() == 1 && events.front().name == "Edited clip" &&
+              target.GetComponent<TransformComponent>(local).position.y == 3,
+          "refresh reloads the edited clip without overwriting a local transform");
+}
+
+void RefreshKeepsPlainAnimationPlayback(const fs::path& directory) {
+    Scene source, target;
+    const auto actor = source.CreateEntity("Animation").GetId();
+    source.AddComponent<AnimationComponent>(actor).clip.events = {{.75, "Continue", ""}};
+    const auto file = directory / "bundle/prefabs/Animation.luxprefab";
+    std::string error;
+    Check(PrefabLibrary::Save(source, actor, file, error), error);
+    const auto root = PrefabLibrary::Instantiate(target, file, error);
+    Check(root != 0, error);
+    const auto local = target.GetChildren(root).at(0);
+    target.UpdateAnimations(.5);
+    Check(PrefabLibrary::Refresh(target, root, error), error);
+    Check(target.GetComponent<AnimationComponent>(local).currentTime == .5,
+          "refresh preserves the time of an unchanged animation");
+    target.UpdateAnimations(.25);
+    const auto& animation = target.GetComponent<AnimationComponent>(local);
+    Check(animation.currentTime == .75 && animation.pendingEvents.size() == 1 &&
+              animation.pendingEvents.front().name == "Continue",
+          "the animation resumes and emits the next event after refresh");
 }
 
 void RoundTrip(const fs::path& directory) {
@@ -344,6 +374,7 @@ int main() {
         Files files;
         ExportUnsavedScene(files.root);
         RefreshKeepsAnimatorPlayback(files.root);
+        RefreshKeepsPlainAnimationPlayback(files.root);
         RoundTrip(files.root);
         UnloadedPrefabRoundTrip(files.root);
         std::cout

@@ -133,25 +133,22 @@ struct AnimatorPlayer::Impl {
     bool playing = true;
     double speed = 1;
 
+    std::string ClipPath(const std::string& path) const {
+        auto file = std::filesystem::u8path(path);
+        if (file.is_relative())
+            file = std::filesystem::u8path(controller->sourcePath).parent_path() / file;
+        return Utf8(std::filesystem::absolute(file).lexically_normal());
+    }
+
     Ref<AnimationClip> Clip(const std::string& path) {
         if (path.empty())
             return {};
         if (auto at = clips.find(path); at != clips.end())
             return at->second;
-        auto file = std::filesystem::u8path(path);
-        if (file.is_relative())
-            file = std::filesystem::u8path(controller->sourcePath).parent_path() / file;
         std::string error;
-        auto clip = AnimationClip::Load(Utf8(file), error);
+        auto clip = AnimationClip::Load(ClipPath(path), error);
         if (!clip)
             throw std::runtime_error(error);
-        if (!clip->modelPath.empty())
-            clip->modelPath = Utf8(
-                (file.parent_path() / std::filesystem::u8path(clip->modelPath)).lexically_normal());
-        if (!clip->spriteSheet.empty())
-            clip->spriteSheet =
-                Utf8((file.parent_path() / std::filesystem::u8path(clip->spriteSheet))
-                         .lexically_normal());
         clips[path] = clip;
         return clip;
     }
@@ -307,12 +304,24 @@ bool AnimatorPlayer::SetController(Ref<AnimatorController> controller, std::stri
     }
 }
 
-bool AnimatorPlayer::MatchesController(const AnimatorController& controller) const {
+bool AnimatorPlayer::MatchesController(
+    const AnimatorController& controller,
+    std::unordered_map<std::string, Ref<AnimationClip>>& refreshedClips) const {
     const auto& loaded = impl_->controller;
     std::string current, next, error;
-    return loaded && loaded->sourcePath == controller.sourcePath &&
-           loaded->SerializeForFile(controller.sourcePath, current, error) &&
-           controller.SerializeForFile(controller.sourcePath, next, error) && current == next;
+    if (!loaded || loaded->sourcePath != controller.sourcePath ||
+        !loaded->SerializeForFile(controller.sourcePath, current, error) ||
+        !controller.SerializeForFile(controller.sourcePath, next, error) || current != next)
+        return false;
+    for (const auto& [path, clip] : impl_->clips) {
+        const auto file = impl_->ClipPath(path);
+        auto [incoming, inserted] = refreshedClips.try_emplace(file);
+        if (inserted)
+            incoming->second = AnimationClip::Load(file, error);
+        if (!incoming->second || !clip->Matches(*incoming->second))
+            return false;
+    }
+    return true;
 }
 
 bool AnimatorPlayer::SetParameter(const std::string& name, double value) {
@@ -511,6 +520,17 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
             for (auto& model : previous.models)
                 model.weight *= 1 - factor;
             auto models = std::move(frame.models);
+            AnimationFrame fadingOut;
+            std::erase_if(previous.samples, [&](const auto& sample) {
+                const auto binding = Key(sample);
+                const auto hasBinding = [&](const auto& value) { return Key(value) == binding; };
+                if (std::ranges::any_of(frame.samples, hasBinding) ||
+                    !std::ranges::any_of(result.samples, hasBinding))
+                    return false;
+                fadingOut.samples.push_back(sample);
+                return true;
+            });
+            Merge(result, fadingOut, layer.weight * (1 - factor), layer.additive, layer.mask);
             for (const auto& sample : frame.samples) {
                 if (sample.property == AnimationProperty::SpriteFrame)
                     continue;

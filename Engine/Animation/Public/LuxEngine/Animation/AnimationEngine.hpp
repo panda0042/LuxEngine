@@ -51,7 +51,10 @@ public:
     TransformComponent Sample(double time, bool wrapTime = true) const;
 
 private:
+    friend class AnimatorPlayer;
     friend class Scene;
+    friend class SceneManager;
+    bool Matches(const AnimationClip& clip) const;
     static Ref<AnimationClip> DeserializeData(const std::string& data, std::string& error);
 };
 

@@ -352,11 +352,11 @@ void Scene::RepairReferenceLinks() {
 }
 
 bool Scene::CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 targetId) {
-    return CopyEntityComponents(source, sourceId, targetId, nullptr);
+    return CopyEntityComponents(source, sourceId, targetId, false);
 }
 
 bool Scene::CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 targetId,
-                                 const AnimatorController* refreshedController) {
+                                 bool preservePlayback) {
     if (!source.IsAlive(sourceId) || !IsAlive(targetId))
         return false;
     if (&source == this && sourceId == targetId)
@@ -377,21 +377,33 @@ bool Scene::CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 ta
             auto& destination = GetPool<T>().values;
             destination.reserve(destination.size() + 1);
         });
-        if (refreshedController) {
-            const auto* current = TryGetComponent<AnimatorComponent>(targetId);
-            auto* replacement = prepared.TryGetComponent<AnimatorComponent>(targetId);
-            if (current && replacement && current->controllerPath == replacement->controllerPath &&
-                current->playing == replacement->playing &&
-                current->rootMotion == replacement->rootMotion && current->player &&
-                std::ranges::equal(current->parameters, replacement->parameters,
+        if (preservePlayback) {
+            const auto* current = TryGetComponent<AnimationComponent>(targetId);
+            auto* replacement = prepared.TryGetComponent<AnimationComponent>(targetId);
+            if (current && replacement && current->assetPath == replacement->assetPath &&
+                current->playing == replacement->playing && current->speed == replacement->speed &&
+                current->rootMotion == replacement->rootMotion &&
+                current->clip.Matches(replacement->clip)) {
+                replacement->currentTime = current->currentTime;
+                replacement->playbackStarted = current->playbackStarted;
+                replacement->loadedPath = current->loadedPath;
+                replacement->asset = current->asset;
+                replacement->pendingEvents = current->pendingEvents;
+            }
+            const auto* animator = TryGetComponent<AnimatorComponent>(targetId);
+            auto* nextAnimator = prepared.TryGetComponent<AnimatorComponent>(targetId);
+            if (animator && nextAnimator &&
+                animator->controllerPath == nextAnimator->controllerPath &&
+                animator->playing == nextAnimator->playing &&
+                animator->rootMotion == nextAnimator->rootMotion && animator->player &&
+                std::ranges::equal(animator->parameters, nextAnimator->parameters,
                                    [](const auto& left, const auto& right) {
                                        return left.name == right.name && left.type == right.type &&
                                               left.value == right.value;
-                                   }) &&
-                current->player->MatchesController(*refreshedController)) {
-                replacement->player = current->player;
-                replacement->loadedPath = current->loadedPath;
-                replacement->pendingEvents = current->pendingEvents;
+                                   })) {
+                nextAnimator->player = animator->player;
+                nextAnimator->loadedPath = animator->loadedPath;
+                nextAnimator->pendingEvents = animator->pendingEvents;
             }
         }
     } catch (...) {

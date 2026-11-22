@@ -2,6 +2,7 @@
 
 #include <LuxEngine/ECS/ECS.hpp>
 #include <LuxEngine/Physics/PhysicsWorld.hpp>
+#include <span>
 #include <unordered_map>
 
 namespace LuxEngine {
@@ -10,7 +11,7 @@ class Scene;
 class ScenePhysicsWorld final {
 public:
     explicit ScenePhysicsWorld(bool planar);
-    void Step(Scene& scene, double dt, uint32 index, uint32 count,
+    void Step(Scene& scene, std::span<const uint32> entities, double dt, uint32 index, uint32 count,
               const std::unordered_map<uint32, Vec3>& rootMotion);
     void Remove(uint32 entity);
     std::unordered_map<uint32, TransformComponent> GetWorldPoses(const Scene& scene) const;

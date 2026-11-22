@@ -19,6 +19,19 @@ $package = New-LuxPackageOutput -OutputDir $outDirResolved -Name "LuxEngine-SDK-
 $sdkStaging = $package.Staging
 $sdkZip = $package.Zip
 
+function Use-LiteralSdkConfigurations([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    $stem = [IO.Path]::GetFileNameWithoutExtension($Path)
+    $pattern = $stem + '-*.cmake'
+    $glob = 'file(GLOB _cmake_config_files "${CMAKE_CURRENT_LIST_DIR}/' + $pattern + '")'
+    $contents = [IO.File]::ReadAllText($Path)
+    if (-not $contents.Contains($glob)) { return }
+    $configs = Get-ChildItem -LiteralPath ([IO.Path]::GetDirectoryName($Path)) -Filter $pattern -File |
+        Sort-Object Name | ForEach-Object { '  "${CMAKE_CURRENT_LIST_DIR}/' + $_.Name + '"' }
+    $replacement = (@('set(_cmake_config_files') + @($configs) + @(')')) -join "`n"
+    [IO.File]::WriteAllText($Path, $contents.Replace($glob, $replacement))
+}
+
 try {
 
     # Keep both suffixed engine libraries, then leave shared runtime files in Release mode.
@@ -134,6 +147,15 @@ try {
     }
 
     Assert-LuxWindowsRuntime -Directory (Join-Path $sdkStaging "bin")
+
+    foreach ($export in @(
+        'lib/cmake/LuxEngine/LuxEngineTargets.cmake',
+        'lib/cmake/Jolt/JoltConfig.cmake',
+        'share/sdl3/SDL3headersTargets.cmake',
+        'share/sdl3/SDL3sharedTargets.cmake'
+    )) {
+        Use-LiteralSdkConfigurations (Join-Path $sdkStaging $export)
+    }
 
     # Create ZIP archive
     Write-Host "Creating SDK archive: $sdkZip"

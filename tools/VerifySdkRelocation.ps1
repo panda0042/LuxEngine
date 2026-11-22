@@ -16,32 +16,32 @@ Write-Host "=== Testing LuxEngine SDK Relocation & Consumer Build ==="
 
 $cmakeExe = "cmake"
 $vsCMake = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-if (Test-Path $vsCMake) { $cmakeExe = $vsCMake }
+if (Test-Path -LiteralPath $vsCMake -PathType Leaf) { $cmakeExe = $vsCMake }
 
 $isUserSpecifiedPrefix = -not [string]::IsNullOrWhiteSpace($SdkPrefix)
 $shouldCleanupSdk = -not $isUserSpecifiedPrefix
+$tempBase = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath([IO.Path]::GetTempPath()))
 
 if (-not $isUserSpecifiedPrefix) {
     # If no SDK prefix provided, test relocatability using a dedicated path with spaces
-    $tempBase = [System.IO.Path]::GetTempPath()
-    $SdkPrefix = Join-Path $tempBase "LuxSDK Relocated Path $(Get-Random)"
-    New-Item -ItemType Directory -Path $SdkPrefix -Force | Out-Null
+    $SdkPrefix = Join-Path $tempBase "LuxSDK Relocated Path $([guid]::NewGuid())"
 } else {
     # User specified an SdkPrefix: NEVER delete or overwrite existing user directories!
-    if (Test-Path $SdkPrefix) {
-        $existingItems = Get-ChildItem -Path $SdkPrefix -Force -ErrorAction SilentlyContinue
-        if ($existingItems -and $existingItems.Count -gt 0) {
+    $SdkPrefix = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($SdkPrefix)
+    if (Test-Path -LiteralPath $SdkPrefix) {
+        if (-not (Test-Path -LiteralPath $SdkPrefix -PathType Container)) {
+            throw "SdkPrefix must be a directory: '$SdkPrefix'."
+        }
+        if (Get-ChildItem -LiteralPath $SdkPrefix -Force | Select-Object -First 1) {
             throw "Target SdkPrefix directory already exists and is not empty: '$SdkPrefix'. VerifySdkRelocation refuses to overwrite or delete existing user directories to prevent data loss. Please specify an empty directory or omit -SdkPrefix to use a dedicated isolated path."
         }
-    } else {
-        New-Item -ItemType Directory -Path $SdkPrefix -Force | Out-Null
     }
 }
 
 Write-Host "SDK Relocation Target: $SdkPrefix"
 
-$consumerTestDir = Join-Path ([System.IO.Path]::GetTempPath()) "LuxConsumerTest-$(Get-Random)"
-New-Item -ItemType Directory -Path $consumerTestDir -Force | Out-Null
+$consumerTestDir = Join-Path $tempBase "LuxConsumerTest-$([guid]::NewGuid())"
+[IO.Directory]::CreateDirectory($consumerTestDir) | Out-Null
 
 try {
     if (-not $SdkArchive) {
@@ -51,16 +51,19 @@ try {
         $SdkArchive = Join-Path $packages "LuxEngine-SDK-0.1.0-x64.zip"
     }
     Write-Host "1. Extracting SDK ZIP to relocated path..."
-    Expand-Archive -LiteralPath $SdkArchive -DestinationPath $SdkPrefix
+    $archivePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($SdkArchive)
+    [IO.Compression.ZipFile]::ExtractToDirectory($archivePath, $SdkPrefix)
 
     $sdkCmake = Join-Path $SdkPrefix "lib/cmake/LuxEngine"
-    if (-not (Test-Path (Join-Path $sdkCmake "LuxEngineConfig.cmake"))) {
+    if (-not (Test-Path -LiteralPath (Join-Path $sdkCmake "LuxEngineConfig.cmake") -PathType Leaf)) {
         throw "LuxEngineConfig.cmake missing in $sdkCmake"
     }
     Assert-LuxWindowsRuntime -Directory (Join-Path $SdkPrefix "bin")
 
     # 2. Test MinimalGame Consumer against Relocated SDK in Release & Debug
-    Copy-Item -Path "$root/samples/MinimalGame/*" -Destination $consumerTestDir -Recurse -Force
+    Get-ChildItem -LiteralPath (Join-Path $root 'samples/MinimalGame') | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $consumerTestDir -Recurse -Force
+    }
 
     $consumerBuild = Join-Path $consumerTestDir "build"
     Write-Host "2. Configuring MinimalGame against relocated SDK..."
@@ -82,10 +85,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "CMake build (Release) failed for consumer" }
 
     $releaseExe = Join-Path $consumerBuild "Release/MinimalGame.exe"
-    if (-not (Test-Path $releaseExe)) {
+    if (-not (Test-Path -LiteralPath $releaseExe -PathType Leaf)) {
         $releaseExe = Join-Path $consumerBuild "bin/Release/MinimalGame.exe"
     }
-    if (-not (Test-Path $releaseExe)) {
+    if (-not (Test-Path -LiteralPath $releaseExe -PathType Leaf)) {
         throw "MinimalGame.exe (Release) not found in $consumerBuild"
     }
     Assert-LuxWindowsRuntime -Directory (Split-Path $releaseExe)
@@ -99,10 +102,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "CMake build (Debug) failed for consumer" }
 
     $debugExe = Join-Path $consumerBuild "Debug/MinimalGame.exe"
-    if (-not (Test-Path $debugExe)) {
+    if (-not (Test-Path -LiteralPath $debugExe -PathType Leaf)) {
         $debugExe = Join-Path $consumerBuild "bin/Debug/MinimalGame.exe"
     }
-    if (-not (Test-Path $debugExe)) {
+    if (-not (Test-Path -LiteralPath $debugExe -PathType Leaf)) {
         throw "MinimalGame.exe (Debug) not found in $consumerBuild"
     }
     Assert-LuxWindowsRuntime -Directory (Split-Path $debugExe)
@@ -113,11 +116,9 @@ try {
     Write-Host "`n=== SDK Relocation & MinimalGame Verification: ALL PASSED ==="
 }
 finally {
-    if (Test-Path $consumerTestDir) {
-        Remove-Item -Recurse -Force $consumerTestDir -ErrorAction SilentlyContinue
-    }
+    Remove-LuxPackageDirectory -Path $consumerTestDir -OutputDir $tempBase
     # NEVER delete user-specified directories! Only clean up if auto-generated by the script.
-    if ($shouldCleanupSdk -and (Test-Path $SdkPrefix)) {
-        Remove-Item -Recurse -Force $SdkPrefix -ErrorAction SilentlyContinue
+    if ($shouldCleanupSdk) {
+        Remove-LuxPackageDirectory -Path $SdkPrefix -OutputDir $tempBase
     }
 }

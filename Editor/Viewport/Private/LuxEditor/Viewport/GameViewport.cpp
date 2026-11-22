@@ -270,24 +270,26 @@ void GameViewport::PaintSoftware(LuxUI::Painter& painter, LuxEngine::Scene& scen
                                                      {.48f, .51f, .54f, 1},
                                                      {.22f, .46f, .74f, .82f},
                                                      {.76f, .66f, .42f, 1}}};
-    for (auto entity : scene.GetEntitiesIn2DLayerOrder()) {
-        if (!entity.HasComponent<LuxEngine::TransformComponent>())
+    const auto entities = scene.GetEntitiesIn2DLayerOrder();
+    for (auto entity : entities) {
+        const auto* map = entity.TryGetComponent<LuxEngine::TilemapComponent>();
+        if (!map)
             continue;
         const auto world = scene.GetWorldMatrix(entity.GetId());
-        if (const auto* sprite = entity.TryGetComponent<LuxEngine::SpriteRendererComponent>())
-            drawQuad(world, sprite->color);
-        if (const auto* map = entity.TryGetComponent<LuxEngine::TilemapComponent>())
-            for (LuxEngine::uint32 y = 0; y < map->height; ++y)
-                for (LuxEngine::uint32 x = 0; x < map->width; ++x) {
-                    const auto tile = map->Get(x, y);
-                    if (tile == 0 || tile >= tileColors.size())
-                        continue;
-                    drawQuad(world *
-                                 LuxEngine::Mat4::Translate(
-                                     {(x + .5f) * map->tileSize, (y + .5f) * map->tileSize, 0}) *
-                                 LuxEngine::Mat4::Scale({map->tileSize, map->tileSize, 1}),
-                             tileColors[tile]);
-                }
+        for (LuxEngine::uint32 y = 0; y < map->height; ++y)
+            for (LuxEngine::uint32 x = 0; x < map->width; ++x) {
+                const auto tile = map->Get(x, y);
+                if (tile == 0 || tile >= tileColors.size())
+                    continue;
+                drawQuad(world *
+                             LuxEngine::Mat4::Translate(
+                                 {(x + .5f) * map->tileSize, (y + .5f) * map->tileSize, 0}) *
+                             LuxEngine::Mat4::Scale({map->tileSize, map->tileSize, 1}),
+                         tileColors[tile]);
+            }
     }
+    for (auto entity : entities)
+        if (const auto* sprite = entity.TryGetComponent<LuxEngine::SpriteRendererComponent>())
+            drawQuad(scene.GetWorldMatrix(entity.GetId()), sprite->color);
 }
 } // namespace LuxEditor
