@@ -29,6 +29,12 @@ bool ParseNumber(const std::string& text, uint32& value) {
     return result.ec == std::errc{} && result.ptr == end;
 }
 
+constexpr std::pair<const char*, LuxKey> PlayerBindings[] = {
+    {"Left", LuxKey::A},      {"Left", LuxKey::Left}, {"Right", LuxKey::D},
+    {"Right", LuxKey::Right}, {"Up", LuxKey::W},      {"Up", LuxKey::Up},
+    {"Down", LuxKey::S},      {"Down", LuxKey::Down}, {"Jump", LuxKey::Space},
+};
+
 bool IsPlayerTag(const std::string& tag) {
     return tag == "플레이어" || tag == "주인공" || tag == "Player";
 }
@@ -307,7 +313,7 @@ bool ScenePlayer::LoadScene() {
     fittedAspect_ = 0;
     streamingAccumulator_ = 0;
     lastStreamingError_.clear();
-    FindPlayer();
+    player_ = FindScenePlayer(*scene_);
     return true;
 }
 
@@ -340,14 +346,57 @@ bool ScenePlayer::EnsureScripts(Scene& scene, ScriptRuntime& scripts) {
     return true;
 }
 
-void ScenePlayer::FindPlayer() {
-    player_ = {};
-    for (Entity entity : scene_->GetEntities())
-        if (entity.HasComponent<TagComponent>() &&
-            IsPlayerTag(entity.GetComponent<TagComponent>().tag)) {
-            player_ = entity;
-            break;
-        }
+Entity FindScenePlayer(Scene& scene) {
+    for (const auto id : scene.GetComponentEntityIds<TagComponent>())
+        if (IsPlayerTag(scene.GetComponent<TagComponent>(id).tag))
+            return {id, &scene};
+    return {};
+}
+
+void ScenePlayerControls::Bind() {
+    static_assert(std::size(PlayerBindings) == std::tuple_size_v<decltype(bindings_)>);
+    for (size_t i = 0; i < bindings_.size(); ++i) {
+        const auto& [name, key] = PlayerBindings[i];
+        if (!bindings_[i])
+            bindings_[i] = Input::BindAction(name, key);
+    }
+}
+
+void ScenePlayerControls::Unbind() {
+    for (size_t i = 0; i < bindings_.size(); ++i) {
+        const auto& [name, key] = PlayerBindings[i];
+        if (bindings_[i])
+            Input::UnbindAction(name, key);
+    }
+    bindings_.fill(false);
+}
+
+void ScenePlayerControls::Apply(Entity player, double step) const {
+    const auto* script = player.TryGetComponent<ScriptComponent>();
+    if (!player.HasComponent<TransformComponent>() ||
+        (script && script->enabled && !script->typeName.empty()))
+        return;
+
+    const double horizontal = double(Input::IsActionDown("Right")) - Input::IsActionDown("Left");
+    const double vertical = double(Input::IsActionDown("Up")) - Input::IsActionDown("Down");
+    if (auto* body = player.TryGetComponent<Rigidbody2DComponent>()) {
+        body->velocity.x = horizontal * 4;
+        if (body->isGrounded && Input::WasActionPressed("Jump"))
+            body->velocity.y = 7;
+    } else if (const double length = std::hypot(horizontal, vertical); length > 0) {
+        auto& scene = *player.GetScene();
+        auto transform = scene.GetWorldTransform(player.GetId());
+        transform.position.x += horizontal * 4 * step / length;
+        transform.position.y += vertical * 4 * step / length;
+        scene.SetWorldTransform(player.GetId(), transform);
+    }
+}
+
+bool UpdateSceneSimulation(Scene& scene, ScriptRuntime& scripts, double step) {
+    if (scripts.IsRunning() && !scripts.Update(step))
+        return false;
+    scene.OnUpdate(step);
+    return true;
 }
 
 void ScenePlayer::OnInit() {
@@ -360,15 +409,7 @@ void ScenePlayer::OnInit() {
         return;
     }
     loaded_ = true;
-    Input::BindAction("Left", LuxKey::A);
-    Input::BindAction("Left", LuxKey::Left);
-    Input::BindAction("Right", LuxKey::D);
-    Input::BindAction("Right", LuxKey::Right);
-    Input::BindAction("Up", LuxKey::W);
-    Input::BindAction("Up", LuxKey::Up);
-    Input::BindAction("Down", LuxKey::S);
-    Input::BindAction("Down", LuxKey::Down);
-    Input::BindAction("Jump", LuxKey::Space);
+    controls_.Bind();
     Input::BindAction("Reload", LuxKey::R);
     Input::BindAction("Quit", LuxKey::Escape);
     if (options_.fullscreen)
@@ -393,35 +434,21 @@ void ScenePlayer::UpdateCamera() {
     perspective_ = cameras.perspective;
 }
 
+double ScenePlayer::GetFixedUpdateStep() const {
+    return scene_->GetSettings().fixedStep;
+}
+
 void ScenePlayer::OnUpdate(double dt) {
     if (Input::WasActionPressed("Quit")) {
         Close();
         return;
     }
-    if (Input::WasActionPressed("Reload") && LoadScene())
+    if (Input::WasActionPressed("Reload") && LoadScene()) {
         UpdateCamera();
-    const auto* script = player_.TryGetComponent<ScriptComponent>();
-    if (player_ && (!script || !script->enabled || script->typeName.empty()) &&
-        player_.HasComponent<TransformComponent>()) {
-        const double horizontal = (Input::IsActionDown("Right") ? 1.0f : 0.0f) -
-                                  (Input::IsActionDown("Left") ? 1.0f : 0.0f);
-        const double vertical =
-            (Input::IsActionDown("Up") ? 1.0f : 0.0f) - (Input::IsActionDown("Down") ? 1.0f : 0.0f);
-        if (player_.HasComponent<Rigidbody2DComponent>()) {
-            auto& body = player_.GetComponent<Rigidbody2DComponent>();
-            body.velocity.x = horizontal * 4.0f;
-            if (body.isGrounded && Input::WasActionPressed("Jump"))
-                body.velocity.y = 7.0f;
-        } else {
-            auto transform = scene_->GetWorldTransform(player_.GetId());
-            const double length = std::sqrt(horizontal * horizontal + vertical * vertical);
-            if (length > 0.0f) {
-                transform.position.x += horizontal / length * 4.0f * static_cast<double>(dt);
-                transform.position.y += vertical / length * 4.0f * static_cast<double>(dt);
-                scene_->SetWorldTransform(player_.GetId(), transform);
-            }
-        }
+        if (dt != GetFixedUpdateStep())
+            return;
     }
+    controls_.Apply(player_, dt);
     streamingAccumulator_ += dt;
     if (streamingAccumulator_ >= .1) {
         streamingAccumulator_ = 0;
@@ -435,7 +462,7 @@ void ScenePlayer::OnUpdate(double dt) {
         } else if (changed)
             lastStreamingError_.clear();
         if (changed) {
-            FindPlayer();
+            player_ = FindScenePlayer(*scene_);
             if (!EnsureScripts(*scene_, *scripts_)) {
                 runtimeFailed_ = true;
                 Close();
@@ -443,17 +470,14 @@ void ScenePlayer::OnUpdate(double dt) {
             }
         }
     }
-    if (scripts_->IsRunning()) {
-        if (!scripts_->Update(dt)) {
-            Log::Error(scripts_->GetLastError());
-            runtimeFailed_ = true;
-            Close();
-            return;
-        }
-        if (!scripts_->GetLastError().empty())
-            Log::Error(scripts_->GetLastError());
+    if (!UpdateSceneSimulation(*scene_, *scripts_, dt)) {
+        Log::Error(scripts_->GetLastError());
+        runtimeFailed_ = true;
+        Close();
+        return;
     }
-    scene_->OnUpdate(dt);
+    if (scripts_->IsRunning() && !scripts_->GetLastError().empty())
+        Log::Error(scripts_->GetLastError());
 }
 
 void ScenePlayer::OnRender(float) {
@@ -488,6 +512,7 @@ uint64 ScenePlayer::GetPresentedFrameCount() const noexcept {
 }
 
 void ScenePlayer::OnShutdown() {
+    controls_.Unbind();
     scripts_->Shutdown();
     Input::ClearBindings();
 }

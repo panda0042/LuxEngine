@@ -7,6 +7,7 @@
 #include <LuxEngine/Scene/Scene.hpp>
 #include <LuxEngine/Scene/SceneManager.hpp>
 #include <LuxEngine/Scripting/ScriptRuntime.hpp>
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -64,6 +65,19 @@ ScenePlayerCameras ResolveScenePlayerCameras(Scene& scene, double aspect,
 std::optional<ScenePlayerOptions> ParseScenePlayerArguments(const std::vector<std::string>& args,
                                                             std::string& error);
 
+class ScenePlayerControls {
+public:
+    void Bind();
+    void Unbind();
+    void Apply(Entity player, double step) const;
+
+private:
+    std::array<bool, 9> bindings_{};
+};
+
+Entity FindScenePlayer(Scene& scene);
+bool UpdateSceneSimulation(Scene& scene, ScriptRuntime& scripts, double step);
+
 // Runs a saved scene in its own window: physics, animation, Renderer3D and Renderer2D drawing.
 // An entity tagged "플레이어", "주인공" or "Player" is driven by WASD/arrows (Space jumps for
 // bodies with Rigidbody2D). Escape closes the window; R reloads the scene file.
@@ -81,11 +95,11 @@ protected:
     void OnRender(float elapsedSeconds) override;
     void OnFramePresented() override;
     void OnShutdown() override;
+    double GetFixedUpdateStep() const override;
 
 private:
     bool LoadScene();
     bool EnsureScripts(Scene& scene, ScriptRuntime& scripts);
-    void FindPlayer();
     void UpdateCamera();
 
     ScenePlayerOptions options_;
@@ -93,6 +107,7 @@ private:
     std::unique_ptr<ScriptRuntime> scripts_ = std::make_unique<ScriptRuntime>();
     std::shared_ptr<Scene> scene_ = std::make_shared<Scene>();
     Entity player_;
+    ScenePlayerControls controls_;
     OrthographicCamera camera_;
     PerspectiveCamera camera3D_;
     bool perspective_ = false;

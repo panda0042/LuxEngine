@@ -5,6 +5,7 @@
 #include <LuxEditor/Scene/EditorSnapshot.hpp>
 #include <LuxEditor/Scene/SelectionTransform.hpp>
 #include <LuxEditor/Viewport/EditorTool.hpp>
+#include <LuxEngine/Runtime/ScenePlayer.hpp>
 #include <LuxEngine/Scene/SceneManager.hpp>
 #include <LuxEngine/Scripting/ScriptRuntime.hpp>
 #include <LuxUI/Framework.hpp>
@@ -204,7 +205,8 @@ private:
     void StopPreview();
     void TogglePreviewPause();
     void StepPreview();
-    void TickPreview();
+    void AdvancePreview();
+    void TickPreview(double step);
     bool EnsurePreviewScripts(LuxEngine::Scene& scene);
     // Saves the current scene and runs it in a separate LuxPlayer window.
     void RunSceneInWindow();
@@ -425,6 +427,10 @@ private:
     std::optional<LuxEngine::uint32> viewportEditSelected_;
     uint64_t previewFrame_ = 0;
     double previewStreamingElapsed_ = 0;
+    LuxEngine::Timer previewClock_;
+    LuxEngine::FixedStepAccumulator previewUpdates_;
+    LuxEngine::Entity previewPlayer_;
+    LuxEngine::ScenePlayerControls previewControls_;
     bool previewActive_ = false;
     std::unique_ptr<LuxEngine::Scene> runtimeScene_;
     LuxEngine::ScriptRuntime previewScripts_;

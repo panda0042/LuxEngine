@@ -140,6 +140,7 @@ private:
     void ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, double dt, bool rootMotion,
                              AnimationBindings& bindings, RootMotionDeltas* physicsMotion);
     void ResetPhysicsTiming();
+    bool SetWorldTransform(uint32 id, const TransformComponent& value, bool planar);
 
     struct PoolBase {
         LUX_API virtual ~PoolBase();

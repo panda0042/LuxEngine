@@ -156,7 +156,6 @@ int Application::Run() {
 Application::FrameResult Application::RunFrame() {
     if (!sdlInitialized_)
         return FrameResult::Error;
-    constexpr double fixedStep = 1.0 / 60.0;
 
     try {
         if (!running_ || !window_->IsRunning()) {
@@ -175,21 +174,23 @@ Application::FrameResult Application::RunFrame() {
             std::clamp(static_cast<double>(now - lastTicksNs_) / 1'000'000'000.0, 0.0, 0.25);
         lastTicksNs_ = now;
         elapsedSeconds_ += dt;
-        accumulator_ += dt;
+        fixedUpdates_.AddElapsed(dt);
 
         int steps = 0;
-        while (running_ && accumulator_ >= fixedStep && steps < 5) {
-            OnUpdate(fixedStep);
+        while (running_ && steps < FixedStepAccumulator::MaxUpdatesPerFrame) {
+            const double step = GetFixedUpdateStep();
+            if (!fixedUpdates_.Consume(step))
+                break;
+            OnUpdate(step);
             Input::AdvanceFrame();
-            accumulator_ -= fixedStep;
             ++steps;
         }
         if (!running_) {
             Shutdown();
             return FrameResult::Stopped;
         }
-        if (steps == 5 && accumulator_ >= fixedStep)
-            accumulator_ = 0.0;
+        if (steps == FixedStepAccumulator::MaxUpdatesPerFrame)
+            fixedUpdates_.DropBacklog(GetFixedUpdateStep());
 
         const auto frameStart = gpuDevice_->BeginFrame();
         if (frameStart == GpuDevice::FrameStart::Error) {
@@ -243,7 +244,7 @@ void Application::Shutdown() noexcept {
 
     running_ = false;
     lastTicksNs_ = 0;
-    accumulator_ = 0.0;
+    fixedUpdates_.Reset();
     elapsedSeconds_ = 0.0;
     if (initHookEntered_) {
         initHookEntered_ = false;
@@ -289,4 +290,8 @@ void Application::OnUpdate(double /*dt*/) {}
 void Application::OnRender(float /*elapsedSeconds*/) {}
 
 void Application::OnShutdown() {}
+
+double Application::GetFixedUpdateStep() const {
+    return 1.0 / 60.0;
+}
 } // namespace LuxEngine

@@ -5,10 +5,12 @@
 #include <LuxEngine/Animation/AnimationEngine.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxUI/Widgets.hpp>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 
 void Check(bool condition, const char* message) {
     if (!condition)
@@ -99,6 +101,14 @@ int main(int argc, char** argv) {
                     document.IsDirty() == dirty && history->index() == historyIndex,
                 "stop isolates OnDestroy and preserves authored identity, dirty state and history");
         }
+        trigger("previewStart");
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        app.processEvents();
+        Check(window.GetRuntimeScene() &&
+                  window.GetRuntimeScene()->GetComponent<TransformComponent>(id).position.x >=
+                      3 * settings.fixedStep,
+              "the Game View catches up after a delayed event loop instead of advancing one tick");
+        trigger("previewStop");
         actor.GetComponent<ScriptComponent>().typeName = "ScriptTests.Throwing";
         trigger("previewStep");
         Check(window.GetRuntimeScene() && view->IsPaused() &&

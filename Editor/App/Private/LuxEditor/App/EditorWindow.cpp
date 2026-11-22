@@ -57,8 +57,7 @@ EditorWindow::EditorWindow(LuxUI::Widget* parent)
     setAcceptDrops(true);
     recentProjects_.Load();
     connect(&autosaveTimer_, &LuxUI::Timer::timeout, this, [this] { AutoSaveScene(); });
-    previewTimer_.setInterval(16);
-    connect(&previewTimer_, &LuxUI::Timer::timeout, this, [this] { TickPreview(); });
+    connect(&previewTimer_, &LuxUI::Timer::timeout, this, [this] { AdvancePreview(); });
     connect(undo_, &LuxUI::UndoStack::indexChanged, this, [this] { UpdateChrome(); });
     sceneLoadTimer_.setInterval(25);
     connect(&sceneLoadTimer_, &LuxUI::Timer::timeout, this, [this] { PollSceneLoads(); });
@@ -1391,6 +1390,9 @@ void EditorWindow::StartPreview() {
         return;
     }
     runtimeScene_ = std::move(runtime);
+    previewPlayer_ = LuxEngine::FindScenePlayer(*runtimeScene_);
+    previewControls_.Bind();
+    previewUpdates_.Reset();
     previewFrame_ = 0;
     previewStreamingElapsed_ = 0;
     previewTimer_.setInterval(
@@ -1408,6 +1410,7 @@ void EditorWindow::StartPreview() {
     previewPauseAction_->setEnabled(true);
     previewStepAction_->setEnabled(true);
     previewStopAction_->setEnabled(true);
+    previewClock_.Reset();
     previewTimer_.start();
     Log(LUX_UI_TEXT("게임 실행을 시작했습니다."));
 }
@@ -1419,6 +1422,8 @@ void EditorWindow::StopPreview() {
     previewActive_ = false;
     previewPaused_ = false;
     previewScripts_.Shutdown();
+    previewControls_.Unbind();
+    previewPlayer_ = {};
     gameCanvas_->SetInputEnabled(false);
     gameCanvas_->SetPaused(false);
     runtimeScene_.reset();
@@ -1435,10 +1440,13 @@ void EditorWindow::TogglePreviewPause() {
         return;
     previewPaused_ = !previewPaused_;
     gameCanvas_->SetPaused(previewPaused_);
-    if (previewPaused_)
+    if (previewPaused_) {
         previewTimer_.stop();
-    else
+    } else {
+        previewUpdates_.Reset();
+        previewClock_.Reset();
         previewTimer_.start();
+    }
 }
 
 void EditorWindow::StepPreview() {
@@ -1449,7 +1457,7 @@ void EditorWindow::StepPreview() {
     previewPaused_ = true;
     previewTimer_.stop();
     gameCanvas_->SetPaused(true);
-    TickPreview();
+    TickPreview(runtimeScene_->GetSettings().fixedStep);
 }
 
 bool EditorWindow::EnsurePreviewScripts(LuxEngine::Scene& scene) {
@@ -1466,29 +1474,47 @@ bool EditorWindow::EnsurePreviewScripts(LuxEngine::Scene& scene) {
     return true;
 }
 
-void EditorWindow::TickPreview() {
-    if (!previewActive_ || !runtimeScene_)
+void EditorWindow::AdvancePreview() {
+    if (!previewActive_ || previewPaused_ || !runtimeScene_)
         return;
+    previewUpdates_.AddElapsed(previewClock_.ElapsedSeconds());
+    previewClock_.Reset();
+    for (int i = 0; i < LuxEngine::FixedStepAccumulator::MaxUpdatesPerFrame; ++i) {
+        if (!previewActive_ || previewPaused_ || !runtimeScene_)
+            return;
+        const double step = runtimeScene_->GetSettings().fixedStep;
+        if (!previewUpdates_.Consume(step))
+            return;
+        TickPreview(step);
+    }
+    if (runtimeScene_)
+        previewUpdates_.DropBacklog(runtimeScene_->GetSettings().fixedStep);
+}
+
+void EditorWindow::TickPreview(double step) {
     auto& scene = *runtimeScene_;
     const auto start = std::chrono::steady_clock::now();
     try {
-        const double step = scene.GetSettings().fixedStep;
+        previewControls_.Apply(previewPlayer_, step);
         previewStreamingElapsed_ += step;
         if (previewStreamingElapsed_ >= .1) {
             previewStreamingElapsed_ = 0;
             LuxEngine::ScenePlayerView view;
             canvas_->GetView(view.centerX, view.centerY, view.halfHeight);
-            const auto observer = LuxEngine::ResolveSceneStreamingObserver(scene, view);
+            const auto observer =
+                LuxEngine::ResolveSceneStreamingObserver(scene, view, previewPlayer_.GetId());
             std::string error;
             bool changed = false;
             if (!sceneManager_.UpdateStreaming(scene, {observer.x, observer.y}, error, &changed))
                 Log(Q(error), true);
-            if (changed && !EnsurePreviewScripts(scene))
-                throw std::runtime_error(previewScripts_.GetLastError());
+            if (changed) {
+                previewPlayer_ = LuxEngine::FindScenePlayer(scene);
+                if (!EnsurePreviewScripts(scene))
+                    throw std::runtime_error(previewScripts_.GetLastError());
+            }
         }
-        if (previewScripts_.IsRunning() && !previewScripts_.Update(step))
+        if (!LuxEngine::UpdateSceneSimulation(scene, previewScripts_, step))
             throw std::runtime_error(previewScripts_.GetLastError());
-        scene.OnUpdate(step);
         if (!scene.GetLastPhysicsError2D().empty())
             throw std::runtime_error(scene.GetLastPhysicsError2D());
         if (!scene.GetLastPhysicsError3D().empty())
