@@ -33,8 +33,8 @@ try {
     # Copy SDL3 runtime DLL into bin from Release build
     $buildDirResolved = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $root $BuildDir }
     $sdlDll = Join-Path $buildDirResolved "bin/Release/SDL3.dll"
-    if (Test-Path $sdlDll) {
-        Copy-Item -Path $sdlDll -Destination "$sdkStaging/bin/SDL3.dll" -Force
+    if (Test-Path -LiteralPath $sdlDll -PathType Leaf) {
+        Copy-Item -LiteralPath $sdlDll -Destination "$sdkStaging/bin/SDL3.dll" -Force
         Write-Host "Copied SDL3.dll to SDK bin/"
     } else {
         throw "Packaging failure: Release SDL3.dll not found in $BuildDir/bin/Release. Build Release first."
@@ -42,39 +42,45 @@ try {
 
     # Bundle Jolt headers, libraries and CMake configuration
     $JoltInclude = "$DepsDir/include/Jolt"
-    if (Test-Path $JoltInclude) {
+    if (Test-Path -LiteralPath $JoltInclude -PathType Container) {
         New-Item -ItemType Directory -Path "$sdkStaging/include/Jolt" -Force | Out-Null
-        Copy-Item -Path "$JoltInclude/*" -Destination "$sdkStaging/include/Jolt" -Recurse -Force
+        Get-ChildItem -LiteralPath $JoltInclude | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination "$sdkStaging/include/Jolt" -Recurse -Force
+        }
         Write-Host "Bundled Jolt headers"
     }
     $JoltLibRelease = "$DepsDir/lib/Jolt.lib"
-    if (Test-Path $JoltLibRelease) {
-        Copy-Item -Path $JoltLibRelease -Destination "$sdkStaging/lib/Jolt.lib" -Force
+    if (Test-Path -LiteralPath $JoltLibRelease -PathType Leaf) {
+        Copy-Item -LiteralPath $JoltLibRelease -Destination "$sdkStaging/lib/Jolt.lib" -Force
         Write-Host "Bundled Jolt Release lib"
     }
     $JoltLibDebug = "$DepsDir/lib/Joltd.lib"
-    if (Test-Path $JoltLibDebug) {
-        Copy-Item -Path $JoltLibDebug -Destination "$sdkStaging/lib/Joltd.lib" -Force
+    if (Test-Path -LiteralPath $JoltLibDebug -PathType Leaf) {
+        Copy-Item -LiteralPath $JoltLibDebug -Destination "$sdkStaging/lib/Joltd.lib" -Force
         Write-Host "Bundled Jolt Debug lib"
     }
     $JoltCmakeDir = "$DepsDir/lib/cmake/Jolt"
-    if (Test-Path $JoltCmakeDir) {
+    if (Test-Path -LiteralPath $JoltCmakeDir -PathType Container) {
         New-Item -ItemType Directory -Path "$sdkStaging/lib/cmake/Jolt" -Force | Out-Null
-        Copy-Item -Path "$JoltCmakeDir/*" -Destination "$sdkStaging/lib/cmake/Jolt" -Recurse -Force
+        Get-ChildItem -LiteralPath $JoltCmakeDir | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination "$sdkStaging/lib/cmake/Jolt" -Recurse -Force
+        }
         Write-Host "Bundled Jolt CMake package"
     }
 
     # Bundle SDL3 headers, import library and CMake configuration
     $vcpkgBase = if ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } elseif (Test-Path "C:/vcpkg") { "C:/vcpkg" } else { "" }
     $sdlInclude = if ($vcpkgBase) { "$vcpkgBase/installed/x64-windows/include/SDL3" } else { "" }
-    if ($sdlInclude -and (Test-Path $sdlInclude)) {
+    if ($sdlInclude -and (Test-Path -LiteralPath $sdlInclude -PathType Container)) {
         New-Item -ItemType Directory -Path "$sdkStaging/include/SDL3" -Force | Out-Null
-        Copy-Item -Path "$sdlInclude/*" -Destination "$sdkStaging/include/SDL3" -Recurse -Force
+        Get-ChildItem -LiteralPath $sdlInclude | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination "$sdkStaging/include/SDL3" -Recurse -Force
+        }
         Write-Host "Bundled SDL3 headers"
     }
     $sdlLib = if ($vcpkgBase) { "$vcpkgBase/installed/x64-windows/lib/SDL3.lib" } else { "" }
-    if ($sdlLib -and (Test-Path $sdlLib)) {
-        Copy-Item -Path $sdlLib -Destination "$sdkStaging/lib/SDL3.lib" -Force
+    if ($sdlLib -and (Test-Path -LiteralPath $sdlLib -PathType Leaf)) {
+        Copy-Item -LiteralPath $sdlLib -Destination "$sdkStaging/lib/SDL3.lib" -Force
         Write-Host "Bundled SDL3 import lib"
     }
     if ($vcpkgBase) {
@@ -82,7 +88,9 @@ try {
         foreach ($directory in @('share/sdl3', 'debug/lib', 'debug/bin')) {
             New-Item -ItemType Directory -Path (Join-Path $sdkStaging $directory) -Force | Out-Null
         }
-        Copy-Item -Path (Join-Path $sdlRoot 'share/sdl3/*.cmake') -Destination "$sdkStaging/share/sdl3"
+        Get-ChildItem -LiteralPath (Join-Path $sdlRoot 'share/sdl3') -Filter '*.cmake' -File | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination "$sdkStaging/share/sdl3"
+        }
         foreach ($file in @('debug/lib/SDL3.lib', 'debug/bin/SDL3.dll')) {
             Copy-Item -LiteralPath (Join-Path $sdlRoot $file) -Destination (Join-Path $sdkStaging $file)
         }
@@ -120,7 +128,7 @@ try {
 
     foreach ($f in $requiredFiles) {
         $targetPath = Join-Path $sdkStaging $f
-        if (-not (Test-Path $targetPath)) {
+        if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
             throw "Packaging integrity failure: required SDK file missing: $f"
         }
     }
@@ -129,12 +137,12 @@ try {
 
     # Create ZIP archive
     Write-Host "Creating SDK archive: $sdkZip"
-    Compress-Archive -Path "$sdkStaging/*" -DestinationPath $sdkZip -CompressionLevel Optimal
+    Compress-LuxPackageOutput -Package $package
     Publish-LuxPackageOutput -Package $package
     $sdkZip = $package.PublishedZip
 
-    $zipSize = (Get-Item $sdkZip).Length
-    $zipHash = (Get-FileHash -Path $sdkZip -Algorithm SHA256).Hash
+    $zipSize = (Get-Item -LiteralPath $sdkZip).Length
+    $zipHash = (Get-FileHash -LiteralPath $sdkZip -Algorithm SHA256).Hash
     Write-Host "=== SDK Packaging Complete ==="
     Write-Host "Package: $sdkZip"
     Write-Host "Size   : $([math]::Round($zipSize / 1MB, 2)) MB ($zipSize bytes)"

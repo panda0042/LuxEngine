@@ -197,7 +197,8 @@ bool NormalizeAuthoredScenePaths(LuxEngine::Scene& scene, const fs::path& owner,
                                  std::string& error) {
     try {
         std::uintmax_t remaining = 128 * 1024 * 1024;
-        RebaseSceneReferences(scene, CanonicalPath(owner), nullptr, remaining);
+        RebaseSceneReferences(scene, owner.empty() ? owner : CanonicalPath(owner), nullptr,
+                              remaining);
         return true;
     } catch (const std::exception& failure) {
         error = failure.what();

@@ -70,6 +70,7 @@ void TestFirstSaveKeepsRelativeAssets() {
     EditorDocument document;
     const auto id = document.CreateEntity("Badge").GetId();
     document.GetScene().AddComponent<SpriteRendererComponent>(id).texturePath = "Badge.png";
+    const auto draft = Snapshot(&document.GetScene());
     const auto file = PathUtf8(directory / "First.lux");
     Check(document.SaveAs(file), "first save with a relative texture succeeds");
     Scene disk;
@@ -79,6 +80,12 @@ void TestFirstSaveKeepsRelativeAssets() {
         Check(fs::equivalent(PathFromUtf8(scene->ResolveAssetPath(path)), texture),
               "the texture remains accessible in both the live scene and saved file");
     }
+    Check(document.ReplaceSceneFromData(document.GetActiveTabId(), draft, id, std::string{}),
+          "a history snapshot captured before the first save can be restored");
+    const auto& restored = document.GetScene();
+    const auto& path = restored.GetComponent<SpriteRendererComponent>(id).texturePath;
+    Check(fs::equivalent(PathFromUtf8(restored.ResolveAssetPath(path)), texture),
+          "undo across the first save keeps the original texture");
 }
 
 void TestTabsAndHistory() {

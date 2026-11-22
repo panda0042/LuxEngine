@@ -122,6 +122,13 @@ void RefreshKeepsAnimatorPlayback(const fs::path& directory) {
     Check(active && active->GetState() == "Moving" && active->GetTime() == .5 &&
               active->GetParameter("Pace") == 2,
           "refreshing an unchanged animator preserves its playback and live parameters");
+    controller.layers.front().states.push_back({"NewState", clip});
+    Check(controller.Save(controllerPath, error) && PrefabLibrary::Refresh(target, root, error),
+          error);
+    target.UpdateAnimations(0);
+    const auto changed = target.GetComponent<AnimatorComponent>(local).player;
+    Check(changed && changed != active && changed->Play("NewState"),
+          "refreshing a prefab reloads edits made in place to its controller file");
     animator.parameters = {{"Pace", AnimationParameterType::Float, 3}};
     Check(PrefabLibrary::Save(source, actor, file, error) &&
               PrefabLibrary::Refresh(target, root, error),

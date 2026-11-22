@@ -730,6 +730,7 @@ void SceneManager::State::RefreshOne(Scene& target, uint32 root, Scene& source, 
             identities.emplace(origin->second, local->second);
     }
     std::vector<uint32> copied;
+    std::unordered_map<std::string, Ref<AnimatorController>> refreshedControllers;
     for (auto entity : source.GetEntities()) {
         const auto sourceId = entity.GetId();
         if (skipped.contains(sourceId) || !mapping.contains(sourceId))
@@ -757,7 +758,24 @@ void SceneManager::State::RefreshOne(Scene& target, uint32 root, Scene& source, 
         if (const auto* nested = target.TryGetComponent<SceneReferenceComponent>(localId);
             nested && sourceNested && !reset && (!nested->loaded || !sourceNested->loaded))
             retainedReference = *nested;
-        if (!target.CopyEntityComponents(source, sourceId, localId, !reset && !added))
+        const AnimatorController* refreshedController = nullptr;
+        if (!reset && !added) {
+            const auto* current = target.TryGetComponent<AnimatorComponent>(localId);
+            const auto* incoming = source.TryGetComponent<AnimatorComponent>(sourceId);
+            if (current && current->player && incoming &&
+                current->controllerPath == incoming->controllerPath) {
+                const auto path = target.ResolveAssetPath(current->controllerPath);
+                if (!path.empty() && current->loadedPath == path) {
+                    auto [controller, inserted] = refreshedControllers.try_emplace(path);
+                    if (inserted) {
+                        std::string error;
+                        controller->second = AnimatorController::Load(path, error);
+                    }
+                    refreshedController = controller->second.get();
+                }
+            }
+        }
+        if (!target.CopyEntityComponents(source, sourceId, localId, refreshedController))
             throw std::runtime_error("참조된 씬의 엔티티를 복사할 수 없습니다.");
         if (retainedReference) {
             auto& nested = target.GetComponent<SceneReferenceComponent>(localId);
@@ -1496,7 +1514,7 @@ bool SceneManager::Save(Scene& scene, const fs::path& targetPath, const fs::path
         const auto destination = Canonical(targetPath);
         const auto owner = !previousPath.empty()            ? Canonical(previousPath)
                            : !scene.GetSourcePath().empty() ? Canonical(Path(scene.GetSourcePath()))
-                                                            : destination;
+                                                            : fs::path{};
         ValidateInheritance(scene);
         std::vector<fs::path> dependencies{destination};
         std::uintmax_t bytes = 0;

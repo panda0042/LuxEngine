@@ -113,6 +113,7 @@ public:
 
 private:
     friend class Scene;
+    bool MatchesController(const AnimatorController& controller) const;
     using PropertyReader =
         std::function<std::optional<std::array<double, 4>>(const AnimationSample&)>;
     AnimationFrame Update(double dt, bool emitEvents, const PropertyReader& readProperty,

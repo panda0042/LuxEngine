@@ -829,6 +829,45 @@ void AnimatorLayerBoundaries(const std::filesystem::path& root) {
     }
 }
 
+void TypedDefaultsAndExitTimes(const std::filesystem::path& root) {
+    std::string error;
+    for (const auto wrap : {AnimationWrap::Once, AnimationWrap::Loop, AnimationWrap::PingPong}) {
+        auto clip = Clip(0);
+        clip.wrap = wrap;
+        clip.loop = wrap != AnimationWrap::Once;
+        const auto path = (root / "exit-time.luxanim").string();
+        Check(clip.Save(path, error), error.c_str());
+        auto controller = CreateRef<AnimatorController>();
+        controller->parameters = {{"Lives", AnimationParameterType::Integer, 2.75},
+                                  {"Enabled", AnimationParameterType::Boolean, 7},
+                                  {"Fire", AnimationParameterType::Trigger, -1}};
+        AnimatorLayer layer;
+        layer.entry = "Start";
+        layer.states = {{"Start", path}, {"Done", path}};
+        layer.transitions = {{"Start",
+                              "Done",
+                              0,
+                              .5,
+                              {{"Lives", AnimationComparison::Equal, 2},
+                               {"Enabled", AnimationComparison::Equal, 1}}}};
+        controller->layers = {layer};
+        for (const double speed : {1., -1.}) {
+            controller->layers.front().states.front().speed = speed;
+            AnimatorPlayer player;
+            Check(player.SetController(controller, error), error.c_str());
+            Check(player.GetParameter("Lives") == 2 && player.GetParameter("Enabled") == 1 &&
+                      player.GetParameter("Fire") == 1,
+                  "controller defaults are normalized like explicitly set values");
+            player.Update(.25);
+            player.Update(.25);
+            Check(player.GetState() == "Start", "Exit Time must not fire before the threshold");
+            player.Update(.125);
+            Check(player.GetState() == "Done",
+                  "Exit Time advances in either direction for each wrap mode");
+        }
+    }
+}
+
 void MutedEvents(const std::filesystem::path& root) {
     auto clip = Clip(0);
     clip.events = {{0, "Start", ""}, {.1, "Later", ""}};
@@ -960,6 +999,7 @@ int main() {
         AnimatorLayerBoundaries(root);
         AssetsAndAnimator(root);
         MutedEvents(root);
+        TypedDefaultsAndExitTimes(root);
         SkeletalBlend();
         ExplicitFbxRoot(root);
         World64();

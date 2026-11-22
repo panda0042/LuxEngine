@@ -218,15 +218,15 @@ bool EditorDocument::ReplaceSceneFromData(const std::string& serializedData,
 
 bool EditorDocument::ReplaceSceneFromData(TabId tab, const std::string& serializedData,
                                           std::optional<LuxEngine::uint32> selectedId,
-                                          const std::string& previousSourcePath) {
+                                          const std::optional<std::string>& previousSourcePath) {
     auto* state = Find(tab);
     if (!state)
         return false;
     auto replacement = std::make_shared<LuxEngine::Scene>();
     if (!replacement->DeserializeFromString(serializedData))
         return false;
-    if (!previousSourcePath.empty() && previousSourcePath != state->scene->GetSourcePath() &&
-        !NormalizeAuthoredScenePaths(*replacement, PathFromUtf8(previousSourcePath), error_))
+    if (previousSourcePath && *previousSourcePath != state->scene->GetSourcePath() &&
+        !NormalizeAuthoredScenePaths(*replacement, PathFromUtf8(*previousSourcePath), error_))
         return false;
     replacement->SetSourcePath(state->scene->GetSourcePath());
     state->scene = std::move(replacement);

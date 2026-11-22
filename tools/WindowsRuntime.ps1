@@ -89,6 +89,13 @@ function New-LuxPackageOutput {
     return $package
 }
 
+function Compress-LuxPackageOutput {
+    param([hashtable]$Package)
+
+    [IO.Compression.ZipFile]::CreateFromDirectory(
+        $Package.Staging, $Package.Zip, [IO.Compression.CompressionLevel]::Optimal, $false)
+}
+
 function Remove-LuxPackageDirectory {
     param([string]$Path, [string]$OutputDir)
 
