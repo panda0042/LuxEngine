@@ -15,21 +15,21 @@ Write-Host "=== Testing LuxEditor Standalone Portable Package ==="
 $testStaging = $StagingDir
 $cleanup = $false
 if ([string]::IsNullOrWhiteSpace($testStaging)) {
-    $zipPath = Join-Path $root $PackageZip
-    if (-not (Test-Path $zipPath)) {
+    $zipPath = if ([IO.Path]::IsPathRooted($PackageZip)) { $PackageZip } else { Join-Path $root $PackageZip }
+    if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) {
         throw "Editor package zip not found: $zipPath. Run PackageEditor.ps1 first."
     }
     $koreanPart = [string]::new([char[]]@(0xD55C, 0xAE00, 0xD14C, 0xC2A4, 0xD2B8)) # "한글테스트"
     $testStaging = Join-Path ([System.IO.Path]::GetTempPath()) "LuxEditorTest $koreanPart $(Get-Random)"
     New-Item -ItemType Directory -Path $testStaging -Force | Out-Null
     Write-Host "Extracting $zipPath to $testStaging..."
-    Expand-Archive -Path $zipPath -DestinationPath $testStaging -Force
+    Expand-Archive -LiteralPath $zipPath -DestinationPath $testStaging -Force
     $cleanup = $true
 }
 
 try {
     $editorExe = Join-Path $testStaging "LuxEditor.exe"
-    if (-not (Test-Path $editorExe)) {
+    if (-not (Test-Path -LiteralPath $editorExe -PathType Leaf)) {
         throw "LuxEditor.exe not found in $testStaging"
     }
 
@@ -49,7 +49,7 @@ try {
     )
     foreach ($f in $essentialFiles) {
         $p = Join-Path $testStaging $f
-        if (-not (Test-Path $p)) {
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
             throw "Package missing essential file/dependency: $f"
         }
     }
@@ -114,7 +114,7 @@ try {
     $psi2.Arguments = "--smoke-test"
     $psi2.WorkingDirectory = $testStaging
     $psi2.EnvironmentVariables["PATH"] = $cleanPath
-    if (Test-Path (Join-Path $testStaging "platforms/qoffscreen.dll")) {
+    if (Test-Path -LiteralPath (Join-Path $testStaging "platforms/qoffscreen.dll") -PathType Leaf) {
         $psi2.EnvironmentVariables["QT_QPA_PLATFORM"] = "offscreen"
     }
     $psi2.UseShellExecute = $false
@@ -139,7 +139,7 @@ try {
     Write-Host "`n=== Standalone LuxEditor Verification: ALL PASSED ==="
 }
 finally {
-    if ($cleanup -and (Test-Path $testStaging)) {
-        Remove-Item -Recurse -Force $testStaging -ErrorAction SilentlyContinue
+    if ($cleanup -and (Test-Path -LiteralPath $testStaging)) {
+        Remove-LuxPackageDirectory -Path $testStaging -OutputDir ([IO.Path]::GetFullPath((Split-Path -Parent $testStaging)))
     }
 }

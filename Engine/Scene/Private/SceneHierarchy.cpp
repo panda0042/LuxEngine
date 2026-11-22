@@ -318,11 +318,11 @@ void Scene::RepairReferenceLinks() {
 }
 
 bool Scene::CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 targetId) {
-    return CopyEntityComponents(source, sourceId, targetId, false);
+    return CopyEntityComponents(source, sourceId, targetId, nullptr);
 }
 
 bool Scene::CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 targetId,
-                                 bool preserveAnimatorPlayback) {
+                                 const AnimatorController* refreshedController) {
     if (!source.IsAlive(sourceId) || !IsAlive(targetId))
         return false;
     if (&source == this && sourceId == targetId)
@@ -343,17 +343,18 @@ bool Scene::CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 ta
             auto& destination = GetPool<T>().values;
             destination.reserve(destination.size() + 1);
         });
-        if (preserveAnimatorPlayback) {
+        if (refreshedController) {
             const auto* current = TryGetComponent<AnimatorComponent>(targetId);
             auto* replacement = prepared.TryGetComponent<AnimatorComponent>(targetId);
             if (current && replacement && current->controllerPath == replacement->controllerPath &&
                 current->playing == replacement->playing &&
-                current->rootMotion == replacement->rootMotion &&
+                current->rootMotion == replacement->rootMotion && current->player &&
                 std::ranges::equal(current->parameters, replacement->parameters,
                                    [](const auto& left, const auto& right) {
                                        return left.name == right.name && left.type == right.type &&
                                               left.value == right.value;
-                                   })) {
+                                   }) &&
+                current->player->MatchesController(*refreshedController)) {
                 replacement->player = current->player;
                 replacement->loadedPath = current->loadedPath;
                 replacement->pendingEvents = current->pendingEvents;

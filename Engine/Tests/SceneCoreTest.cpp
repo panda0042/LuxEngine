@@ -139,6 +139,16 @@ void SavePathSafety() {
     Check(fs::equivalent(source.ResolveAssetPath(originalPath),
                          target.ResolveAssetPath(unsavedTexture)),
           "import from an unsaved scene preserves assets relative to the working directory");
+
+    const auto firstSave = targetFolder / "FirstSave.lux";
+    Check(SceneManager::Save(source, firstSave, {}, error),
+          "save an unsaved scene to a new folder");
+    Scene reopened;
+    Check(reopened.Deserialize(firstSave.string()), "reopen the first scene save");
+    const auto& savedTexture = reopened.GetComponent<SpriteRendererComponent>(sourceId).texturePath;
+    Check(fs::equivalent(source.ResolveAssetPath(originalPath),
+                         reopened.ResolveAssetPath(savedTexture)),
+          "SceneManager first save preserves the working-directory texture");
 }
 
 void MeshAssetMetadata() {

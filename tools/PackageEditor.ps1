@@ -17,6 +17,7 @@ if ($Configuration -ne "Release" -and $Configuration -ne "Debug") {
 }
 
 $suffix = if ($Configuration -eq "Release") { "" } else { "-Debug" }
+$qtPostfix = if ($Configuration -eq "Debug") { "d" } else { "" }
 $outDirResolved = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $root $OutputDir }
 $package = New-LuxPackageOutput -OutputDir $outDirResolved -Name "LuxEditor-Portable-$Version$suffix-x64"
 $editorStaging = $package.Staging
@@ -28,12 +29,12 @@ try {
     $buildDirResolved = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $root $BuildDir }
     $binSource = Join-Path $buildDirResolved "bin/$Configuration"
     $editorExe = Join-Path $binSource "LuxEditor.exe"
-    if (-not (Test-Path $editorExe)) {
+    if (-not (Test-Path -LiteralPath $editorExe -PathType Leaf)) {
         throw "Packaging failure: $Configuration executable LuxEditor.exe not found in $binSource. Build $Configuration first. Silent fallback to other configurations is forbidden for public release packaging."
     }
 
     if ($Configuration -eq "Release") {
-        $debugDlls = Get-ChildItem -Path $binSource -Filter "*d.dll" -ErrorAction SilentlyContinue | Where-Object {
+        $debugDlls = Get-ChildItem -LiteralPath $binSource -Filter "*d.dll" -ErrorAction SilentlyContinue | Where-Object {
             $_.Name -match "^(vcruntime.*d|msvcp.*d|ucrtbase.*d|ucrtbased|Qt6.*d|SDL3d)\.dll$"
         }
         if ($debugDlls) {
@@ -42,9 +43,9 @@ try {
     }
 
     # Copy executables
-    Copy-Item -Path $editorExe -Destination $editorStaging -Force
-    if (Test-Path (Join-Path $binSource "LuxPlayer.exe")) {
-        Copy-Item -Path (Join-Path $binSource "LuxPlayer.exe") -Destination $editorStaging -Force
+    Copy-Item -LiteralPath $editorExe -Destination $editorStaging -Force
+    if (Test-Path -LiteralPath (Join-Path $binSource "LuxPlayer.exe") -PathType Leaf) {
+        Copy-Item -LiteralPath (Join-Path $binSource "LuxPlayer.exe") -Destination $editorStaging -Force
     }
 
     # Copy the Forge renderer, native shaders, GPU configuration and C# host.
@@ -63,17 +64,18 @@ try {
     # Copy Qt platform plugin
     $platformsDir = Join-Path $editorStaging "platforms"
     New-Item -ItemType Directory -Path $platformsDir -Force | Out-Null
-    if (Test-Path (Join-Path $binSource "platforms")) {
-        Get-ChildItem -Path (Join-Path $binSource "platforms") -Filter "*.dll" | ForEach-Object {
-            Copy-Item -Path $_.FullName -Destination $platformsDir -Force
+    if (Test-Path -LiteralPath (Join-Path $binSource "platforms") -PathType Container) {
+        Get-ChildItem -LiteralPath (Join-Path $binSource "platforms") -Filter "*.dll" -File | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $platformsDir -Force
         }
     }
-    if (-not (Test-Path (Join-Path $platformsDir "qoffscreen.dll"))) {
+    $offscreenPlugin = "qoffscreen$qtPostfix.dll"
+    if (-not (Test-Path -LiteralPath (Join-Path $platformsDir $offscreenPlugin) -PathType Leaf)) {
         foreach ($rootCand in $qtRoots) {
-            if (Test-Path $rootCand) {
-                $candOffscreen = Get-ChildItem -Path $rootCand -Filter "qoffscreen.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (Test-Path -LiteralPath $rootCand -PathType Container) {
+                $candOffscreen = Get-ChildItem -LiteralPath $rootCand -Filter $offscreenPlugin -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
                 if ($candOffscreen) {
-                    Copy-Item -Path $candOffscreen.FullName -Destination $platformsDir -Force
+                    Copy-Item -LiteralPath $candOffscreen.FullName -Destination $platformsDir -Force
                     break
                 }
             }
@@ -83,7 +85,9 @@ try {
     # Copy licenses
     $licensesDir = Join-Path $editorStaging "licenses"
     New-Item -ItemType Directory -Path $licensesDir -Force | Out-Null
-    Copy-Item -Path "$root/docs/licenses/*" -Destination $licensesDir -Recurse -Force
+    Get-ChildItem -LiteralPath (Join-Path $root 'docs/licenses') | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $licensesDir -Recurse -Force
+    }
 
     # Write Standalone Distribution README
     $editorReadme = @"
@@ -114,15 +118,17 @@ See the `licenses/` directory for full license texts and dependency details.
 - The Forge (Apache-2.0)
 - .NET 10 runtime is required to execute C# game scripts
 "@
-    $editorReadme | Out-File -FilePath (Join-Path $editorStaging "README.md") -Encoding utf8
+    $editorReadme | Out-File -LiteralPath (Join-Path $editorStaging "README.md") -Encoding utf8
 
     # Check for windeployqt to deploy all required Qt runtime dependencies
     $windeployqt = $null
+    $deployQtRoot = $null
     foreach ($rootCand in $qtRoots) {
-        if (Test-Path $rootCand) {
-            $candWindeployqt = Get-ChildItem -Path $rootCand -Filter "windeployqt.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (Test-Path -LiteralPath $rootCand -PathType Container) {
+            $candWindeployqt = Get-ChildItem -LiteralPath $rootCand -Filter "windeployqt.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($candWindeployqt) {
                 $windeployqt = $candWindeployqt.FullName
+                $deployQtRoot = $rootCand
                 break
             }
         }
@@ -131,7 +137,17 @@ See the `licenses/` directory for full license texts and dependency details.
         $cmd = Get-Command windeployqt -ErrorAction SilentlyContinue
         if ($cmd) { $windeployqt = $cmd.Source }
     }
-    if ($windeployqt -and (Test-Path $windeployqt)) {
+    $qtRuntimeFiles = @("Qt6Core$qtPostfix.dll", "Qt6Gui$qtPostfix.dll", "Qt6Widgets$qtPostfix.dll",
+                        "platforms/qwindows$qtPostfix.dll")
+    $readyDebugQt = $Configuration -eq 'Debug' -and $deployQtRoot -and
+        (Test-Path -LiteralPath (Join-Path $deployQtRoot 'debug/bin/Qt6Widgetsd.dll') -PathType Leaf) -and
+        -not (Test-Path -LiteralPath (Join-Path $deployQtRoot 'bin/Qt6Widgetsd.dll') -PathType Leaf) -and
+        @($qtRuntimeFiles | Where-Object {
+            -not (Test-Path -LiteralPath (Join-Path $editorStaging $_) -PathType Leaf)
+        }).Count -eq 0
+    if ($readyDebugQt) {
+        Write-Host "Using the Debug Qt runtime copied from the build output."
+    } elseif ($windeployqt -and (Test-Path -LiteralPath $windeployqt -PathType Leaf)) {
         Write-Host "Running windeployqt ($windeployqt) to ensure all required Qt dependencies are bundled..."
         $deployConfiguration = if ($Configuration -eq "Debug") { "--debug" } else { "--release" }
         & $windeployqt $deployConfiguration --no-translations --no-system-d3d-compiler --no-opengl-sw (Join-Path $editorStaging "LuxEditor.exe")
@@ -139,23 +155,18 @@ See the `licenses/` directory for full license texts and dependency details.
     }
 
     # Verify essential files strictly (throw immediately on missing file)
-    $qtPostfix = if ($Configuration -eq "Debug") { "d" } else { "" }
     $requiredEditorFiles = @(
         "LuxEditor.exe",
         "SDL3.dll",
-        "Qt6Core$qtPostfix.dll",
-        "Qt6Gui$qtPostfix.dll",
-        "Qt6Widgets$qtPostfix.dll",
-        "platforms/qwindows$qtPostfix.dll",
         "licenses/LICENSE-LuxEngine.txt",
         "licenses/LICENSE-Qt6.txt",
         "licenses/LICENSE-LGPLv3.txt",
         "licenses/DEPENDENCIES.md"
-    )
+    ) + $qtRuntimeFiles
 
     foreach ($f in $requiredEditorFiles) {
         $targetPath = Join-Path $editorStaging $f
-        if (-not (Test-Path $targetPath)) {
+        if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
             throw "Packaging integrity failure: required Editor file missing: $f"
         }
     }
@@ -164,7 +175,7 @@ See the `licenses/` directory for full license texts and dependency details.
 
     # Verify no debug runtime DLLs are accidentally packaged in Release build
     if ($binSource -like "*Release*") {
-        $debugDlls = Get-ChildItem -Path $editorStaging -Filter "*d.dll" -Recurse | Where-Object {
+        $debugDlls = Get-ChildItem -LiteralPath $editorStaging -Filter "*d.dll" -Recurse | Where-Object {
             $_.Name -match "^(ucrtbase|vcruntime140|msvcp140|Qt6Core|Qt6Gui|Qt6Widgets|SDL3)d\.dll$"
         }
         if ($debugDlls -and $debugDlls.Count -gt 0) {
@@ -174,12 +185,12 @@ See the `licenses/` directory for full license texts and dependency details.
 
     # Create ZIP archive
     Write-Host "Creating Editor archive: $editorZip"
-    Compress-Archive -Path "$editorStaging/*" -DestinationPath $editorZip -CompressionLevel Optimal
+    Compress-LuxPackageOutput -Package $package
     Publish-LuxPackageOutput -Package $package
     $editorZip = $package.PublishedZip
 
-    $zipSize = (Get-Item $editorZip).Length
-    $zipHash = (Get-FileHash -Path $editorZip -Algorithm SHA256).Hash
+    $zipSize = (Get-Item -LiteralPath $editorZip).Length
+    $zipHash = (Get-FileHash -LiteralPath $editorZip -Algorithm SHA256).Hash
     Write-Host "=== Editor Packaging Complete ==="
     Write-Host "Package: $editorZip"
     Write-Host "Size   : $([math]::Round($zipSize / 1MB, 2)) MB ($zipSize bytes)"

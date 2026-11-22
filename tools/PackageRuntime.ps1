@@ -119,8 +119,7 @@ See the `licenses/` directory for full license texts and dependency details.
 
     # Create ZIP archive
     Write-Host "Creating Runtime archive: $playerZip"
-    [IO.Compression.ZipFile]::CreateFromDirectory(
-        $playerStaging, $playerZip, [IO.Compression.CompressionLevel]::Optimal, $false)
+    Compress-LuxPackageOutput -Package $package
     Publish-LuxPackageOutput -Package $package
     $playerZip = $package.PublishedZip
 

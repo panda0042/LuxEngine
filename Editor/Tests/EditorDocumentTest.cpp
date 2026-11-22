@@ -1264,6 +1264,7 @@ void TestMissingPackagedTexture() {
     Check(image.save(LuxUI::String::fromStdU16String(texture.u16string()), "PNG"),
           "texture file saves");
     Scene scene;
+    scene.SetSourcePath(PathUtf8(project->GetSceneFile()));
     scene.CreateEntity("Badge").AddComponent<SpriteRendererComponent>().texturePath =
         "../Assets/Badge.png";
     Check(SceneManager::Save(scene, project->GetSceneFile(), {}, error),
@@ -1301,6 +1302,7 @@ void TestGeneratedContentFormats(const std::filesystem::path& cmake) {
     Check(bool(project), "content fixture project creates");
     fs::create_directory(root / "Art");
     Scene scene;
+    scene.SetSourcePath(PathUtf8(project->GetSceneFile()));
     LuxUI::Image image(4, 4, LuxUI::Image::Format_RGBA8888);
     image.fill(LuxUI::Color(40, 80, 120));
     for (const auto* name : {"Normal.png", "Badge.image"}) {

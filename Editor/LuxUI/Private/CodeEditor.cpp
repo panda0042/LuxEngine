@@ -263,7 +263,7 @@ bool CodeEditor::FindText(const String& text, bool backwards, bool matchCase) {
 }
 
 int CodeEditor::ReplaceAll(const String& text, const String& replacement, bool matchCase) {
-    if (text.isEmpty())
+    if (isReadOnly() || text.isEmpty())
         return 0;
     auto edit = textCursor();
     edit.beginEditBlock();

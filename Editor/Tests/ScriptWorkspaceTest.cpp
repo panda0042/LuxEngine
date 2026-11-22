@@ -67,6 +67,11 @@ int main(int argc, char** argv) {
         Check(saved.starts_with("\xef\xbb\xbf") && saved.find("\r\n") != std::string::npos &&
                   saved.find("elapsed") != std::string::npos && !editor->IsModified(),
               "UTF-8 BOM, CRLF or clean state was lost");
+        editor->setReadOnly(true);
+        Check(editor->ReplaceAll(LUX_UI_TEXT("elapsed"), LUX_UI_TEXT("time")) == 0 &&
+                  !editor->IsModified() && workspace.SaveFile(0, error) && Read(source) == saved,
+              "Replace All respects the read-only editor and leaves the file unchanged");
+        editor->setReadOnly(false);
         editor->insertPlainText(LUX_UI_TEXT("// local edit\n"));
         Write(source, "public class External {}\n");
         Check(!workspace.SaveFile(0, error) && Read(source) == "public class External {}\n",

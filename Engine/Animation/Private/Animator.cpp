@@ -20,6 +20,19 @@ Binding Key(const AnimationSample& sample) {
     return {sample.target, sample.property, sample.field};
 }
 
+double ParameterValue(AnimationParameterType type, double value) {
+    switch (type) {
+    case AnimationParameterType::Boolean:
+    case AnimationParameterType::Trigger:
+        return value != 0 ? 1 : 0;
+    case AnimationParameterType::Integer:
+        return std::trunc(value);
+    case AnimationParameterType::Float:
+        return value;
+    }
+    return value;
+}
+
 bool MaskIncludes(const std::vector<std::string>& mask, std::string_view target) {
     return mask.empty() || std::any_of(mask.begin(), mask.end(), [&](const auto& path) {
                return target == path || target.starts_with(path + "/") ||
@@ -268,7 +281,7 @@ bool AnimatorPlayer::SetController(Ref<AnimatorController> controller, std::stri
     next->controller = std::move(controller);
     try {
         for (const auto& parameter : next->controller->parameters)
-            next->parameters[parameter.name] = parameter.value;
+            next->parameters[parameter.name] = ParameterValue(parameter.type, parameter.value);
         for (const auto& layer : next->controller->layers) {
             Impl::LayerState runtime;
             runtime.current = static_cast<size_t>(
@@ -294,6 +307,14 @@ bool AnimatorPlayer::SetController(Ref<AnimatorController> controller, std::stri
     }
 }
 
+bool AnimatorPlayer::MatchesController(const AnimatorController& controller) const {
+    const auto& loaded = impl_->controller;
+    std::string current, next, error;
+    return loaded && loaded->sourcePath == controller.sourcePath &&
+           loaded->SerializeForFile(controller.sourcePath, current, error) &&
+           controller.SerializeForFile(controller.sourcePath, next, error) && current == next;
+}
+
 bool AnimatorPlayer::SetParameter(const std::string& name, double value) {
     if (!impl_->controller || !std::isfinite(value))
         return false;
@@ -302,12 +323,7 @@ bool AnimatorPlayer::SetParameter(const std::string& name, double value) {
                      [&](const auto& p) { return p.name == name; });
     if (parameter == impl_->controller->parameters.end())
         return false;
-    if (parameter->type == AnimationParameterType::Boolean ||
-        parameter->type == AnimationParameterType::Trigger)
-        value = value != 0 ? 1 : 0;
-    if (parameter->type == AnimationParameterType::Integer)
-        value = std::trunc(value);
-    impl_->parameters[name] = value;
+    impl_->parameters[name] = ParameterValue(parameter->type, value);
     return true;
 }
 
@@ -421,12 +437,17 @@ AnimationFrame AnimatorPlayer::Update(double dt, bool emitEvents,
         if (impl_->playing && dt > 0) {
             const auto& state = layer.states[runtime.current];
             const auto clip = impl_->Primary(state);
+            const bool reverse = state.speed * impl_->speed < 0;
+            const double start =
+                reverse && clip->GetWrap() == AnimationWrap::Once ? clip->duration : 0;
+            const double progress =
+                (reverse ? start - runtime.playback.cursor : runtime.playback.cursor) /
+                clip->duration;
             for (const auto& transition : layer.transitions) {
                 if ((!transition.from.empty() && transition.from != state.name) ||
                     transition.to == state.name || !impl_->Matches(transition))
                     continue;
-                if (transition.exitTime >= 0 &&
-                    runtime.playback.cursor / clip->duration < transition.exitTime)
+                if (transition.exitTime >= 0 && progress < transition.exitTime)
                     continue;
                 Play(transition.to, transition.duration, layerIndex);
                 for (const auto& condition : transition.conditions)

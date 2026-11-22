@@ -1560,17 +1560,7 @@ void EditorWindow::SetTool(EditorTool tool) {
 }
 
 EditorSnapshot EditorWindow::SnapshotScene() {
-    std::string serialized;
-    if (!document_.GetScene().SerializeToString(serialized))
-        return {};
-    EditorSnapshot snapshot;
-    snapshot.scene = LuxUI::ByteArray(serialized.data(), static_cast<qsizetype>(serialized.size()));
-    snapshot.selection = document_.GetSelection();
-    for (LuxEngine::Entity entity : document_.GetScene().GetEntities())
-        if (entity.HasComponent<LuxEngine::AnimationComponent>())
-            snapshot.animationTimes.emplace_back(
-                entity.GetId(), entity.GetComponent<LuxEngine::AnimationComponent>().currentTime);
-    return snapshot;
+    return SnapshotScene(document_.GetActiveTabId());
 }
 
 void EditorWindow::RestoreScene(const EditorSnapshot& snapshot,
