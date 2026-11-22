@@ -87,6 +87,7 @@ struct ModelAnimationComponent {
     Ref<ModelPose> mixedPose;
     uint64 poseRevision = 0;
     uint32 poseOwner = 0;
+    bool playbackStarted = false;
 };
 
 struct ScriptComponent {

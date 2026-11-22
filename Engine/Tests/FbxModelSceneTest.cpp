@@ -22,6 +22,52 @@ bool Near(double left, double right) {
     return std::abs(left - right) < .001;
 }
 
+void PreserveFinishedPose(const fs::path& fixture, const fs::path& directory) {
+    std::string error;
+    const auto model = ModelAsset::LoadFbx(fixture.string(), error);
+    Check(model && !model->animations.empty(), error.c_str());
+    Scene scene;
+    auto owner = scene.CreateEntity("Animation owner");
+    const auto ownerId = owner.GetId();
+    auto mesh = scene.CreateEntity("Animated mesh");
+    const auto meshId = mesh.GetId();
+    Check(scene.SetParent(meshId, ownerId, false), "animated mesh attaches to its owner");
+    auto& renderer = mesh.AddComponent<MeshRendererComponent>();
+    renderer.meshPath = fixture.string();
+    renderer.modelSubmesh = 0;
+    mesh.AddComponent<ModelAnimationComponent>().modelPath = renderer.meshPath;
+    auto& animation = owner.AddComponent<AnimationComponent>();
+    animation.clip.duration = model->animations.front().duration;
+    animation.clip.loop = false;
+    animation.clip.modelPath = renderer.meshPath;
+    animation.clip.modelClip = 0;
+    scene.OnUpdate(animation.clip.duration);
+    const auto& finished = mesh.GetComponent<ModelAnimationComponent>();
+    const auto pose = finished.mixedPose;
+    const auto revision = finished.poseRevision;
+    Check(!animation.playing && pose && finished.poseOwner == ownerId && revision != 0,
+          "one-shot animation stops with a mixed FBX pose");
+
+    Scene unrelated;
+    unrelated.CreateEntity("Unrelated entity");
+    const auto path = directory / "unrelated.lux";
+    Check(SceneManager::Save(unrelated, path, {}, error), error.c_str());
+    SceneManager manager;
+    const auto root = manager.AddSceneInstance(scene, path, SceneReferenceMode::Nested, error);
+    Check(root != 0, error.c_str());
+    const auto checkPose = [&] {
+        scene.OnUpdate(scene.GetSettings().fixedStep);
+        const auto& preserved = scene.GetComponent<ModelAnimationComponent>(meshId);
+        Check(!scene.GetComponent<AnimationComponent>(ownerId).playing &&
+                  preserved.mixedPose == pose && preserved.poseOwner == ownerId &&
+                  preserved.poseRevision == revision,
+              "composing an unrelated scene must preserve a finished FBX pose");
+    };
+    checkPose();
+    Check(manager.RefreshInstance(scene, root, error), error.c_str());
+    checkPose();
+}
+
 void Run(const fs::path& fixture, const fs::path& directory) {
     std::string error;
     auto model = ModelAsset::LoadFbx(fixture.string(), error);
@@ -109,6 +155,7 @@ int main(int argc, char** argv) {
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     try {
         Run(std::filesystem::absolute(argv[1]), directory);
+        PreserveFinishedPose(std::filesystem::absolute(argv[1]), directory);
         std::filesystem::remove_all(directory);
         std::cout << "FBX scene animation/serialization/relocation checks passed\n";
         return 0;

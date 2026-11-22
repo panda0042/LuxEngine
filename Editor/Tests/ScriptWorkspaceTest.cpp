@@ -68,9 +68,12 @@ int main(int argc, char** argv) {
                   saved.find("elapsed") != std::string::npos && !editor->IsModified(),
               "UTF-8 BOM, CRLF or clean state was lost");
         editor->setReadOnly(true);
+        LuxUI::KeyEvent enter(LuxUI::Event::KeyPress, LuxUI::Flags::Key_Return,
+                              LuxUI::Flags::NoModifier);
+        LuxUI::Application::sendEvent(editor, &enter);
         Check(editor->ReplaceAll(LUX_UI_TEXT("elapsed"), LUX_UI_TEXT("time")) == 0 &&
                   !editor->IsModified() && workspace.SaveFile(0, error) && Read(source) == saved,
-              "Replace All respects the read-only editor and leaves the file unchanged");
+              "Enter and Replace All respect the read-only editor and leave the file unchanged");
         editor->setReadOnly(false);
         editor->insertPlainText(LUX_UI_TEXT("// local edit\n"));
         Write(source, "public class External {}\n");

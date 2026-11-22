@@ -352,6 +352,10 @@ void CodeEditor::keyPressEvent(KeyEvent* event) {
         Q_EMIT FindRequested();
         return;
     }
+    if (isReadOnly()) {
+        PlainTextEdit::keyPressEvent(event);
+        return;
+    }
     auto cursor = textCursor();
     if (event->key() == Qt::Key_Tab && !cursor.hasSelection()) {
         cursor.insertText(QString(4 - cursor.positionInBlock() % 4, u' '));

@@ -36,6 +36,35 @@ bool Blue(const LuxUI::Image& image, int x, int y) {
     return color.blue() > 20 && color.blue() > color.green() * 3 && color.blue() > color.red() * 3;
 }
 
+void SetUpOverlappingTilesAndSprite(Scene& scene) {
+    scene.CreateEntity("Camera").AddComponent<CameraComponent>().orthoSize = 2;
+    auto sprite = scene.CreateEntity("Red sprite");
+    sprite.GetComponent<TransformComponent>().position.z = -1;
+    sprite.AddComponent<SpriteRendererComponent>().color = {1, 0, 0, 1};
+    auto tilemap = scene.CreateEntity("Tilemap");
+    tilemap.GetComponent<TransformComponent>().position = {-.5, -.5, 1};
+    auto& map = tilemap.AddComponent<TilemapComponent>();
+    map.width = 1;
+    map.height = 1;
+    map.tileSize = 1;
+    map.tiles = {1};
+}
+
+void CheckSpriteAboveTilemap(const LuxUI::Image& image) {
+    Check(!image.isNull() && Red(image, image.width() / 2, image.height() / 2),
+          "Game View must draw sprites in front of tilemaps even at a lower Z");
+}
+
+void SoftwareTilemapLayering() {
+    qputenv("LUX_EDITOR_SOFTWARE_VIEWPORT", "1");
+    Scene scene;
+    SetUpOverlappingTilesAndSprite(scene);
+    GameViewport view;
+    view.resize(320, 160);
+    view.SetScene(&scene);
+    CheckSpriteAboveTilemap(view.grab().toImage());
+}
+
 size_t RedPixels(const LuxUI::Image& image) {
     size_t count = 0;
     for (int y = 0; y < image.height(); ++y)
@@ -249,15 +278,22 @@ int main(int argc, char** argv) {
     LuxUI::Application app(argc, argv);
     LuxUI::CoreApplication::setOrganizationName(LUX_UI_TEXT("LuxGameViewGpuTests"));
     LuxUI::CoreApplication::setApplicationName(LUX_UI_TEXT("GameView"));
-    qunsetenv("LUX_EDITOR_SOFTWARE_VIEWPORT");
-    EngineSceneRenderer::SetForceAllowed(true);
-    EngineSceneRenderer::SetDefaultValidation(static_cast<int>(GpuValidation::Synchronization));
-    EngineSceneRenderer renderer;
-    if (!renderer.EnsureReady()) {
-        std::cerr << "GPU unavailable: " << renderer.LastError().toStdString() << '\n';
-        return 77;
-    }
     try {
+        if (app.arguments().contains(LUX_UI_TEXT("--software"))) {
+            SoftwareTilemapLayering();
+            return 0;
+        }
+        qunsetenv("LUX_EDITOR_SOFTWARE_VIEWPORT");
+        EngineSceneRenderer::SetForceAllowed(true);
+        EngineSceneRenderer::SetDefaultValidation(static_cast<int>(GpuValidation::Synchronization));
+        EngineSceneRenderer renderer;
+        if (!renderer.EnsureReady()) {
+            std::cerr << "GPU unavailable: " << renderer.LastError().toStdString() << '\n';
+            return 77;
+        }
+        Scene layeredScene;
+        SetUpOverlappingTilesAndSprite(layeredScene);
+        CheckSpriteAboveTilemap(Render(renderer, layeredScene));
         Primary2D(renderer);
         Primary3D(renderer);
         LargeSceneView(renderer);

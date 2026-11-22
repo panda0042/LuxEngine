@@ -900,6 +900,70 @@ void MutedEvents(const std::filesystem::path& root) {
             }
 }
 
+void MutedFastLoop() {
+    Scene scene;
+    auto& animation = scene.CreateEntity("Fast animation").AddComponent<AnimationComponent>();
+    animation.clip.duration = .001;
+    animation.clip.framesPerSecond = 1000;
+    animation.clip.events = {{.0005, "Marker", ""}};
+    animation.speed = 100;
+    scene.UpdateAnimations(.05, false);
+    Check(Near(animation.currentTime, 5) && animation.pendingEvents.empty(),
+          "disabled events do not traverse loop repetitions");
+}
+
+void FadeToLowerLayer(const std::filesystem::path& root) {
+    std::string error;
+    const auto lower = (root / "fade-lower.luxanim").string();
+    const auto upper = (root / "fade-upper.luxanim").string();
+    const auto unkeyed = (root / "fade-unkeyed.luxanim").string();
+    Check(Clip(0).Save(lower, error) && Clip(10).Save(upper, error) &&
+              AnimationClip{}.Save(unkeyed, error),
+          error.c_str());
+    AnimatorLayer base;
+    base.entry = "Ground";
+    base.states = {{"Ground", lower}};
+    AnimatorLayer overlay;
+    overlay.entry = "Raised";
+    overlay.states = {{"Raised", upper}, {"Unkeyed", unkeyed}};
+    auto controller = CreateRef<AnimatorController>();
+    controller->layers = {base, overlay};
+    AnimatorPlayer player;
+    Check(player.SetController(controller, error), error.c_str());
+    const auto position = [&](double dt) {
+        const auto frame = player.Update(dt);
+        Check(frame.samples.size() == 1, "both layers resolve to one position");
+        return frame.samples.front().value[0];
+    };
+    Check(Near(position(0), 10) && player.Play("Unkeyed", 1, 1), "start the upper layer fade");
+    Check(Near(position(.5), 5) && Near(position(.5), 0) && Near(position(.01), 0),
+          "an outgoing track fades to the lower layer and ends without a jump");
+}
+
+void FbxReverseOnce() {
+    std::string error;
+    const auto model = ModelAsset::LoadFbx(LUX_FBX_ANIMATED_FIXTURE, error);
+    Check(model && !model->animations.empty(), "animated fixture has a clip");
+    const auto duration = model->animations.front().duration;
+    Scene scene;
+    auto& modelPlayback =
+        scene.CreateEntity("Reversed FBX").AddComponent<ModelAnimationComponent>();
+    modelPlayback.modelPath = LUX_FBX_ANIMATED_FIXTURE;
+    modelPlayback.clip = 0;
+    modelPlayback.speed = -1;
+    modelPlayback.playing = true;
+    modelPlayback.loop = false;
+    scene.OnUpdate(duration / 4);
+    Check(modelPlayback.playing && Near(modelPlayback.time, duration * .75),
+          "reverse one-shot FBX starts at the end");
+    scene.OnUpdate(duration * .75);
+    Check(!modelPlayback.playing && Near(modelPlayback.time, 0),
+          "reverse one-shot FBX stops at zero");
+    scene.OnUpdate(duration / 4);
+    Check(!modelPlayback.playing && Near(modelPlayback.time, 0),
+          "the finished reverse clip does not restart during an update");
+}
+
 void ExplicitFbxRoot(const std::filesystem::path& root) {
     std::ifstream source(LUX_FBX_ANIMATED_FIXTURE, std::ios::binary);
     std::string model(std::istreambuf_iterator<char>(source), {});
@@ -999,8 +1063,11 @@ int main() {
         AnimatorLayerBoundaries(root);
         AssetsAndAnimator(root);
         MutedEvents(root);
+        MutedFastLoop();
         TypedDefaultsAndExitTimes(root);
+        FadeToLowerLayer(root);
         SkeletalBlend();
+        FbxReverseOnce();
         ExplicitFbxRoot(root);
         World64();
         std::filesystem::remove_all(root);

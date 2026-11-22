@@ -458,7 +458,8 @@ void Scene::UpdateAnimations(double dt, bool emitEvents, RootMotionDeltas* physi
             wrap == AnimationWrap::Once && std::isfinite(dt) && dt >= 0 &&
             std::isfinite(clip.duration) && clip.duration > 0)
             playback.cursor = clip.duration;
-        auto events = playback.Advance(dt, clip.duration, wrap, clip.events);
+        auto events = emitEvents ? playback.Advance(dt, clip.duration, wrap, clip.events)
+                                 : playback.Advance(dt, clip.duration, wrap, {});
         const bool advanced = playback.cursor != playback.previousCursor;
         if (emitEvents && advanced && !animation->playbackStarted) {
             const auto start = AnimationTime(playback.previousCursor, clip.duration, wrap);

@@ -421,6 +421,13 @@ std::unique_ptr<Scene> SceneManager::CloneForComposition(Scene& source) {
             copy.loadedPath = animator->loadedPath;
             copy.pendingEvents = animator->pendingEvents;
         }
+        if (const auto* model = entity.TryGetComponent<ModelAnimationComponent>()) {
+            auto& copy = result->GetComponent<ModelAnimationComponent>(id);
+            copy.mixedPose = model->mixedPose;
+            copy.poseRevision = model->poseRevision;
+            copy.poseOwner = model->poseOwner;
+            copy.playbackStarted = model->playbackStarted;
+        }
         if (const auto* body = entity.TryGetComponent<Rigidbody2DComponent>())
             result->GetComponent<Rigidbody2DComponent>(id).isGrounded = body->isGrounded;
     }
@@ -731,15 +738,47 @@ void SceneManager::State::RefreshOne(Scene& target, uint32 root, Scene& source, 
     }
     std::vector<uint32> copied;
     std::unordered_map<std::string, Ref<AnimatorController>> refreshedControllers;
+    std::unordered_map<std::string, Ref<AnimationClip>> refreshedClips;
     for (auto entity : source.GetEntities()) {
         const auto sourceId = entity.GetId();
         if (skipped.contains(sourceId) || !mapping.contains(sourceId))
             continue;
         const bool added = !oldMap.contains(sourceId);
-        if (!reset && !added && !untouched[sourceId])
-            continue;
         const auto localId = mapping.at(sourceId);
-        if (!reset && !added) {
+        const bool preservePlayback = !reset && !added;
+        if (preservePlayback) {
+            if (auto* animation = target.TryGetComponent<AnimationComponent>(localId);
+                animation && animation->asset && !animation->assetPath.empty()) {
+                const auto path = target.ResolveAssetPath(animation->assetPath);
+                auto [fresh, inserted] = refreshedClips.try_emplace(Utf8(Path(path)));
+                if (inserted) {
+                    std::string error;
+                    fresh->second = AnimationClip::Load(path, error);
+                }
+                if (path != animation->loadedPath || !fresh->second ||
+                    !animation->asset->Matches(*fresh->second)) {
+                    animation->asset.reset();
+                    animation->loadedPath.clear();
+                    animation->pendingEvents.clear();
+                }
+            }
+            if (auto* animator = target.TryGetComponent<AnimatorComponent>(localId);
+                animator && animator->player) {
+                const auto path = target.ResolveAssetPath(animator->controllerPath);
+                auto [controller, inserted] = refreshedControllers.try_emplace(path);
+                if (inserted) {
+                    std::string error;
+                    controller->second = AnimatorController::Load(path, error);
+                }
+                if (path != animator->loadedPath || !controller->second ||
+                    !animator->player->MatchesController(*controller->second, refreshedClips)) {
+                    animator->player.reset();
+                    animator->loadedPath.clear();
+                    animator->pendingEvents.clear();
+                }
+            }
+            if (!untouched[sourceId])
+                continue;
             const auto* oldScript = previous.TryGetComponent<ScriptComponent>(sourceId);
             const auto* localScript = target.TryGetComponent<ScriptComponent>(localId);
             if (oldScript && localScript)
@@ -758,24 +797,7 @@ void SceneManager::State::RefreshOne(Scene& target, uint32 root, Scene& source, 
         if (const auto* nested = target.TryGetComponent<SceneReferenceComponent>(localId);
             nested && sourceNested && !reset && (!nested->loaded || !sourceNested->loaded))
             retainedReference = *nested;
-        const AnimatorController* refreshedController = nullptr;
-        if (!reset && !added) {
-            const auto* current = target.TryGetComponent<AnimatorComponent>(localId);
-            const auto* incoming = source.TryGetComponent<AnimatorComponent>(sourceId);
-            if (current && current->player && incoming &&
-                current->controllerPath == incoming->controllerPath) {
-                const auto path = target.ResolveAssetPath(current->controllerPath);
-                if (!path.empty() && current->loadedPath == path) {
-                    auto [controller, inserted] = refreshedControllers.try_emplace(path);
-                    if (inserted) {
-                        std::string error;
-                        controller->second = AnimatorController::Load(path, error);
-                    }
-                    refreshedController = controller->second.get();
-                }
-            }
-        }
-        if (!target.CopyEntityComponents(source, sourceId, localId, refreshedController))
+        if (!target.CopyEntityComponents(source, sourceId, localId, preservePlayback))
             throw std::runtime_error("참조된 씬의 엔티티를 복사할 수 없습니다.");
         if (retainedReference) {
             auto& nested = target.GetComponent<SceneReferenceComponent>(localId);

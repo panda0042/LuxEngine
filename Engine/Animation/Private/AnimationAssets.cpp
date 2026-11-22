@@ -272,16 +272,26 @@ bool AnimationClip::Save(const std::string& path, std::string& error) const {
     return SerializeForFile(path, data, error) && Write(path, data, error);
 }
 
+bool AnimationClip::Matches(const AnimationClip& clip) const {
+    std::string current, incoming, error;
+    return SerializeToString(current, error) && clip.SerializeToString(incoming, error) &&
+           current == incoming;
+}
+
 Ref<AnimationClip> AnimationClip::Load(const std::string& path, std::string& error) {
     try {
         auto result = DeserializeFromString(Read(path).dump(), error);
         if (result) {
             const auto base =
                 std::filesystem::absolute(std::filesystem::u8path(path)).parent_path();
-            for (auto* reference : {&result->modelPath, &result->spriteSheet})
-                if (!reference->empty() && std::filesystem::u8path(*reference).is_relative())
-                    *reference =
-                        Utf8((base / std::filesystem::u8path(*reference)).lexically_normal());
+            for (auto* reference : {&result->modelPath, &result->spriteSheet}) {
+                if (!reference->empty()) {
+                    auto asset = std::filesystem::u8path(*reference);
+                    if (asset.is_relative())
+                        asset = base / asset;
+                    *reference = Utf8(asset.lexically_normal());
+                }
+            }
         }
         return result;
     } catch (const std::exception& ex) {

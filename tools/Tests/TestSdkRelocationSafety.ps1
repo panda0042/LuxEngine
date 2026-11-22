@@ -4,7 +4,7 @@ param([string]$BuildDir = "build/local")
 $ErrorActionPreference = "Stop"
 $repository = (Get-Item $PSScriptRoot).Parent.Parent.FullName
 $powerShell = (Get-Process -Id $PID).Path
-$testDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "LuxUserDataSafety-$([guid]::NewGuid())"
+$testDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "LuxUserDataSafety [QA] $([guid]::NewGuid())"
 
 function Invoke-ExpectedRelocationFailure {
     $ErrorActionPreference = "Continue"

@@ -197,6 +197,8 @@ void EditorWindow::BuildModelAnimationWorkspace(LuxUI::VBoxLayout* workspace) {
             return;
         StopPreview();
         timelineBefore_ = SnapshotScene();
+        if (!animation->loop && animation->speed < 0 && animation->time == 0)
+            SeekModelAnimationTime(modelAnimationAsset_->animations[animation->clip].duration);
         const auto tab = document_.GetActiveTabId();
         auto clock = std::make_shared<LuxUI::ElapsedTimer>();
         clock->start();
@@ -212,7 +214,7 @@ void EditorWindow::BuildModelAnimationWorkspace(LuxUI::VBoxLayout* workspace) {
             }
             const double duration = modelAnimationAsset_->animations[current->clip].duration;
             double next = current->time + clock->restart() / 1000.0 * current->speed;
-            const bool ended = next >= duration || next < 0;
+            const bool ended = next >= duration || (next <= 0 && current->speed < 0);
             const bool looping = current->loop;
             if (looping && duration > 0) {
                 next = std::fmod(next, duration);

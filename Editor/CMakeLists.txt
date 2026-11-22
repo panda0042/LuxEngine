@@ -447,6 +447,9 @@ if(LUX_BUILD_TESTS)
     endif()
     lux_editor_copy_runtime(LuxGameViewGpuTests)
     lux_editor_copy_qt_plugins(LuxGameViewGpuTests)
+    add_test(NAME Editor_game_view_software COMMAND LuxGameViewGpuTests --software)
+    set_tests_properties(Editor_game_view_software PROPERTIES LABELS "headless;editor;play" TIMEOUT 30
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_test(NAME Editor_game_view_gpu COMMAND LuxGameViewGpuTests)
     set_tests_properties(Editor_game_view_gpu PROPERTIES LABELS "gpu;editor;play" TIMEOUT 90
         SKIP_RETURN_CODE 77 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LUX_VULKAN_VALIDATION=sync")

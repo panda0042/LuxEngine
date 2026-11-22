@@ -164,7 +164,7 @@ private:
     void RequireAlive(uint32 id) const;
     bool ApplyState(Scene& prepared, bool preserveScriptRuntime);
     bool CopyEntityComponents(const Scene& source, uint32 sourceId, uint32 targetId,
-                              const AnimatorController* refreshedController);
+                              bool preservePlayback);
     static uint64 NewReferenceIdentity();
     bool SetReferenceIdentity(uint32 id, uint64 identity);
     void EraseReferenceIdentity(uint32 id);

@@ -1,6 +1,5 @@
 #include "ScenePhysicsWorld.hpp"
 #include <LuxEngine/Core/Log.hpp>
-#include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
 #include <algorithm>
 #include <cmath>
@@ -14,7 +13,8 @@ void ScenePhysicsWorld::Remove(uint32 entity) {
     kinematicTargets_.erase(entity);
 }
 
-void ScenePhysicsWorld::Step(Scene& scene, double dt, uint32 index, uint32 count,
+void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, double dt,
+                             uint32 index, uint32 count,
                              const std::unordered_map<uint32, Vec3>& rootMotion) {
     if (index == 0)
         kinematicTargets_.clear();
@@ -26,6 +26,7 @@ void ScenePhysicsWorld::Step(Scene& scene, double dt, uint32 index, uint32 count
                          : settings.overrideGravity ? settings.gravity3D
                                                     : PhysicsEngine::GetGravity3D();
     std::vector<PhysicsBodyDescription> descriptions;
+    descriptions.reserve(entities.size());
 
     struct AppliedMotion {
         Vec3 drive;
@@ -34,15 +35,7 @@ void ScenePhysicsWorld::Step(Scene& scene, double dt, uint32 index, uint32 count
 
     std::unordered_map<uint32, AppliedMotion> animationVelocities;
     active_.clear();
-    for (const auto& entity : scene.GetEntitiesInHierarchyOrder()) {
-        const auto id = entity.GetId();
-        if (!scene.HasComponent<TransformComponent>(id))
-            continue;
-        const bool is2D = scene.HasComponent<BoxCollider2DComponent>(id) &&
-                          (scene.HasComponent<Rigidbody2DComponent>(id) ||
-                           !scene.HasComponent<BoxCollider3DComponent>(id));
-        if (planar_ != is2D || (!planar_ && !scene.HasComponent<BoxCollider3DComponent>(id)))
-            continue;
+    for (const auto id : entities) {
         auto* rigid2D = planar_ ? scene.TryGetComponent<Rigidbody2DComponent>(id) : nullptr;
         if (rigid2D)
             rigid2D->isGrounded = false;
@@ -192,6 +185,7 @@ void ScenePhysicsWorld::Step(Scene& scene, double dt, uint32 index, uint32 count
 std::unordered_map<uint32, TransformComponent>
 ScenePhysicsWorld::GetWorldPoses(const Scene& scene) const {
     std::unordered_map<uint32, TransformComponent> poses;
+    poses.reserve(active_.size());
     for (const auto id : active_) {
         const auto state = world_.GetState(id);
         if (!state || !scene.IsAlive(id))

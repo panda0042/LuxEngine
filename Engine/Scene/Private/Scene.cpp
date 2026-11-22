@@ -120,6 +120,53 @@ std::vector<Entity> Scene::GetEntitiesIn2DLayerOrder() {
     return result;
 }
 
+namespace {
+struct PhysicsBodies {
+    std::vector<uint32> ordered;
+    std::vector<uint32> planar;
+    std::vector<uint32> spatial;
+};
+
+PhysicsBodies OrderPhysicsBodies(const Scene& scene, const std::vector<uint32>& colliders2D,
+                                 const std::vector<uint32>& colliders3D) {
+    std::unordered_map<uint32, std::vector<uint32>> children;
+    std::unordered_set<uint32> visited;
+    for (const auto* colliders : {&colliders2D, &colliders3D})
+        for (auto id : *colliders)
+            while (id && visited.insert(id).second) {
+                if (!scene.IsAlive(id))
+                    throw std::logic_error("Invalid scene hierarchy");
+                const auto parent = scene.GetParent(id);
+                children[parent].push_back(id);
+                id = parent;
+            }
+    for (auto& [parent, siblings] : children)
+        std::sort(siblings.rbegin(), siblings.rend());
+
+    PhysicsBodies result;
+    result.ordered.reserve(colliders2D.size() + colliders3D.size());
+    result.planar.reserve(colliders2D.size());
+    result.spatial.reserve(colliders3D.size());
+    auto pending = std::move(children[0]);
+    while (!pending.empty()) {
+        const auto id = pending.back();
+        pending.pop_back();
+        if (const auto found = children.find(id); found != children.end())
+            pending.insert(pending.end(), found->second.begin(), found->second.end());
+        if (std::binary_search(colliders2D.begin(), colliders2D.end(), id))
+            result.planar.push_back(id);
+        else if (std::binary_search(colliders3D.begin(), colliders3D.end(), id))
+            result.spatial.push_back(id);
+        else
+            continue;
+        result.ordered.push_back(id);
+    }
+    if (result.ordered.size() != colliders2D.size() + colliders3D.size())
+        throw std::logic_error("Invalid scene hierarchy");
+    return result;
+}
+} // namespace
+
 void Scene::OnUpdate(double dt) {
     collisionEvents2D_.clear();
     collisionEvents3D_.clear();
@@ -150,16 +197,20 @@ void Scene::OnUpdate(double dt) {
             continue;
         if (animation->playing && animation->clip >= 0) {
             const double duration = model->animations[animation->clip].duration;
-            const double next = animation->time + dt * animation->speed;
+            const bool reverseStart = !animation->playbackStarted && animation->time == 0 &&
+                                      animation->speed < 0 && !animation->loop;
+            const double start = reverseStart ? duration : animation->time;
+            const double next = start + dt * animation->speed;
             if (!std::isfinite(next))
                 continue;
+            animation->playbackStarted |= next != start;
             if (duration > 0 && animation->loop) {
                 animation->time = std::fmod(next, duration);
                 if (animation->time < 0)
                     animation->time += duration;
             } else {
                 animation->time = std::clamp(next, 0.0, duration);
-                if (next < 0 || next >= duration)
+                if (next < 0 || next >= duration || (next == 0 && animation->speed < 0))
                     animation->playing = false;
             }
         }
@@ -187,16 +238,18 @@ void Scene::OnUpdate(double dt) {
     for (const auto& [path, model] : models)
         if (model && (modelAssets_.contains(path) || modelAssets_.size() < 128))
             modelAssets_[path] = model;
-    const auto colliders2D = GetComponentEntityIds<BoxCollider2DComponent>();
-    const auto colliders3D = GetComponentEntityIds<BoxCollider3DComponent>();
-    const bool has2D = std::any_of(colliders2D.begin(), colliders2D.end(), [this](uint32 id) {
-        return HasComponent<TransformComponent>(id) && (HasComponent<Rigidbody2DComponent>(id) ||
-                                                        !HasComponent<BoxCollider3DComponent>(id));
+    auto colliders2D = GetComponentEntityIds<BoxCollider2DComponent>();
+    auto colliders3D = GetComponentEntityIds<BoxCollider3DComponent>();
+    std::erase_if(colliders2D, [this](uint32 id) {
+        return !HasComponent<TransformComponent>(id) || (HasComponent<BoxCollider3DComponent>(id) &&
+                                                         !HasComponent<Rigidbody2DComponent>(id));
     });
-    const bool has3D = std::any_of(colliders3D.begin(), colliders3D.end(), [this](uint32 id) {
-        return HasComponent<TransformComponent>(id) && (!HasComponent<BoxCollider2DComponent>(id) ||
-                                                        !HasComponent<Rigidbody2DComponent>(id));
+    std::erase_if(colliders3D, [this, &colliders2D](uint32 id) {
+        return !HasComponent<TransformComponent>(id) ||
+               std::binary_search(colliders2D.begin(), colliders2D.end(), id);
     });
+    const bool has2D = !colliders2D.empty();
+    const bool has3D = !colliders3D.empty();
     if (!has2D)
         physics2D_.reset();
     if (!has3D)
@@ -205,6 +258,9 @@ void Scene::OnUpdate(double dt) {
     physicsAccumulator_ += remainingFrameTime;
     const double fixedStep = settings_.fixedStep;
     const bool stepped = physicsAccumulator_ + 1e-8 >= fixedStep;
+    const auto bodies = stepped && (has2D || has3D)
+                            ? OrderPhysicsBodies(*this, colliders2D, colliders3D)
+                            : PhysicsBodies{};
     uint32 failedPose2D = 0, failedPose3D = 0;
     const auto accumulateMotion = [&](double time) {
         if (time > 0)
@@ -220,15 +276,14 @@ void Scene::OnUpdate(double dt) {
             pendingPhysicsMotion_.clear();
             continue;
         }
+        if (has2D && !physics2D_)
+            physics2D_ = std::make_unique<ScenePhysicsWorld>(true);
+        if (has3D && !physics3D_)
+            physics3D_ = std::make_unique<ScenePhysicsWorld>(false);
         const double substep = fixedStep / settings_.physicsSubsteps;
         for (uint32 index = 0; index < settings_.physicsSubsteps; ++index) {
-            if (has2D && !physics2D_)
-                physics2D_ = std::make_unique<ScenePhysicsWorld>(true);
-            if (has3D && !physics3D_)
-                physics3D_ = std::make_unique<ScenePhysicsWorld>(false);
-            const auto hierarchy = GetEntitiesInHierarchyOrder();
             if (physics2D_) {
-                physics2D_->Step(*this, substep, index, settings_.physicsSubsteps,
+                physics2D_->Step(*this, bodies.planar, substep, index, settings_.physicsSubsteps,
                                  pendingPhysicsMotion_);
                 for (const auto& contact : physics2D_->BeganContacts())
                     collisionEvents2D_.push_back({contact.entityA,
@@ -237,7 +292,7 @@ void Scene::OnUpdate(double dt) {
                                                   contact.isTrigger});
             }
             if (physics3D_) {
-                physics3D_->Step(*this, substep, index, settings_.physicsSubsteps,
+                physics3D_->Step(*this, bodies.spatial, substep, index, settings_.physicsSubsteps,
                                  pendingPhysicsMotion_);
                 const auto& contacts = physics3D_->BeganContacts();
                 collisionEvents3D_.insert(collisionEvents3D_.end(), contacts.begin(),
@@ -249,8 +304,7 @@ void Scene::OnUpdate(double dt) {
                                             : std::unordered_map<uint32, TransformComponent>{};
             // Apply every physics family together, parent before child. A hierarchy may contain
             // both 2D and 3D bodies; each simulation's absolute world pose must remain independent.
-            for (const auto& entity : hierarchy) {
-                const auto id = entity.GetId();
+            for (const auto id : bodies.ordered) {
                 if (const auto pose = world3D.find(id); pose != world3D.end()) {
                     if (!SetWorldTransform(id, pose->second) && !failedPose3D)
                         failedPose3D = id;

@@ -387,6 +387,39 @@ void PlanarColliderHierarchy() {
           "a collapsed parent Z axis leaves planar motion, rotation and authored depth intact");
 }
 
+void MixedPhysicsHierarchy() {
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.physicsSubsteps = 8;
+    Check(scene.SetSettings(settings), "mixed physics hierarchy settings");
+    auto child = scene.CreateEntity("Planar child");
+    child.GetComponent<TransformComponent>().position.x = 10;
+    child.AddComponent<BoxCollider2DComponent>();
+    child.AddComponent<BoxCollider3DComponent>();
+    auto& planar = child.AddComponent<Rigidbody2DComponent>();
+    planar.type = BodyType::Kinematic;
+    planar.velocity = {3, 0};
+    auto group = scene.CreateEntity("Group without a collider");
+    auto parent = scene.CreateEntity("Spatial parent");
+    parent.AddComponent<BoxCollider3DComponent>();
+    auto& spatial = parent.AddComponent<Rigidbody3DComponent>();
+    spatial.type = BodyType::Kinematic;
+    spatial.velocity = {2, 0, 0};
+    Check(scene.SetParent(child.GetId(), group.GetId(), false) &&
+              scene.SetParent(group.GetId(), parent.GetId(), false),
+          "mixed bodies are linked through a non-physics transform");
+
+    for (int frame = 0; frame < 30; ++frame)
+        scene.OnUpdate(settings.fixedStep);
+    Check(std::abs(scene.GetWorldTransform(parent.GetId()).position.x - 1) < .01 &&
+              std::abs(scene.GetWorldTransform(child.GetId()).position.x - 11.5) < .01 &&
+              scene.GetLastPhysicsError2D().empty() && scene.GetLastPhysicsError3D().empty(),
+          "mixed physics writes parent before child and gives the planar collider precedence");
+    RaycastHit3D hit;
+    Check(!scene.Raycast3D({11.5, 0, 2}, {0, 0, -1}, 4, hit),
+          "a planar body does not also register a spatial collider");
+}
+
 void FlatColliderContact(bool parented) {
     Scene scene;
     auto settings = scene.GetSettings();
@@ -423,6 +456,7 @@ int main() {
         CapacityAndReplacement();
         StableContactIdentity();
         PlanarColliderHierarchy();
+        MixedPhysicsHierarchy();
         FlatColliderContact(false);
         FlatColliderContact(true);
         std::cout << "Jolt queries, diagnostics, CCD, triggers and live body edits passed\n";
