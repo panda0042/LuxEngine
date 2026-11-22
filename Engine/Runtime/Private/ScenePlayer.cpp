@@ -10,6 +10,7 @@
 #include <cmath>
 #include <limits>
 #include <locale>
+#include <numeric>
 #include <sstream>
 
 namespace LuxEngine {
@@ -64,12 +65,6 @@ Vec3 CameraUp(Vec3 forward, Vec3 preferred) {
 } // namespace
 
 ScenePlayerCameraView ResolveScenePlayerCamera(Scene& scene, const ScenePlayerView& fallback) {
-    ScenePlayerCameraView result;
-    result.position = {fallback.centerX, fallback.centerY + 3,
-                       std::max<double>(5.0f, fallback.halfHeight * 2)};
-    result.target = {fallback.centerX, fallback.centerY, 0};
-    if (!Finite(result.position) || !Finite(result.target))
-        result = {};
     for (const auto id : scene.GetComponentEntityIds<CameraComponent>()) {
         const auto& camera = scene.GetComponent<CameraComponent>(id);
         if (!camera.isPrimary || !camera.isPerspective || !std::isfinite(camera.fov) ||
@@ -97,9 +92,32 @@ ScenePlayerCameraView ResolveScenePlayerCamera(Scene& scene, const ScenePlayerVi
         const double separation = (target - position).Dot(target - position);
         if (!Finite(target) || !std::isfinite(separation) || separation <= 0)
             continue;
-        result = {position, target, up, camera.fov, camera.nearClip, camera.farClip};
-        break;
+        return {position, target, up, camera.fov, camera.nearClip, camera.farClip};
     }
+
+    double minimumZ = std::numeric_limits<double>::infinity();
+    double maximumZ = -minimumZ;
+    for (const auto id : scene.GetComponentEntityIds<MeshRendererComponent>()) {
+        if (!scene.HasComponent<TransformComponent>(id))
+            continue;
+        const auto matrix = scene.GetWorldMatrix(id);
+        const auto* m = matrix.elements;
+        const auto extent = .5 * (std::abs(m[2]) + std::abs(m[6]) + std::abs(m[10]));
+        if (std::isfinite(m[14] - extent) && std::isfinite(m[14] + extent)) {
+            minimumZ = std::min(minimumZ, m[14] - extent);
+            maximumZ = std::max(maximumZ, m[14] + extent);
+        }
+    }
+    const auto center = minimumZ <= maximumZ ? std::midpoint(minimumZ, maximumZ) : 0.;
+    const auto extent = minimumZ <= maximumZ ? maximumZ - center : 0.;
+    const auto distance = std::max(5., fallback.halfHeight * 2) + extent;
+    ScenePlayerCameraView result;
+    result.position = {fallback.centerX, fallback.centerY + 3, center + distance};
+    result.target = {fallback.centerX, fallback.centerY, center};
+    result.farClip = std::max(result.farClip, std::hypot(distance, 3.) + extent +
+                                                  std::abs(fallback.halfHeight) * 2);
+    if (!Finite(result.position) || !Finite(result.target) || !std::isfinite(result.farClip))
+        return {};
     return result;
 }
 

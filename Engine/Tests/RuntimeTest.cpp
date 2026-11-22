@@ -219,6 +219,10 @@ void Primary2DCamera() {
               std::abs(cameras.camera2D.GetRotation() - ToRadians(90)) < 1e-12 &&
               cameras.camera2D.GetProjectionMatrix().elements[0] == .25,
           "primary 2D world position, rotation and size override the editor fallback view");
+    parent.GetComponent<TransformComponent>().scale.z = -1;
+    const auto mirroredDepth = ResolveScenePlayerCameras(scene, 2, {});
+    Check(std::abs(mirroredDepth.camera2D.GetRotation() - ToRadians(90)) < 1e-12,
+          "a negative parent Z scale does not rotate a 2D camera");
     camera.GetComponent<TransformComponent>().scale.z = 0;
     const auto flatCamera = ResolveScenePlayerCameras(scene, 2, {});
     Check(std::abs(flatCamera.camera2D.GetRotation() - ToRadians(90)) < 1e-12,

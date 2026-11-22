@@ -28,9 +28,11 @@ bool Decompose(const Mat4& matrix, TransformComponent& value, bool requireTrs) {
     Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
     value.scale = {Length(x), Length(y), Length(z)};
     constexpr double epsilon = 1e-6f;
-    if (value.scale.z < epsilon && value.scale.x > 0 && value.scale.y > 0 &&
-        std::abs(x.z) <= epsilon * value.scale.x && std::abs(y.z) <= epsilon * value.scale.y &&
-        std::hypot(z.x, z.y) <= epsilon * value.scale.z) {
+    const bool planar = x.z == 0 && y.z == 0 && z.x == 0 && z.y == 0;
+    const bool flat = value.scale.z < epsilon && std::abs(x.z) <= epsilon * value.scale.x &&
+                      std::abs(y.z) <= epsilon * value.scale.y &&
+                      std::hypot(z.x, z.y) <= epsilon * value.scale.z;
+    if ((planar || flat) && value.scale.x > 0 && value.scale.y > 0) {
         const Vec3 axisX = x * (1 / value.scale.x), axisY = y * (1 / value.scale.y);
         const double area = axisX.x * axisY.y - axisX.y * axisY.x;
         if (std::abs(area) > epsilon && (!requireTrs || std::abs(axisX.Dot(axisY)) <= 1e-4)) {

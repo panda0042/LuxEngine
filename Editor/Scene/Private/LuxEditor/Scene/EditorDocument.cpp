@@ -100,6 +100,7 @@ void EditorDocument::NewScene() {
     active.selection.clear();
     active.selectionSet.clear();
     active.path.clear();
+    active.diskRevision.clear();
     active.dirty = false;
     active.loadWarning.clear();
     error_.clear();
@@ -112,6 +113,9 @@ bool EditorDocument::Open(const std::string& path) {
         return false;
     }
     std::string nextPath = AnchoredPath(path);
+    auto disk = ReadSceneFileRevision(PathFromUtf8(nextPath), error_);
+    if (!disk)
+        return false;
     std::string warning;
     auto replacement = ReadScene(nextPath, error_, warning);
     if (!replacement)
@@ -122,6 +126,7 @@ bool EditorDocument::Open(const std::string& path) {
     active.selection.clear();
     active.selectionSet.clear();
     active.path.swap(nextPath);
+    active.diskRevision = std::move(*disk);
     active.dirty = false;
     active.loadWarning = std::move(warning);
     return true;
@@ -134,11 +139,14 @@ bool EditorDocument::Recover(const std::string& originalPath, const std::string&
         error_ = "복구할 씬 경로가 올바르지 않거나 다른 탭에서 열려 있습니다.";
         return false;
     }
+    std::string nextPath = AnchoredPath(originalPath);
+    auto disk = ReadSceneFileRevision(PathFromUtf8(nextPath), error_);
+    if (!disk)
+        return false;
     std::string warning;
     auto replacement = ReadScene(autosavePath, error_, warning);
     if (!replacement)
         return false;
-    std::string nextPath = AnchoredPath(originalPath);
     replacement->SetSourcePath(SourcePath(nextPath));
     auto& active = Active();
     active.scene = std::move(replacement);
@@ -146,6 +154,7 @@ bool EditorDocument::Recover(const std::string& originalPath, const std::string&
     active.selection.clear();
     active.selectionSet.clear();
     active.path.swap(nextPath);
+    active.diskRevision = std::move(*disk);
     active.dirty = true;
     active.loadWarning = std::move(warning);
     return true;
@@ -168,7 +177,7 @@ bool EditorDocument::Save(TabId tab) {
     }
     auto sourcePath = SourcePath(state->path);
     if (!SaveAuthoredScene(*state->scene, PathFromUtf8(state->path), PathFromUtf8(state->path),
-                           error_))
+                           error_, false, &state->diskRevision))
         return false;
     state->scene->SetSourcePath(std::move(sourcePath));
     state->dirty = false;
@@ -184,10 +193,16 @@ bool EditorDocument::SaveAs(const std::string& path) {
     std::string nextPath = AnchoredPath(path);
     auto sourcePath = SourcePath(nextPath);
     auto& active = Active();
+    auto disk = SameFile(nextPath, active.path)
+                    ? std::optional(active.diskRevision)
+                    : ReadSceneFileRevision(PathFromUtf8(nextPath), error_);
+    if (!disk)
+        return false;
     if (!SaveAuthoredScene(*active.scene, PathFromUtf8(nextPath), PathFromUtf8(active.path), error_,
-                           true))
+                           true, &*disk))
         return false;
     active.path.swap(nextPath);
+    active.diskRevision = std::move(*disk);
     active.scene->SetSourcePath(std::move(sourcePath));
     active.dirty = false;
     return true;
@@ -253,16 +268,20 @@ EditorDocument::TabId EditorDocument::OpenTab(const std::string& path) {
         error_.clear();
         return existing;
     }
+    auto disk = ReadSceneFileRevision(PathFromUtf8(path), error_);
+    if (!disk)
+        return 0;
     std::string warning;
     auto scene = ReadScene(path, error_, warning);
     if (!scene)
         return 0;
-    return AdoptTab(path, std::move(scene), false, std::move(warning));
+    return AdoptTab(path, std::move(scene), false, std::move(warning), std::move(disk));
 }
 
 EditorDocument::TabId EditorDocument::AdoptTab(const std::string& path,
                                                std::shared_ptr<LuxEngine::Scene> scene, bool dirty,
-                                               std::string warning) {
+                                               std::string warning,
+                                               std::optional<std::string> diskRevision) {
     if (!scene || path.find('\0') != std::string::npos) {
         error_ = "불러온 씬 또는 파일 경로가 올바르지 않습니다.";
         return 0;
@@ -278,10 +297,16 @@ EditorDocument::TabId EditorDocument::AdoptTab(const std::string& path,
         return 0;
     }
     auto nextPath = AnchoredPath(path);
-    if (!nextPath.empty())
+    if (!nextPath.empty()) {
+        if (!diskRevision)
+            diskRevision = ReadSceneFileRevision(PathFromUtf8(nextPath), error_);
+        if (!diskRevision)
+            return 0;
         scene->SetSourcePath(SourcePath(nextPath));
+    }
     const auto id = NextId();
     tabs_.push_back({id, std::move(scene), {}, std::move(nextPath), dirty, std::move(warning)});
+    tabs_.back().diskRevision = diskRevision.value_or(std::string{});
     activeIndex_ = tabs_.size() - 1;
     error_.clear();
     return id;
@@ -301,15 +326,16 @@ EditorDocument::TabId EditorDocument::DuplicateTab(TabId tab, const std::string&
         error_ = "씬 복제에는 사용하지 않는 새 파일 경로가 필요합니다.";
         return 0;
     }
-    std::string data;
+    std::string data, disk;
     auto scene = std::make_shared<LuxEngine::Scene>();
     if (!source->scene->SerializeToString(data) || !scene->DeserializeFromString(data) ||
-        !SaveAuthoredScene(*scene, PathFromUtf8(path), PathFromUtf8(source->path), error_)) {
+        !SaveAuthoredScene(*scene, PathFromUtf8(path), PathFromUtf8(source->path), error_, false,
+                           &disk)) {
         if (error_.empty())
             error_ = "씬을 복제할 수 없습니다.";
         return 0;
     }
-    return AdoptTab(path, std::move(scene), false, source->loadWarning);
+    return AdoptTab(path, std::move(scene), false, source->loadWarning, std::move(disk));
 }
 
 bool EditorDocument::ActivateTab(TabId tab) noexcept {

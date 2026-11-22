@@ -9,6 +9,7 @@
 #include <LuxEngine/Core/Log.hpp>
 #include <LuxEngine/Platform/Input.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <fstream>
@@ -352,16 +353,40 @@ void EditorWindow::CreateAssetFolder() {
 }
 
 namespace {
-std::optional<LuxEngine::LuxKey> GameKey(int code) {
+std::optional<LuxEngine::LuxKey> GameKey(const LuxUI::KeyEvent& event) {
+    const int code = event.key();
     if (code >= 'A' && code <= 'Z')
         return static_cast<LuxEngine::LuxKey>(code + 'a' - 'A');
-    if (code >= '0' && code <= '9')
+    if (code >= '0' && code <= '9') {
+        if (event.modifiers().testFlag(LuxUI::Flags::KeypadModifier)) {
+            constexpr auto digits = std::array{
+                LuxEngine::LuxKey::Numpad0, LuxEngine::LuxKey::Numpad1, LuxEngine::LuxKey::Numpad2,
+                LuxEngine::LuxKey::Numpad3, LuxEngine::LuxKey::Numpad4, LuxEngine::LuxKey::Numpad5,
+                LuxEngine::LuxKey::Numpad6, LuxEngine::LuxKey::Numpad7, LuxEngine::LuxKey::Numpad8,
+                LuxEngine::LuxKey::Numpad9};
+            return digits[code - '0'];
+        }
         return static_cast<LuxEngine::LuxKey>(code);
+    }
     if (code >= LuxUI::Flags::Key_F1 && code <= LuxUI::Flags::Key_F12 &&
         code != LuxUI::Flags::Key_F5)
         return static_cast<LuxEngine::LuxKey>(static_cast<int>(LuxEngine::LuxKey::F1) + code -
                                               LuxUI::Flags::Key_F1);
     switch (code) {
+    case ',':
+    case '.':
+    case '/':
+    case ';':
+    case '\'':
+    case '-':
+    case '=':
+    case '[':
+    case ']':
+    case '\\':
+    case '`':
+        return static_cast<LuxEngine::LuxKey>(code);
+    case LuxUI::Flags::Key_CapsLock:
+        return LuxEngine::LuxKey::CapsLock;
     case LuxUI::Flags::Key_Left:
         return LuxEngine::LuxKey::Left;
     case LuxUI::Flags::Key_Right:
@@ -414,7 +439,7 @@ bool EditorWindow::eventFilter(LuxUI::Object* source, LuxUI::Event* event) {
             (event->type() == LuxUI::Event::KeyPress || event->type() == LuxUI::Event::KeyRelease ||
              event->type() == LuxUI::Event::ShortcutOverride)) {
             const auto* key = static_cast<LuxUI::KeyEvent*>(event);
-            const auto code = GameKey(key->key());
+            const auto code = GameKey(*key);
             if (code) {
                 if (event->type() == LuxUI::Event::ShortcutOverride)
                     event->accept();

@@ -1,6 +1,7 @@
 #include <LuxEditor/App/EditorWindow.hpp>
 #include <LuxEditor/Viewport/EngineSceneRenderer.hpp>
 #include <LuxEditor/Viewport/GameViewport.hpp>
+#include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/Renderer/RHI/GpuDevice.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
@@ -165,6 +166,52 @@ void Primary3D(EngineSceneRenderer& renderer) {
     Check(!Red(image, 320, 160), "GPU Game View returned a stale frame after the scene changed");
 }
 
+void DepthFallback(EngineSceneRenderer& renderer) {
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.render3D.mode = Render3DMode::Legacy;
+    Check(scene.SetSettings(settings), "depth fixture render settings");
+    auto cube = scene.CreateEntity("Red cube");
+    cube.AddComponent<MeshRendererComponent>().material.albedoColor = {1, 0, 0, 1};
+    const auto original = RedPixels(Render(renderer, scene));
+    Check(original > 0, "fallback camera sees the cube at the origin");
+    for (const double z : {-1000., 1000.}) {
+        cube.GetComponent<TransformComponent>().position.z = z;
+        Check(RedPixels(Render(renderer, scene)) == original,
+              "fallback camera frames a mesh independently of its world depth");
+    }
+}
+
+void DistinctScenePoses(EngineSceneRenderer& renderer) {
+    std::string error;
+    const auto model = ModelAsset::LoadFbx(LUX_FBX_ANIMATED_FIXTURE, error);
+    Check(bool(model), error.c_str());
+    Scene first, second;
+    for (auto* scene : {&first, &second}) {
+        auto settings = scene->GetSettings();
+        settings.render3D.mode = Render3DMode::Legacy;
+        Check(scene->SetSettings(settings), "pose fixture render settings");
+        auto entity = scene->CreateEntity("Animated triangle");
+        auto& mesh = entity.AddComponent<MeshRendererComponent>();
+        mesh.meshPath = LUX_FBX_ANIMATED_FIXTURE;
+        mesh.modelSubmesh = 0;
+        mesh.material.albedoColor = {1, 0, 0, 1};
+        auto& pose = entity.AddComponent<ModelAnimationComponent>();
+        pose.modelPath = mesh.meshPath;
+        pose.mixedPose = CreateRef<ModelPose>();
+        pose.poseRevision = 1;
+        Check(model->Evaluate(scene == &first ? 0 : 1, 0, *pose.mixedPose, error), error.c_str());
+        auto camera = scene->CreateEntity("Camera");
+        camera.GetComponent<TransformComponent>().position.z = 6;
+        camera.AddComponent<CameraComponent>().isPerspective = true;
+    }
+    const auto previous = Render(renderer, first);
+    const auto current = Render(renderer, second);
+    Check(RedPixels(previous) > 0 && RedPixels(current) > 0 && current != previous &&
+              Render(renderer, first) == previous,
+          "scene-local entity and revision collisions must not reuse another scene's FBX pose");
+}
+
 void LargeSceneView(EngineSceneRenderer& renderer) {
     for (const double origin : {0., 1e6, 1e9, 1e12}) {
         Scene scene;
@@ -296,6 +343,8 @@ int main(int argc, char** argv) {
         CheckSpriteAboveTilemap(Render(renderer, layeredScene));
         Primary2D(renderer);
         Primary3D(renderer);
+        DepthFallback(renderer);
+        DistinctScenePoses(renderer);
         LargeSceneView(renderer);
         StoppedAndPlaying(app);
         const auto* gpu = renderer.GetGpuDevice();

@@ -420,6 +420,30 @@ void MixedPhysicsHierarchy() {
           "a planar body does not also register a spatial collider");
 }
 
+void PlanarOffsetIgnoresDepthReflection() {
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.overrideGravity = true;
+    settings.gravity = {};
+    Check(scene.SetSettings(settings), "planar depth reflection settings");
+    auto parent = scene.CreateEntity("Depth reflection");
+    parent.GetComponent<TransformComponent>().scale.z = -1;
+    auto trigger = scene.CreateEntity("Offset trigger");
+    auto& collider = trigger.AddComponent<BoxCollider2DComponent>();
+    collider.offset = {0, 2};
+    collider.isTrigger = true;
+    Check(scene.SetParent(trigger.GetId(), parent.GetId(), false), "trigger attaches to parent");
+    auto actor = scene.CreateEntity("Actor");
+    actor.GetComponent<TransformComponent>().position.y = 2;
+    actor.AddComponent<BoxCollider2DComponent>();
+    actor.AddComponent<Rigidbody2DComponent>().type = BodyType::Dynamic;
+    scene.OnUpdate(settings.fixedStep);
+    const auto& contacts = scene.GetCollisionEvents2D();
+    Check(contacts.size() == 1 && contacts.front().isTrigger &&
+              scene.GetLastPhysicsError2D().empty(),
+          "reflecting depth does not move a planar collider offset to the opposite side");
+}
+
 void FlatColliderContact(bool parented) {
     Scene scene;
     auto settings = scene.GetSettings();
@@ -457,6 +481,7 @@ int main() {
         StableContactIdentity();
         PlanarColliderHierarchy();
         MixedPhysicsHierarchy();
+        PlanarOffsetIgnoresDepthReflection();
         FlatColliderContact(false);
         FlatColliderContact(true);
         std::cout << "Jolt queries, diagnostics, CCD, triggers and live body edits passed\n";

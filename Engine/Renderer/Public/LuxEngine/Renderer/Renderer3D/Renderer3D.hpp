@@ -134,7 +134,7 @@ public:
         bool DrawMeshAsset(const std::string& path, const Mat4& transform,
                            const Material3D& material, int32 modelSubmesh = -1, int32 clip = -1,
                            double time = 0.0, uint64 instance = 0, const ModelPose* pose = nullptr,
-                           uint64 poseRevision = 0);
+                           uint64 poseRevision = 0, const Ref<const ModelPose>& poseOwner = {});
         void DrawMesh(std::span<const Vec3> positions, std::span<const uint32> indices,
                       const Mat4& transform, const Material3D& material);
         void DrawCube(const Vec3& position, const Vec3& scale, const Material3D& material);
@@ -184,7 +184,8 @@ public:
     static bool DrawMeshAsset(const std::string& path, const Mat4& transform,
                               const Material3D& material, int32 modelSubmesh = -1, int32 clip = -1,
                               double time = 0.0, uint64 instance = 0,
-                              const ModelPose* pose = nullptr, uint64 poseRevision = 0);
+                              const ModelPose* pose = nullptr, uint64 poseRevision = 0,
+                              const Ref<const ModelPose>& poseOwner = {});
     static void DrawMesh(std::span<const Vec3> positions, std::span<const uint32> indices,
                          const Mat4& transform, const Material3D& material);
     static void DrawCube(const Vec3& position, const Vec3& scale, const Material3D& material);

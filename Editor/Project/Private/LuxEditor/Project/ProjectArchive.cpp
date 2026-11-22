@@ -570,8 +570,8 @@ static bool WriteProjectArchive(const EditorProject& project, const std::filesys
     for (; !ec && iterator != end; iterator.increment(ec)) {
         const auto relative = iterator->path().lexically_relative(root);
         const auto first = relative.empty() ? std::string{} : PathUtf8(*relative.begin());
-        if (first.empty() || IsExcludedProjectPath(*relative.begin()) ||
-            iterator->path() == archive || iterator->path() == temporary) {
+        if (first.empty() || IsExcludedProjectPath(relative) || iterator->path() == archive ||
+            iterator->path() == temporary) {
             if (iterator->is_directory(ec))
                 iterator.disable_recursion_pending();
             continue;
@@ -921,24 +921,38 @@ bool RestoreProjectBackup(const EditorProject& project, const std::filesystem::p
         return false;
     }
     std::vector<std::filesystem::path> preserve;
-    const auto collect = [&](const std::filesystem::path& directory, bool projectRoot) {
-        for (std::filesystem::directory_iterator it(root / directory, ec), end; !ec && it != end;
-             it.increment(ec)) {
-            const auto name = PathUtf8(it->path().filename());
-            const auto metadataName = MetadataName(name);
-            if (projectRoot ? metadataName != ".lux" && IsExcludedProjectPath(it->path().filename())
-                            : metadataName != "backups" && metadataName != "autosave" &&
-                                  !metadataName.starts_with("pre-restore-autosave-"))
-                preserve.push_back(directory / it->path().filename());
+    for (std::filesystem::recursive_directory_iterator it(root, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        const auto relative = it->path().lexically_relative(root);
+        if (IsExcludedProjectPath(relative)) {
+            it.disable_recursion_pending();
+            if (relative.has_parent_path() || MetadataName(PathUtf8(relative)) != ".lux")
+                preserve.push_back(relative);
+        } else if (IsReparsePointOrSymlink(it->path())) {
+            it.disable_recursion_pending();
         }
-    };
-    collect({}, true);
-    if (!ec)
-        collect(".lux", false);
+    }
+    if (!ec) {
+        for (std::filesystem::directory_iterator it(metadata, ec), end; !ec && it != end;
+             it.increment(ec)) {
+            const auto name = MetadataName(PathUtf8(it->path().filename()));
+            if (name != "backups" && name != "autosave" &&
+                !name.starts_with("pre-restore-autosave-"))
+                preserve.push_back(std::filesystem::path(".lux") / it->path().filename());
+        }
+    }
     if (ec) {
         error = "백업에 포함되지 않는 프로젝트 항목을 읽을 수 없습니다.";
         std::filesystem::remove_all(staging, ec);
         return false;
+    }
+    for (const auto& relative : preserve) {
+        std::filesystem::create_directories((staging / relative).parent_path(), ec);
+        if (ec) {
+            error = "백업 경로와 보존할 프로젝트 항목이 충돌합니다: " + GenericPathUtf8(relative);
+            std::filesystem::remove_all(staging, ec);
+            return false;
+        }
     }
     const auto previous = TemporarySibling(root);
     RenameProjectPath(root, previous, ec);

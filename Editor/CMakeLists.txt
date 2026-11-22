@@ -440,6 +440,8 @@ endif()
 
 if(LUX_BUILD_TESTS)
     add_executable(LuxGameViewGpuTests Tests/GameViewGpuTest.cpp)
+    target_compile_definitions(LuxGameViewGpuTests PRIVATE
+        LUX_FBX_ANIMATED_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../Engine/Tests/Fixtures/AnimatedTriangle.fbx")
     target_link_libraries(LuxGameViewGpuTests PRIVATE LuxEditorUi)
     target_include_directories(LuxGameViewGpuTests PRIVATE ${LUX_EDITOR_PRIVATE_INCLUDE_DIRS})
     if(COMMAND lux_set_target_warnings)

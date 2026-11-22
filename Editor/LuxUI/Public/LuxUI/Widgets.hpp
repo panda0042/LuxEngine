@@ -19,6 +19,7 @@
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -60,6 +61,7 @@
 #include <QLineF>
 #include <QListView>
 #include <QListWidget>
+#include <QLockFile>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
@@ -224,6 +226,8 @@ using Rect = QRect;
 using RectF = QRectF;
 using ResizeEvent = QResizeEvent;
 using SaveFile = QSaveFile;
+using CryptographicHash = QCryptographicHash;
+using LockFile = QLockFile;
 template <class T> using ScopedValueRollback = QScopedValueRollback<T>;
 using Screen = QScreen;
 using ScrollArea = QScrollArea;

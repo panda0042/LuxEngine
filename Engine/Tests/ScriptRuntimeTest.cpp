@@ -24,6 +24,24 @@ void CheckRuntime(bool success, const ScriptRuntime& runtime) {
         throw std::runtime_error(runtime.GetLastError());
 }
 
+void TestReenableAfterCleanupFailure(const ScriptRuntimeConfig& config) {
+    Scene scene;
+    auto entity = scene.CreateEntity();
+    auto& script = entity.AddComponent<ScriptComponent>("ScriptTests.ThrowingCleanup", true);
+    ScriptRuntime runtime;
+    CheckRuntime(runtime.Initialize(scene, config) && runtime.Update(.1), runtime);
+    auto& transform = entity.GetComponent<TransformComponent>();
+    Check(transform.position.x == 1, "cleanup fixture script updates");
+    script.enabled = false;
+    Check(!runtime.Update(.1) &&
+              runtime.GetLastError().find("managed cleanup exception") != std::string::npos,
+          "the destroy callback failure is still reported");
+    script.enabled = true;
+    CheckRuntime(runtime.Update(.1), runtime);
+    Check(transform.position.x == 2,
+          "re-enabled script gets a fresh instance after failed cleanup");
+}
+
 void TestStreamingAndAnimatedFields(const ScriptRuntimeConfig& config,
                                     const std::filesystem::path& directory) {
     Scene region;
@@ -296,6 +314,7 @@ int main(int argc, char** argv) {
         ScriptRuntime runtime;
         ScriptRuntimeConfig config;
         config.assemblyPath = argv[1];
+        TestReenableAfterCleanupFailure(config);
         CheckRuntime(runtime.Initialize(scene, config), runtime);
         CheckRuntime(runtime.Update(.25), runtime);
         auto& transform = entity.GetComponent<TransformComponent>();
