@@ -545,11 +545,12 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     const auto relativeModel = Mat4::Translate(impl_->camera * -1) * model;
     const bool shadowOnly =
         OutsideClipVolume(impl_->viewProjection * relativeModel, mesh.minimum_, mesh.maximum_);
+    const bool outsideShadow = impl_->shadowProjection &&
+                               OutsideClipVolume(*impl_->shadowProjection * relativeModel,
+                                                 mesh.minimum_, mesh.maximum_);
     if (shadowOnly) {
         const bool opaqueCaster = !material.water && material.alphaMode != MaterialAlphaMode::Blend;
-        const bool rasterCaster = opaqueCaster && impl_->shadowProjection &&
-                                  !OutsideClipVolume(*impl_->shadowProjection * relativeModel,
-                                                     mesh.minimum_, mesh.maximum_);
+        const bool rasterCaster = opaqueCaster && impl_->shadowProjection && !outsideShadow;
         const auto& settings = impl_->settings;
         const bool useRays = settings.rayTracing.Enabled() ||
                              settings.radianceCascades.strength > 0 ||
@@ -605,12 +606,14 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
                  static_cast<float>(absorption.z), airToWater};
     }
     const auto& settings = impl_->settings;
-    const uint32 shadowPageMask =
+    uint32 shadowPageMask =
         settings.virtualShadows && impl_->shadowProjection
             ? Rhi::VirtualShadowPageMask(*impl_->shadowProjection, relativeModel, mesh.minimum_,
                                          mesh.maximum_, settings.shadowResolution,
                                          settings.shadowNormalBias)
             : LUX_VIRTUAL_SHADOW_ALL_PAGES;
+    if (outsideShadow)
+        shadowPageMask = 0;
     if (!impl_->modern->AddDraw({mesh.vertices_.handle_,
                                  mesh.indices_.handle_,
                                  texture ? texture->handle_ : 0,

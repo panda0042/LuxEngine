@@ -12,7 +12,8 @@ float3 Fresnel(float cosine, float3 f0)
     return f0 + (1.0f - f0) * pow(1.0f - saturate(cosine), 5.0f);
 }
 
-float3 Brdf(float3 base, float metal, float rough, float3 n, float3 v, float3 l)
+float3 BrdfWithDielectricF0(float3 base, float metal, float rough, float3 n, float3 v, float3 l,
+                            float dielectricF0)
 {
     const float3 h = SafeDirection(v + l, n);
     const float nl = saturate(dot(n, l));
@@ -25,8 +26,13 @@ float3 Brdf(float3 base, float metal, float rough, float3 n, float3 v, float3 l)
     const float distribution = a2 / max(3.14159265f * d * d, 1e-10f);
     const float visibility =
         0.5f / max(nl * sqrt(nv * nv * (1.0f - a2) + a2) + nv * sqrt(nl * nl * (1.0f - a2) + a2), 1e-5f);
-    const float3 f = Fresnel(vh, lerp(float3(0.04f, 0.04f, 0.04f), base, metal));
+    const float3 f = Fresnel(vh, lerp(float3(dielectricF0, dielectricF0, dielectricF0), base, metal));
     return ((1.0f - f) * (1.0f - metal) * base / 3.14159265f + distribution * visibility * f) * nl;
+}
+
+float3 Brdf(float3 base, float metal, float rough, float3 n, float3 v, float3 l)
+{
+    return BrdfWithDielectricF0(base, metal, rough, n, v, l, 0.04f);
 }
 
 #endif

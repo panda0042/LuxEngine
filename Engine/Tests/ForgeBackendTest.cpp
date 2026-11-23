@@ -3011,6 +3011,32 @@ void WaterComposite() {
           "opaque geometry in front of water retains its color and depth");
     Check(baseSide[1] > baseSide[0] + 40 && bentSide[0] > bentSide[1] + 30,
           "slope refracts the opaque scene across a color boundary");
+
+    settings.environmentColor = {0, 0, 0};
+    settings.sun = {{0, 0, -1}, {1, 1, 1}, .5f};
+    const auto glint = [&](float indexOfRefraction) {
+        GpuFrameCapture frame;
+        if (!CaptureFrame(session, frame, [&] {
+                if (!session.gpu.Clear(0, 0, 0, 1))
+                    return false;
+                context.BeginScene(camera, settings, 1);
+                Material3D water = WaterSurface::MakeMaterial();
+                water.albedoColor = {0, 0, 0, 1};
+                water.roughness = .3f;
+                water.water->indexOfRefraction = indexOfRefraction;
+                context.DrawMesh(mesh, Mat4::Scale({2, 2, 1}), water);
+                context.EndScene();
+                return context.GetLastAssetError().empty();
+            })) {
+            Check(false, "water glint frame captures");
+            return 0;
+        }
+        return read(frame)[0];
+    };
+    const int lowIorGlint = glint(1.1f);
+    const int waterGlint = glint(1.333f);
+    Check(lowIorGlint > 0 && waterGlint > lowIorGlint + 20,
+          "directional glint uses the water material's index of refraction");
     Check(session.gpu.GetCounters().validationErrors == 0,
           "the opaque color and depth snapshots introduce no GPU validation errors");
 }
@@ -3390,14 +3416,18 @@ void VirtualShadowMap() {
     settings.shadowResolution = 1024;
     Material3D ground, object;
     ground.albedoColor = {.5f, .5f, .5f, 1};
+    ground.alphaMode = MaterialAlphaMode::Opaque;
     object.albedoColor = {.6f, .15f, .04f, 1};
 
-    const auto capture = [&](GpuFrameCapture& frame, double receiverWidth = 10.) {
+    const auto capture = [&](GpuFrameCapture& frame, double receiverWidth = 10.,
+                             double receiverDepth = 0., double receiverZ = 0.) {
         return CaptureFrame(session, frame, [&] {
             if (!session.gpu.Clear(.03f, .04f, .05f, 1))
                 return false;
             context.BeginScene(camera, settings, 1);
-            context.DrawCube({0, -.1, 0}, {receiverWidth, .2, receiverWidth}, ground);
+            context.DrawCube({0, -.1, receiverZ},
+                             {receiverWidth, .2, receiverDepth > 0 ? receiverDepth : receiverWidth},
+                             ground);
             context.DrawCube({0, 1, 0}, {1, 2, 1}, object);
             context.EndScene();
             return context.GetLastAssetError().empty();
@@ -3436,6 +3466,23 @@ void VirtualShadowMap() {
     settings.virtualShadows = true;
     Check(capture(dense, 120.) && session.gpu.GetFrameStats().virtualShadowPages == 0,
           "oversubscribed atlas falls back to dense coverage");
+    Check(session.gpu.GetFrameStats().requestedShadowPages == 16,
+          "dense fallback reports the requested virtual pages");
+
+    settings.sun.direction = {0, -1, 0};
+    GpuFrameCapture rectangular;
+    const bool rectangleCaptured = capture(rectangular, 40., 24., -9.);
+    const auto rectangleStats = session.gpu.GetFrameStats();
+    Check(rectangleCaptured && rectangleStats.requestedShadowPages == 12 &&
+              rectangleStats.virtualShadowPages == 12,
+          "a rectangular atlas keeps twelve requested pages resident");
+    settings.virtualShadows = false;
+    if (!capture(dense, 40., 24., -9.) || rectangular.rgba.size() != dense.rgba.size())
+        return Check(false, "rectangular and dense reference frames capture");
+    changed = 0;
+    for (size_t i = 0; i < dense.rgba.size(); i += 4)
+        changed += std::abs(int(dense.rgba[i]) - int(rectangular.rgba[i])) > 2;
+    Check(changed < 16, "rectangular atlas preserves dense shadow coverage");
     Check(session.gpu.GetCounters().validationErrors == 0,
           "virtual shadow pass reports no GPU validation errors");
 }

@@ -14,6 +14,7 @@ struct Options {
 };
 
 Options ParseOptions(int argc, char** argv);
+void WritePpmCapture(LuxEngine::GpuDevice& device, const std::filesystem::path& path);
 void Text(std::string_view text, LuxEngine::Vec2 position, float pixel = .035f,
           LuxEngine::Vec4 color = {.22f, .16f, .12f, 1});
 void Sprite(const std::string& relative, LuxEngine::Vec2 position, LuxEngine::Vec2 size,

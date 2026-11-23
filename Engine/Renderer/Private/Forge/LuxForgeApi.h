@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 18u
+#define LUX_FORGE_API_VERSION 19u
 
 #if defined(_WIN32)
 #if defined(LUX_FORGE_BUILD)
@@ -94,6 +94,10 @@ typedef struct LuxForgeStats {
     uint32_t restirPasses;
     uint32_t radianceCascadePasses;
     uint32_t virtualShadowPages;
+    uint32_t requestedShadowPages;
+    uint64_t gpuTimingFrame;
+    double gpuTimeMs;
+    double gpuShadowTimeMs;
 } LuxForgeStats;
 
 typedef struct LuxForgePointLight {

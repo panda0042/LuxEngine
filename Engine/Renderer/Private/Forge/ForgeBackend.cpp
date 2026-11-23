@@ -160,9 +160,7 @@ bool ForgeBackend::Initialize(Window& window, const GpuDeviceConfig& config) {
     info_.apiVersion = forgeInfo.apiVersion;
     info_.driverVersion = forgeInfo.driverVersion;
     info_.maxTextureSize = forgeInfo.maxTextureSize;
-    // Report usable RHI timing, not merely hardware support. The Forge bridge does not yet
-    // record/read GPU timestamp queries, so gpuTimeMs remains unavailable on this backend.
-    info_.gpuTimestamps = false;
+    info_.gpuTimestamps = forgeInfo.gpuTimestamps != 0;
     info_.rayTracing = forgeInfo.rayTracing != 0;
 
     lib_ = std::move(lib);
@@ -225,7 +223,11 @@ void ForgeBackend::UpdateFrameStats() {
     frameStats_.restirPasses = stats.restirPasses;
     frameStats_.radianceCascadePasses = stats.radianceCascadePasses;
     frameStats_.virtualShadowPages = stats.virtualShadowPages;
+    frameStats_.requestedShadowPages = stats.requestedShadowPages;
     frameStats_.vertexBytes = stats.vertexBytes;
+    frameStats_.gpuTimingFrame = stats.gpuTimingFrame;
+    frameStats_.gpuTimeMs = stats.gpuTimeMs;
+    frameStats_.gpuShadowTimeMs = stats.gpuShadowTimeMs;
 }
 
 GpuDeviceCounters ForgeBackend::GetCounters() const {

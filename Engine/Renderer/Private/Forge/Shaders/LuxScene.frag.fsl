@@ -110,8 +110,8 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 tint, float roughness, 
     const float scattering = backlight * (exp(-0.5f * refractedDepth) + crest) * 0.12f;
     const float3 inscatter = tint * (environment + sun * scattering * sunVisibility);
     const float3 transmitted = behind * transmittance + inscatter * (1.0f - transmittance);
-    const float3 glint = Brdf(float3(0, 0, 0), 0.0f, roughness, n, v,
-                              -gLights.direction.xyz) * sun * sunVisibility;
+    const float3 glint = BrdfWithDielectricF0(float3(0, 0, 0), 0.0f, roughness, n, v,
+                                              -gLights.direction.xyz, f0) * sun * sunVisibility;
     const float shore = sceneDepth < 0.999999f ? 1.0f - smoothstep(0.02f, 0.18f, thickness) : 0.0f;
     const float foam = saturate(shore * 0.75f + crest);
     const float3 foamLight = (environment + sun * sunVisibility *
@@ -165,8 +165,14 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
     const uint pointCount = min(gLights.count.x, 16u);
     if (gDraw.water.w > 1.0f)
     {
+        const float3 normalDx = ddx(normal), normalDy = ddy(normal);
+        const float variance =
+            min(0.125f * (dot(normalDx, normalDx) + dot(normalDy, normalDy)), 0.0016f);
         const float roughness = clamp(In.options.z, 0.045f, 1.0f);
-        RETURN(float4(clamp(WaterSurface(In, normal, color.rgb, roughness, frontFacing), 0.0f, 65504.0f), 1.0f));
+        const float alpha = roughness * roughness;
+        const float filteredRoughness = sqrt(sqrt(saturate(alpha * alpha + variance)));
+        const float3 surface = WaterSurface(In, normal, color.rgb, filteredRoughness, frontFacing);
+        RETURN(float4(clamp(surface, 0.0f, 65504.0f), 1.0f));
     }
     const float3 v = SafeDirection(gLights.camera.xyz - In.world, normal);
     const float metal = saturate(In.options.y * ((maps & 2u) != 0u ? SampleMaterial(gMetallicTexture, In.uv).r : 1.0f));

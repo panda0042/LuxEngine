@@ -1,6 +1,7 @@
 // The Forge render bridge: D3D12 on Windows, Vulkan on Linux, Metal on macOS.
 #include "LuxForgeApi.h"
 #include "LuxRayTracing.hpp"
+#include "Shaders/LuxVirtualShadowLayout.h"
 
 // Standard headers first: The Forge's IMemory.h turns malloc/free into compile errors.
 #include <algorithm>
@@ -228,6 +229,10 @@ struct LuxForgeDevice {
     // HDR scene (renderScene). The targets are shared by every pass and frame: one queue runs
     // the passes in order and barriers separate each write from the reads before it.
     static constexpr uint32_t kMaxScenePasses = 16;  // per frame, like the Vulkan backend
+    static constexpr uint32_t kTimingQueriesPerSlot = 1 + kMaxScenePasses;
+    QueryPool* timingQueries = nullptr;
+    double timestampFrequency = 0;
+    uint32_t shadowQueries[8] = {};
     static constexpr uint32_t kSceneDescriptors = 3; // opaque, tone, water
     static constexpr uint32_t kSceneStride = 256;    // LuxSceneData block, CBV aligned
     static constexpr uint32_t kSceneIdleFrames = 60; // unused targets are released after this
@@ -261,6 +266,7 @@ struct LuxForgeDevice {
     Shader* shaderScene = nullptr;
     Shader* shaderRayScene = nullptr;
     Shader* shaderShadow = nullptr;
+    Shader* shaderOpaqueShadow = nullptr;
     Shader* shaderSky = nullptr;
     Shader* shaderTone = nullptr;
     Shader* shaderOpaqueCopy = nullptr;
@@ -270,6 +276,7 @@ struct LuxForgeDevice {
     Pipeline* materialPipelines[12] = {};
     Pipeline* rayMaterialPipelines[12] = {};
     Pipeline* pipelineShadow = nullptr;
+    Pipeline* pipelineOpaqueShadow = nullptr;
     Pipeline* pipelineSky = nullptr;
     Pipeline* pipelineTone = nullptr;
     Pipeline* pipelineOpaqueCopy = nullptr;
@@ -280,7 +287,6 @@ struct LuxForgeDevice {
     uint32_t scenePasses = 0;         // in the current frame
     uint64_t lastShadowlessFrame = 0; // last frame with a scene pass that had shadows off
     SceneTarget hdr, sceneDepth, shadow, waterHdr, waterDepth;
-    uint32_t shadowResolution = 0;
     std::vector<PendingTarget> pendingTargets;
     std::vector<EnvironmentSlot> environments = std::vector<EnvironmentSlot>(1); // id 0 unused
     std::vector<uint32_t> freeEnvironmentIds;
@@ -1028,6 +1034,8 @@ void Destroy(LuxForgeDevice* device) {
         if (device->graphicsQueue)
             waitQueueIdle(device->graphicsQueue);
         RemoveCaptureBuffer(device);
+        if (device->timingQueries)
+            exitQueryPool(device->renderer, device->timingQueries);
         ShutdownScene(device);
         Shutdown2D(device);
         DestroyForgeRayTracing(device->rayTracing);
@@ -1120,6 +1128,17 @@ LuxForgeDevice* Create(const LuxForgeInitDesc* desc, char* error, size_t errorSi
     QueueDesc queue = {};
     queue.mType = QUEUE_TYPE_GRAPHICS;
     initQueue(device->renderer, &queue, &device->graphicsQueue);
+#if defined(DIRECT3D12) || defined(VULKAN)
+    if (device->graphicsQueue && device->renderer->pGpu->mTimestampQueries) {
+        getTimestampFrequency(device->graphicsQueue, &device->timestampFrequency);
+        if (std::isfinite(device->timestampFrequency) && device->timestampFrequency > 0) {
+            const auto count = device->framesInFlight * LuxForgeDevice::kTimingQueriesPerSlot;
+            const QueryPoolDesc queries{"LuxForge GPU timings", QUERY_TYPE_TIMESTAMP, count, 0};
+            initQueryPool(device->renderer, &queries, &device->timingQueries);
+        }
+    }
+#endif
+    device->frameStats.gpuTimeMs = device->frameStats.gpuShadowTimeMs = -1.0;
 #if defined(_WIN32)
     device->window.type = WINDOW_HANDLE_TYPE_WIN32;
     device->window.window = static_cast<HWND>(desc->nativeWindow);
@@ -1222,6 +1241,7 @@ int BeginFrame(LuxForgeDevice* device) {
     device->frameStats.restirPasses = 0;
     device->frameStats.radianceCascadePasses = 0;
     device->frameStats.virtualShadowPages = 0;
+    device->frameStats.requestedShadowPages = 0;
     device->frameStats.vertexBytes = 0;
 
     uint32_t index = UINT32_MAX;
@@ -1240,6 +1260,36 @@ int BeginFrame(LuxForgeDevice* device) {
 
     Cmd* cmd = device->element.pCmds[0];
     beginCmd(cmd);
+    if (device->timingQueries) {
+        const auto slot = device->frameSlot;
+        const auto first = slot * LuxForgeDevice::kTimingQueriesPerSlot;
+        if (device->slotSubmitted[slot] > device->frameStats.gpuTimingFrame) {
+            const auto elapsed = [&](uint32_t query) {
+                QueryData data = {};
+                getQueryData(device->renderer, device->timingQueries, query, &data);
+                return data.mValid && data.mEndTimestamp >= data.mBeginTimestamp
+                           ? double(data.mEndTimestamp - data.mBeginTimestamp) * 1000.0 /
+                                 device->timestampFrequency
+                           : -1.0;
+            };
+            device->frameStats.gpuTimingFrame = device->slotSubmitted[slot];
+            device->frameStats.gpuTimeMs = elapsed(first);
+            double shadowTime = 0;
+            for (uint32_t i = 1; i <= device->shadowQueries[slot]; ++i) {
+                const auto part = elapsed(first + i);
+                if (part < 0) {
+                    shadowTime = -1;
+                    break;
+                }
+                shadowTime += part;
+            }
+            device->frameStats.gpuShadowTimeMs = shadowTime;
+        }
+        device->shadowQueries[slot] = 0;
+        cmdResetQuery(cmd, device->timingQueries, first, LuxForgeDevice::kTimingQueriesPerSlot);
+        QueryDesc frameQuery{first};
+        cmdBeginQuery(cmd, device->timingQueries, &frameQuery);
+    }
     RenderTarget* target = device->swapChain->ppRenderTargets[index];
     RenderTargetBarrier barrier = {target, RESOURCE_STATE_PRESENT, RESOURCE_STATE_RENDER_TARGET};
     cmdResourceBarrier(cmd, 0, nullptr, 0, nullptr, 1, &barrier);
@@ -1289,6 +1339,12 @@ int EndFrame(LuxForgeDevice* device) {
     device->frameOpen = false;
     Cmd* cmd = device->element.pCmds[0];
     RenderTarget* target = device->swapChain->ppRenderTargets[device->imageIndex];
+    if (device->timingQueries) {
+        QueryDesc frameQuery{device->frameSlot * LuxForgeDevice::kTimingQueriesPerSlot};
+        cmdEndQuery(cmd, device->timingQueries, &frameQuery);
+        cmdResolveQuery(cmd, device->timingQueries, frameQuery.mIndex,
+                        1 + device->shadowQueries[device->frameSlot]);
+    }
 
     const bool capture =
         device->captureRequested && PrepareCaptureBuffer(device, target->mWidth, target->mHeight);
@@ -2058,7 +2114,7 @@ void GetInfo(const LuxForgeDevice* device, LuxForgeInfo* info) {
                   device->renderer->pGpu->mGpuVendorPreset.mGpuName);
     info->framesInFlight = device->framesInFlight;
     info->validation = device->validation ? 1 : 0;
-    info->gpuTimestamps = device->renderer->pGpu->mTimestampQueries ? 1 : 0;
+    info->gpuTimestamps = device->timingQueries ? 1 : 0;
     info->rayTracing = device->rayTracing != nullptr;
     // Desktop Metal and D3D12 both guarantee 16384-wide 2D textures. Vulkan exposes its
     // native limit directly; the public texture API supports at most 16384 on every backend.
@@ -2175,7 +2231,6 @@ void BeginSceneFrame(LuxForgeDevice* device) {
         (device->lastShadowlessFrame == last ||
          last - device->shadow.lastUsedFrame >= LuxForgeDevice::kSceneIdleFrames)) {
         RetireTarget(device, device->shadow);
-        device->shadowResolution = 0;
     }
     if (device->waterHdr.target &&
         last - device->waterHdr.lastUsedFrame >= LuxForgeDevice::kSceneIdleFrames)
@@ -2306,10 +2361,11 @@ bool InitScene(LuxForgeDevice* device) {
     };
     device->shaderScene = LoadShader(device, "luxscene.vert", "luxscene.frag");
     device->shaderShadow = LoadShader(device, "luxshadow.vert", "luxshadow.frag");
+    device->shaderOpaqueShadow = LoadShader(device, "luxshadow.vert", nullptr);
     device->shaderSky = LoadShader(device, "luxfullscreen.vert", "luxsky.frag");
     device->shaderTone = LoadShader(device, "luxfullscreen.vert", "luxtone.frag");
     device->shaderOpaqueCopy = LoadShader(device, "luxfullscreen.vert", "luxopaquecopy.frag");
-    if (!device->shaderScene || !device->shaderShadow || !device->shaderSky ||
+    if (!device->shaderScene || !device->shaderShadow || !device->shaderOpaqueShadow || !device->shaderSky ||
         !device->shaderTone || !device->shaderOpaqueCopy)
         return failed("LuxForge HDR scene shader files are missing next to the renderer library");
 
@@ -2413,6 +2469,8 @@ bool InitScene(LuxForgeDevice* device) {
     graphics.pVertexLayout = &layout;
     graphics.pDepthState = &depthTest;
     addPipeline(device->renderer, &desc, &device->pipelineShadow);
+    graphics.pShaderProgram = device->shaderOpaqueShadow;
+    addPipeline(device->renderer, &desc, &device->pipelineOpaqueShadow);
 
     DepthStateDesc copyDepth = depthTest;
     copyDepth.mDepthFunc = CMP_ALWAYS;
@@ -2429,7 +2487,8 @@ bool InitScene(LuxForgeDevice* device) {
     graphics.pVertexLayout = nullptr;
     graphics.pDepthState = &noDepth;
     addPipeline(device->renderer, &desc, &device->pipelineTone);
-    if (!device->pipelineSky || !device->pipelineShadow || !device->pipelineTone ||
+    if (!device->pipelineSky || !device->pipelineShadow || !device->pipelineOpaqueShadow ||
+        !device->pipelineTone ||
         !device->pipelineOpaqueCopy) {
         // pipelineTone doubles as "initialised": make sure it is unset after a partial failure.
         if (device->pipelineTone)
@@ -2490,13 +2549,13 @@ void ShutdownScene(LuxForgeDevice* device) {
             removePipeline(device->renderer, pipeline);
         pipeline = nullptr;
     }
-    for (Pipeline** pipeline : {&device->pipelineShadow, &device->pipelineSky,
+    for (Pipeline** pipeline : {&device->pipelineShadow, &device->pipelineOpaqueShadow, &device->pipelineSky,
                                 &device->pipelineTone, &device->pipelineOpaqueCopy})
         if (*pipeline) {
             removePipeline(device->renderer, *pipeline);
             *pipeline = nullptr;
         }
-    for (Shader** shader : {&device->shaderScene, &device->shaderShadow, &device->shaderSky,
+    for (Shader** shader : {&device->shaderScene, &device->shaderShadow, &device->shaderOpaqueShadow, &device->shaderSky,
                             &device->shaderTone, &device->shaderOpaqueCopy})
         if (*shader) {
             removeShader(device->renderer, *shader);
@@ -2624,7 +2683,6 @@ void DestroyEnvironment(LuxForgeDevice* device, uint32_t id) {
         RetireTarget(device, device->hdr);
         RetireTarget(device, device->sceneDepth);
         RetireTarget(device, device->shadow);
-        device->shadowResolution = 0;
     }
 }
 
@@ -2697,30 +2755,31 @@ Pipeline* MaterialPipeline(LuxForgeDevice* device, const LuxForgeSceneDraw& draw
     return rayTracing ? device->rayMaterialPipelines[variant] : device->materialPipelines[variant];
 }
 
-void DrawSceneMeshes(LuxForgeDevice* device, Cmd* cmd, const std::vector<SceneMesh>& draws,
-                     uint32_t firstDraw, size_t begin, size_t end, Pipeline* pipeline, bool shadow,
-                     bool rayTracing = false, uint32_t shadowPageBit = 0) {
+Pipeline* DrawSceneMeshes(LuxForgeDevice* device, Cmd* cmd, const std::vector<SceneMesh>& draws,
+                          uint32_t firstDraw, size_t begin, size_t end, Pipeline* pipeline,
+                          uint32_t sceneEntry, Pipeline* shadowPipeline, bool rayTracing = false,
+                          uint32_t shadowPages = LUX_VIRTUAL_SHADOW_ALL_PAGES) {
     const uint32_t stride = LuxForgeDevice::kVertexStride;
     const uint64_t offset = 0;
+    const bool opaqueShadow = shadowPipeline == device->pipelineOpaqueShadow;
     uint32_t boundMaterial = UINT32_MAX, boundVertices = 0, boundIndices = 0;
     for (size_t i = begin; i < end; ++i) {
         const auto& mesh = draws[i];
         const auto& draw = *mesh.draw;
-        if (shadowPageBit && !(draw.shadowPageMask & shadowPageBit))
+        if (shadowPipeline &&
+            (draw.alphaMode == 2 || WaterDraw(draw) || !(draw.shadowPageMask & shadowPages)))
             continue;
-        if (shadow && (draw.alphaMode == 2 || WaterDraw(draw)))
-            continue;
-        if (!shadow) {
-            auto* next = MaterialPipeline(device, draw, rayTracing);
-            if (next != pipeline) {
-                BindPipeline(device, cmd, next);
-                pipeline = next;
-                // The Forge can reset vertex binding bookkeeping on pipeline swaps.
-                boundMaterial = UINT32_MAX;
-                boundVertices = boundIndices = 0;
-            }
+        Pipeline* next = shadowPipeline ? shadowPipeline : MaterialPipeline(device, draw, rayTracing);
+        if (next != pipeline) {
+            BindPipeline(device, cmd, next);
+            if (shadowPipeline)
+                BindDescriptors(device, cmd, sceneEntry, device->sceneSet);
+            pipeline = next;
+            // The Forge can reset vertex binding bookkeeping on pipeline swaps.
+            boundMaterial = UINT32_MAX;
+            boundVertices = boundIndices = 0;
         }
-        if (mesh.material != boundMaterial) {
+        if (!opaqueShadow && mesh.material != boundMaterial) {
             BindDescriptors(
                 device, cmd, mesh.material % LuxForgeDevice::kMaterialBankSize,
                 device->materialSets[device->frameSlot]
@@ -2741,6 +2800,7 @@ void DrawSceneMeshes(LuxForgeDevice* device, Cmd* cmd, const std::vector<SceneMe
         cmdDrawIndexed(cmd, draw.indexCount, 0, 0);
         ++device->frameStats.drawCalls;
     }
+    return pipeline;
 }
 
 void DrawColorMeshes(LuxForgeDevice* device, Cmd* cmd, const std::vector<SceneMesh>& draws,
@@ -2754,7 +2814,7 @@ void DrawColorMeshes(LuxForgeDevice* device, Cmd* cmd, const std::vector<SceneMe
     BindDescriptors(device, cmd,
                     device->frameSlot * LuxForgeDevice::kMaxLightBlocks + device->currentLight,
                     device->lightSet);
-    DrawSceneMeshes(device, cmd, draws, firstDraw, begin, end, pipeline, false, rayTracing);
+    DrawSceneMeshes(device, cmd, draws, firstDraw, begin, end, pipeline, entry, nullptr, rayTracing);
 }
 
 void WriteSceneMaterial(LuxForgeDevice* device, uint32_t materialIndex,
@@ -2858,14 +2918,12 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
     const size_t waterEnd = firstLayer(SceneLayer::Blend);
     const size_t colorEnd = firstLayer(SceneLayer::ShadowOnly);
     const auto shadowPlan = PlanVirtualShadow(*scene, visible, colorEnd);
-    const uint32_t atlasResolution = shadowPlan.atlasResolution;
-    if (shadows && device->shadowResolution != atlasResolution) {
+    if (shadows && (!device->shadow.target || device->shadow.target->mWidth != shadowPlan.atlasWidth ||
+                    device->shadow.target->mHeight != shadowPlan.atlasHeight)) {
         RetireTarget(device, device->shadow);
-        device->shadowResolution = 0;
-        if (!AddSceneTarget(device, device->shadow, atlasResolution, atlasResolution, kDepthFormat,
+        if (!AddSceneTarget(device, device->shadow, shadowPlan.atlasWidth, shadowPlan.atlasHeight, kDepthFormat,
                             4, "LuxForge shadow map"))
             return Fail(device, "Shadow map could not be created");
-        device->shadowResolution = atlasResolution;
     }
     const bool water = opaqueEnd < waterEnd;
     if (water && !device->waterHdr.target &&
@@ -3082,6 +3140,12 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
     }
 #endif
     if (shadows) {
+        QueryDesc shadowQuery{};
+        if (device->timingQueries) {
+            shadowQuery.mIndex = device->frameSlot * LuxForgeDevice::kTimingQueriesPerSlot +
+                                 ++device->shadowQueries[device->frameSlot];
+            cmdBeginQuery(cmd, device->timingQueries, &shadowQuery);
+        }
         Transition(cmd, device->shadow, RESOURCE_STATE_DEPTH_WRITE);
         BindRenderTargetsDesc bind = {};
         bind.mDepthStencil.pDepthStencil = device->shadow.target;
@@ -3090,12 +3154,13 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
         bind.mDepthStencil.mLoadActionStencil = LOAD_ACTION_DONTCARE;
         bind.mDepthStencil.mStoreActionStencil = STORE_ACTION_DONTCARE;
         cmdBindRenderTargets(cmd, &bind);
-        BindPipeline(device, cmd, device->pipelineShadow);
-        BindDescriptors(device, cmd, entry, device->sceneSet);
-        DrawVirtualShadowPages(device, cmd, visible, firstDraw, shadowPlan);
+        DrawVirtualShadowPages(device, cmd, visible, firstDraw, entry, shadowPlan);
         device->frameStats.virtualShadowPages += shadowPlan.count;
+        device->frameStats.requestedShadowPages += shadowPlan.requestedPages;
         cmdBindRenderTargets(cmd, nullptr);
         Transition(cmd, device->shadow, RESOURCE_STATE_SHADER_RESOURCE);
+        if (device->timingQueries)
+            cmdEndQuery(cmd, device->timingQueries, &shadowQuery);
         device->shadow.lastUsedFrame = thisFrame;
     }
 
