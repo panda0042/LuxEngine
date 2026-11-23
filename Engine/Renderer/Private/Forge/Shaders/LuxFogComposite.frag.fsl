@@ -1,0 +1,56 @@
+#include "LuxFogComposite.srt.h"
+#include "LuxFogSampling.h"
+#include "LuxToneMapping.h"
+
+STRUCT(FullscreenOutput)
+{
+    DATA(float4, position, SV_Position);
+    DATA(float2, uv, TEXCOORD0);
+};
+
+float4 SampleFogSlice(uint2 a, uint2 b, float2 weight, uint slice) {
+    const float4 topLeft = gFogVolume[FogIndex(a, slice)];
+    const float4 topRight = gFogVolume[FogIndex(uint2(b.x, a.y), slice)];
+    const float4 bottomLeft = gFogVolume[FogIndex(uint2(a.x, b.y), slice)];
+    const float4 bottomRight = gFogVolume[FogIndex(b, slice)];
+    return lerp(lerp(topLeft, topRight, weight.x), lerp(bottomLeft, bottomRight, weight.x),
+                weight.y);
+}
+
+float4 SampleFog(float2 uv, float depth) {
+    const float2 lastCell = float2(LUX_FOG_COLUMNS - 1u, LUX_FOG_ROWS - 1u);
+    const float2 coord = clamp(uv * (lastCell + 1.0f) - 0.5f, float2(0.0f, 0.0f), lastCell);
+    const uint2 a = uint2(coord);
+    const uint2 b = min(a + 1u, uint2(lastCell));
+    const float2 weight = coord - float2(a);
+
+    const float maxDistance = gFog.options.x;
+    // Recover positive eye depth from hardware Z without amplifying sky/far plane error.
+    const float eyeDepth = -gFog.up.w / max(-gFog.right.w - depth, -gFog.up.w / maxDistance);
+    const float zScale = FogDepthScale(maxDistance);
+    const float slicePosition = float(LUX_FOG_SLICES) * saturate(
+        log2(1.0f + eyeDepth / zScale) / log2(1.0f + maxDistance / zScale));
+    const uint upper = min(uint(slicePosition), LUX_FOG_SLICES - 1u);
+    const uint lower = upper > 0u ? upper - 1u : 0u;
+    const float4 above = SampleFogSlice(a, b, weight, upper);
+    float4 below = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    if (upper > 0u)
+        below = SampleFogSlice(a, b, weight, lower);
+    return lerp(below, above, slicePosition - float(upper));
+}
+
+ROOT_SIGNATURE(DefaultRootSignature)
+float4 PS_MAIN(FullscreenOutput In)
+{
+    INIT_MAIN;
+    const int2 pixel = int2(In.position.xy);
+    float4 color = LoadTex2D(gFogHdr, NO_SAMPLER, pixel, 0);
+    if (color.a <= 0.0f)
+        discard;
+    const float depth = LoadTex2D(gFogDepth, NO_SAMPLER, pixel, 0).r;
+    const float2 uv = In.position.xy * gFog.composite.xy;
+    const float4 fog = SampleFog(uv, depth);
+    const float3 scene = color.rgb / max(color.a, 1e-6f);
+    color.rgb = ToneMapSdr(scene * fog.a + fog.rgb, gFog.composite.z, gFog.composite.w);
+    RETURN(color);
+}

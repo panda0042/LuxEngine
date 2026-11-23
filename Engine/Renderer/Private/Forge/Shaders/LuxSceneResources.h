@@ -2,7 +2,12 @@
 #define LUX_SCENE_RESOURCES_H
 
 #include "LuxStructs.h"
+#ifdef LUX_RAY_QUERY
+#include "fsl_ext.h"
+#include "LuxRayScene.srt.h"
+#else
 #include "LuxScene.srt.h"
+#endif
 
 #define SampleMaterial(texture, uv)                                                                \
     (gDraw.options.x > 0.5f           ? (fmod(gDraw.materialOptions.z, 2.0f) > 0.5f                \
@@ -28,8 +33,8 @@ bool BelowAlphaCutoff(float alpha, float tintAlpha, float2 uv, float2 position) 
         const float coverageWeight = saturate(log2(max(footprint, 1.0f)));
         const uint2 pixel = uint2(position) & 3u;
         const uint x = pixel.x ^ pixel.y;
-        const uint bayer = ((x & 1u) << 3u) | ((pixel.y & 1u) << 2u) |
-                           (x & 2u) | ((pixel.y & 2u) >> 1u);
+        const uint bayer =
+            ((x & 1u) << 3u) | ((pixel.y & 1u) << 2u) | (x & 2u) | ((pixel.y & 2u) >> 1u);
         const float threshold = (float(bayer) + 0.5f) / 16.0f;
         cutoff = lerp(cutoff, tintAlpha * threshold, coverageWeight);
     }

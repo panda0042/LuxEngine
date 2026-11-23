@@ -198,6 +198,26 @@ SceneSettings InheritedSettings(const SceneSettings& current, const SceneSetting
     inherit(render.shadowRange, oldRender.shadowRange, newRender.shadowRange);
     inherit(render.shadowDepthBias, oldRender.shadowDepthBias, newRender.shadowDepthBias);
     inherit(render.shadowNormalBias, oldRender.shadowNormalBias, newRender.shadowNormalBias);
+    auto& rays = render.rayTracing;
+    const auto& oldRays = oldRender.rayTracing;
+    const auto& newRays = newRender.rayTracing;
+    inherit(rays.shadows, oldRays.shadows, newRays.shadows);
+    inherit(rays.reflections, oldRays.reflections, newRays.reflections);
+    inherit(rays.refractions, oldRays.refractions, newRays.refractions);
+    inherit(rays.indirectDiffuse, oldRays.indirectDiffuse, newRays.indirectDiffuse);
+    inherit(rays.maxBounces, oldRays.maxBounces, newRays.maxBounces);
+    inherit(rays.maxDistance, oldRays.maxDistance, newRays.maxDistance);
+    inherit(rays.indirectStrength, oldRays.indirectStrength, newRays.indirectStrength);
+    auto& fog = render.fog;
+    const auto& oldFog = oldRender.fog;
+    const auto& newFog = newRender.fog;
+    inheritVec3(fog.color, oldFog.color, newFog.color);
+    inherit(fog.density, oldFog.density, newFog.density);
+    inherit(fog.maxDistance, oldFog.maxDistance, newFog.maxDistance);
+    inherit(fog.heightFalloff, oldFog.heightFalloff, newFog.heightFalloff);
+    inherit(fog.baseHeight, oldFog.baseHeight, newFog.baseHeight);
+    inherit(fog.anisotropy, oldFog.anisotropy, newFog.anisotropy);
+    inherit(fog.rayTracedShadows, oldFog.rayTracedShadows, newFog.rayTracedShadows);
     return result;
 }
 

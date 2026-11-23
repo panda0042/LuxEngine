@@ -31,7 +31,7 @@ bool Utf8(const std::string& text) {
 } // namespace
 
 bool ValidateRender3DSettings(const Render3DSettings& s) {
-    const auto bounded = [](float v, float low, float high) {
+    const auto bounded = [](double v, double low, double high) {
         return std::isfinite(v) && v >= low && v <= high;
     };
     const auto color = [&](Vec3 v) {
@@ -48,18 +48,29 @@ bool ValidateRender3DSettings(const Render3DSettings& s) {
            (s.shadowResolution == 1024 || s.shadowResolution == 2048 ||
             s.shadowResolution == 4096) &&
            bounded(s.shadowRange, 1, 10000) && bounded(s.shadowDepthBias, 0, .1f) &&
-           bounded(s.shadowNormalBias, 0, 10);
+           bounded(s.shadowNormalBias, 0, 10) && s.rayTracing.maxBounces >= 1 &&
+           s.rayTracing.maxBounces <= 4 && bounded(s.rayTracing.maxDistance, .1, 100000) &&
+           bounded(s.rayTracing.indirectStrength, 0, 1) && bounded(s.fog.color.x, 0, 1) &&
+           bounded(s.fog.color.y, 0, 1) && bounded(s.fog.color.z, 0, 1) &&
+           bounded(s.fog.density, 0, 10) && bounded(s.fog.maxDistance, .1, 100000) &&
+           bounded(s.fog.heightFalloff, 0, 10) && std::isfinite(s.fog.baseHeight) &&
+           bounded(s.fog.anisotropy, -.9f, .9f);
 }
 
 bool IsDefaultRender3DSettings(const Render3DSettings& s) {
     const Render3DSettings d;
     const auto fields = [](const Render3DSettings& v) {
-        return std::tie(v.mode, v.sun.direction.x, v.sun.direction.y, v.sun.direction.z,
-                        v.sun.color.x, v.sun.color.y, v.sun.color.z, v.sun.intensity,
-                        v.environmentColor.x, v.environmentColor.y, v.environmentColor.z,
-                        v.environmentIntensity, v.environmentRotation, v.environmentPath,
-                        v.imageBasedLighting, v.showSkybox, v.toneMapping, v.shadows,
-                        v.shadowResolution, v.shadowRange, v.shadowDepthBias, v.shadowNormalBias);
+        return std::tie(
+            v.mode, v.sun.direction.x, v.sun.direction.y, v.sun.direction.z, v.sun.color.x,
+            v.sun.color.y, v.sun.color.z, v.sun.intensity, v.environmentColor.x,
+            v.environmentColor.y, v.environmentColor.z, v.environmentIntensity,
+            v.environmentRotation, v.environmentPath, v.imageBasedLighting, v.showSkybox,
+            v.toneMapping, v.shadows, v.shadowResolution, v.shadowRange, v.shadowDepthBias,
+            v.shadowNormalBias, v.rayTracing.shadows, v.rayTracing.reflections,
+            v.rayTracing.refractions, v.rayTracing.indirectDiffuse, v.rayTracing.maxBounces,
+            v.rayTracing.maxDistance, v.rayTracing.indirectStrength, v.fog.color.x, v.fog.color.y,
+            v.fog.color.z, v.fog.density, v.fog.maxDistance, v.fog.heightFalloff, v.fog.baseHeight,
+            v.fog.anisotropy, v.fog.rayTracedShadows);
     };
     return fields(s) == fields(d);
 }

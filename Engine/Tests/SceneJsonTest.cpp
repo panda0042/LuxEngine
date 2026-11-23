@@ -57,6 +57,11 @@ void Test() {
     child.AddComponent<InstanceSourceComponent>() = {root.GetId(), 9};
     auto settings = scene.GetSettings();
     settings.render3D.environmentPath = "Assets/환경.hdr";
+    settings.render3D.rayTracing.shadows = true;
+    settings.render3D.rayTracing.maxBounces = 3;
+    settings.render3D.fog.density = .0625f;
+    settings.render3D.fog.baseHeight = 1000000000.25;
+    settings.render3D.fog.rayTracedShadows = true;
     Check(scene.SetSettings(settings), "render settings setup");
     std::string text;
     Check(scene.SerializeToString(text), "JSON serialization succeeds");
@@ -73,12 +78,15 @@ void Test() {
     legacyJson["settings"]["render3d"]["mode"] = 0;
     legacyJson["settings"]["render3d"]["tone_mapping"] = false;
     legacyJson["settings"]["render3d"]["shadow_resolution"] = 4096;
+    legacyJson["settings"]["render3d"].erase("ray_tracing");
+    legacyJson["settings"]["render3d"].erase("volumetric_fog");
     Scene migrated;
     Check(migrated.DeserializeFromString(legacyJson.dump()), "older render mode loads");
     const auto& migratedRender = migrated.GetSettings().render3D;
     Check(migratedRender.mode == Render3DMode::Pbr && !migratedRender.toneMapping &&
               migratedRender.shadowResolution == 4096 &&
-              migratedRender.environmentPath == settings.render3D.environmentPath,
+              migratedRender.environmentPath == settings.render3D.environmentPath &&
+              !migratedRender.rayTracing.Enabled() && migratedRender.fog.density == 0,
           "old scenes render as PBR and preserve their authored controls");
     std::string migratedText;
     Check(migrated.SerializeToString(migratedText) &&
@@ -87,6 +95,11 @@ void Test() {
 
     Scene restored;
     Check(restored.DeserializeFromString(text), "all component types load");
+    const auto& render = restored.GetSettings().render3D;
+    Check(render.rayTracing.shadows && render.rayTracing.maxBounces == 3 &&
+              render.fog.density == .0625f && render.fog.baseHeight == 1000000000.25 &&
+              render.fog.rayTracedShadows,
+          "ray tracing and volume settings survive a save and reload");
     std::string second;
     Check(restored.SerializeToString(second) && second == text, "deterministic lossless roundtrip");
     const auto& loadedCamera = restored.GetComponent<CameraComponent>(root.GetId());

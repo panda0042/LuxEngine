@@ -19,12 +19,16 @@ function Get-LuxWindowsRuntimeFiles {
         "DIRECT3D12/luxmesh.frag",
         "DIRECT3D12/luxscene.vert",
         "DIRECT3D12/luxscene.frag",
+        "DIRECT3D12/luxscene_rt.frag",
         "DIRECT3D12/luxshadow.vert",
         "DIRECT3D12/luxshadow.frag",
         "DIRECT3D12/luxfullscreen.vert",
         "DIRECT3D12/luxsky.frag",
         "DIRECT3D12/luxopaquecopy.frag",
         "DIRECT3D12/luxtone.frag",
+        "DIRECT3D12/luxfog.comp",
+        "DIRECT3D12/luxfogray.comp",
+        "DIRECT3D12/luxfogcomposite.frag",
         "DIRECT3D12/luxoceanfft.comp",
         "DIRECT3D12/luxoceanassemble.comp"
     )

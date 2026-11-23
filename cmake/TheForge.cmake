@@ -150,11 +150,53 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         viewType]] [[if (pDesc->mHeight > 1 || (pDesc->mFlags & TEXTURE_CREATION_FLAG_FORCE_2D))
     {
         viewType]] _forge_vulkan "${_forge_vulkan}")
+    # Acceleration-structure descriptor enums are not dense. Count their real type in
+    # the SRT pool without indexing by the Vulkan enum or reserving uniform descriptors.
+    string(REPLACE [[const VkDescriptorType type =
+                desc->mType == DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : ToVkDescriptorType(desc->mType);
+
+            if (!poolSizeIndex[type]) //-V557
+            {
+                poolSizeIndex[type] = ++poolSizeCount; //-V557
+            }
+            outPoolSizes[poolSizeIndex[type] - 1].type = type;                     //-V557
+            outPoolSizes[poolSizeIndex[type] - 1].descriptorCount += desc->mCount; //-V557]]
+        [[const VkDescriptorType type = ToVkDescriptorType(desc->mType);
+            uint32_t index = 0;
+            while (index < poolSizeCount && outPoolSizes[index].type != type)
+                ++index;
+            if (index == poolSizeCount)
+            {
+                outPoolSizes[index].type = type;
+                ++poolSizeCount;
+            }
+            if (type == VK_DESCRIPTOR_TYPE_SAMPLER)
+                poolSizeIndex[VK_DESCRIPTOR_TYPE_SAMPLER] = index + 1;
+            outPoolSizes[index].descriptorCount += desc->mCount;]]
+        _forge_vulkan "${_forge_vulkan}")
     file(WRITE "${LUX_FORGE_CONFIG_DIR}/Vulkan.c.tmp" "${_forge_vulkan}")
     configure_file("${LUX_FORGE_CONFIG_DIR}/Vulkan.c.tmp"
         "${LUX_FORGE_CONFIG_DIR}/Vulkan.c" COPYONLY)
     list(REMOVE_ITEM LUX_FORGE_SOURCES "${TF}/Graphics/Vulkan/Vulkan.c")
     list(APPEND LUX_FORGE_SOURCES "${LUX_FORGE_CONFIG_DIR}/Vulkan.c")
+
+    # A TLAS stores one geometry descriptor regardless of its instance count. The pinned
+    # source indexes its inline primitive count with the instance count and corrupts memory.
+    # Destroy the acceleration structure handle before releasing its backing buffer.
+    file(READ "${TF}/Graphics/Vulkan/VulkanRaytracing.c" _forge_vulkan_raytracing)
+    string(REPLACE "pAS->pGeometryDescs + pDesc->mBottom.mDescCount"
+        "pAS->pGeometryDescs + (ACCELERATION_STRUCTURE_TYPE_BOTTOM == pDesc->mType ? pDesc->mBottom.mDescCount : 1)"
+        _forge_vulkan_raytracing "${_forge_vulkan_raytracing}")
+    set(_forge_destroy_as [[    vkDestroyAccelerationStructureKHR(pRaytracing->pRenderer->mVk.pDevice, pAccelerationStructure->mAccelerationStructure,
+                                      GetAllocationCallbacks(VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR));]])
+    string(REPLACE "${_forge_destroy_as}\n\n" "" _forge_vulkan_raytracing "${_forge_vulkan_raytracing}")
+    string(REPLACE [[    removeBuffer(pRaytracing->pRenderer, pAccelerationStructure->pASBuffer);]]
+        "${_forge_destroy_as}\n    removeBuffer(pRaytracing->pRenderer, pAccelerationStructure->pASBuffer);"
+        _forge_vulkan_raytracing "${_forge_vulkan_raytracing}")
+    file(CONFIGURE OUTPUT "${LUX_FORGE_CONFIG_DIR}/VulkanRaytracing.c"
+        CONTENT "${_forge_vulkan_raytracing}" @ONLY NEWLINE_STYLE LF)
+    list(REMOVE_ITEM LUX_FORGE_SOURCES "${TF}/Graphics/Vulkan/VulkanRaytracing.c")
+    list(APPEND LUX_FORGE_SOURCES "${LUX_FORGE_CONFIG_DIR}/VulkanRaytracing.c")
 endif()
 if(WIN32)
     include(TheForgeD3D12)
@@ -186,7 +228,8 @@ else()
     target_link_libraries(TheForge PUBLIC X11::X11 PkgConfig::ForgeWayland)
     target_compile_options(TheForge PRIVATE -Wno-unused-result -Wno-deprecated-declarations)
 endif()
-add_library(LuxForge SHARED Engine/Renderer/Private/Forge/LuxForge.cpp)
+add_library(LuxForge SHARED Engine/Renderer/Private/Forge/LuxForge.cpp
+    Engine/Renderer/Private/Forge/LuxRayTracing.cpp)
 set_target_properties(LuxForge PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON DEBUG_POSTFIX "")
 target_compile_definitions(LuxForge PRIVATE LUX_FORGE_BUILD)
 if(LUX_BUILD_TESTS)

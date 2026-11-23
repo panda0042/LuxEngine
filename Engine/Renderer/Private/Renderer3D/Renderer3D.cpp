@@ -544,12 +544,20 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     const auto relativeModel = Mat4::Translate(impl_->camera * -1) * model;
     const bool shadowOnly =
         OutsideClipVolume(impl_->viewProjection * relativeModel, mesh.minimum_, mesh.maximum_);
-    if (shadowOnly && (!impl_->shadowProjection || material.water ||
-                       material.alphaMode == MaterialAlphaMode::Blend ||
-                       OutsideClipVolume(*impl_->shadowProjection * relativeModel, mesh.minimum_,
-                                         mesh.maximum_))) {
-        ++impl_->stats.meshCount;
-        return;
+    if (shadowOnly) {
+        const bool opaqueCaster = !material.water && material.alphaMode != MaterialAlphaMode::Blend;
+        const bool rasterCaster = opaqueCaster && impl_->shadowProjection &&
+                                  !OutsideClipVolume(*impl_->shadowProjection * relativeModel,
+                                                     mesh.minimum_, mesh.maximum_);
+        const auto& settings = impl_->settings;
+        const bool useRays = settings.rayTracing.Enabled() ||
+                             (settings.fog.density > 0 && settings.fog.rayTracedShadows);
+        const bool rayCaster =
+            opaqueCaster && !mesh.ocean_ && useRays && impl_->device->GetInfo().rayTracing;
+        if (!rasterCaster && !rayCaster) {
+            ++impl_->stats.meshCount;
+            return;
+        }
     }
     if (!impl_->modern)
         impl_->modern = lockedState->CreateScene3DRenderer();

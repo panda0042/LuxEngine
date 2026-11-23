@@ -36,6 +36,7 @@ STRUCT(LuxSceneData) {
     DATA(float4x4, shadowMatrix, None);
     DATA(float4, shadowOptions, None); // x: on, y: 1/resolution, z: depth bias, w: normal bias
     DATA(float4, frameSize, None);     // width, height, 1/width, 1/height
+    DATA(float4, rayOptions, None);    // effects mask, distance, bounces, diffuse strength
 };
 
 #endif

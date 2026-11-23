@@ -46,6 +46,11 @@
 #include "LuxScene.frag.fsl"
 #end
 
+#frag FT_RAYTRACING luxscene_rt.frag
+#define LUX_RAY_QUERY
+#include "LuxScene.frag.fsl"
+#end
+
 #vert luxshadow.vert
 #include "LuxShadow.vert.fsl"
 #end
@@ -68,6 +73,21 @@
 
 #frag luxtone.frag
 #include "LuxTone.frag.fsl"
+#end
+
+#comp luxfog.comp
+#include "LuxFog.comp.fsl"
+#end
+
+#frag luxfogcomposite.frag
+#include "LuxFogComposite.frag.fsl"
+#end
+
+#comp FT_RAYTRACING luxfogray.comp
+#if defined(VULKAN)
+#define LUX_FOG_RAY
+#endif
+#include "LuxFog.comp.fsl"
 #end
 
 #comp luxoceanfft.comp

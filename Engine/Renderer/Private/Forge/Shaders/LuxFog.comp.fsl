@@ -1,0 +1,73 @@
+#if defined(LUX_FOG_RAY)
+#include "fsl_ext.h"
+#include "LuxFogRayCompute.srt.h"
+#include "LuxRayVisibility.h"
+#else
+#include "LuxFogCompute.srt.h"
+#endif
+#include "LuxFogSampling.h"
+
+float FogShadow(float3 position) {
+#if defined(LUX_FOG_RAY)
+    const float3 towardSun = gFog.lightDirection.xyz;
+    return RayOccluded(position + towardSun * 0.002f, towardSun, gFog.shadowOptions.w) ? 0.0f
+                                                                                      : 1.0f;
+#else
+    if (gFog.shadowOptions.x < 0.5f)
+        return 1.0f;
+    const float4 clip = mul(gFog.shadowMatrix, float4(position, 1.0f));
+    const float3 ndc = clip.xyz / clip.w;
+    const float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+    if (uv.x < 0.0f || uv.x >= 1.0f || uv.y < 0.0f || uv.y >= 1.0f ||
+        ndc.z < 0.0f || ndc.z > 1.0f)
+        return 1.0f;
+    const float resolution = round(1.0f / gFog.shadowOptions.y);
+    const float nearest = LoadTex2D(gFogShadow, NO_SAMPLER, int2(uv * resolution), 0).r;
+    return ndc.z - gFog.shadowOptions.z <= nearest ? 1.0f : 0.0f;
+#endif
+}
+
+ROOT_SIGNATURE(ComputeRootSignature)
+NUM_THREADS(8, 8, 1)
+void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
+{
+    INIT_MAIN;
+    const uint2 cell = threadId.xy;
+    if (cell.x >= LUX_FOG_COLUMNS || cell.y >= LUX_FOG_ROWS) {
+        RETURN();
+    }
+
+    const float2 uv = (float2(cell) + 0.5f) / float2(LUX_FOG_COLUMNS, LUX_FOG_ROWS);
+    const float2 ndc = float2(2.0f * uv.x - 1.0f, 1.0f - 2.0f * uv.y);
+    const float3 ray = gFog.forward.xyz + ndc.x * gFog.right.xyz + ndc.y * gFog.up.xyz;
+    const float rayLength = length(ray);
+    const float g = gFog.options.w;
+    const float cosTheta = dot(ray / rayLength, gFog.lightDirection.xyz);
+    const float phase = (1.0f - g * g) /
+                        (12.566370614359172f * pow(max(1.0f + g * g - 2.0f * g * cosTheta,
+                                                       1e-4f), 1.5f));
+    const float3 sun = gFog.lightRadiance.xyz * phase;
+    const bool hasSun = dot(sun, sun) > 0.0f;
+    const float zScale = FogDepthScale(gFog.options.x);
+    const float zStep = log2(1.0f + gFog.options.x / zScale) / float(LUX_FOG_SLICES);
+
+    float previous = 0.0f;
+    float transmittance = 1.0f;
+    float3 scatter = float3(0.0f, 0.0f, 0.0f);
+    for (uint slice = 0u; slice < LUX_FOG_SLICES; ++slice) {
+        const float end = zScale * (exp2(zStep * float(slice + 1u)) - 1.0f);
+        const float3 samplePosition = ray * ((previous + end) * 0.5f);
+        const float altitude = max(gFog.options.z + samplePosition.y, 0.0f);
+        const float extinction = gFog.colorDensity.w * exp(-altitude * gFog.options.y);
+        const float stepT = exp(-extinction * (end - previous) * rayLength);
+        float visibility = 1.0f;
+        if (hasSun && stepT < 1.0f && transmittance > 1e-5f)
+            visibility = FogShadow(samplePosition);
+        const float3 incoming = gFog.ambientRadiance.xyz + sun * visibility;
+        scatter += transmittance * (1.0f - stepT) * gFog.colorDensity.rgb * incoming;
+        transmittance *= stepT;
+        gFogVolume[FogIndex(cell, slice)] = float4(scatter, transmittance);
+        previous = end;
+    }
+    RETURN();
+}
