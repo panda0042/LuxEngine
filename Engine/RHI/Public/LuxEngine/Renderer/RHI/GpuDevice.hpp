@@ -72,6 +72,7 @@ struct GpuDeviceInfo {
     bool validation = false;
     bool synchronizationValidation = false;
     bool presentFences = false;
+    bool rayTracing = false; // The renderer can use hardware-accelerated ray queries.
 };
 
 struct GpuFrameStats {
@@ -83,6 +84,10 @@ struct GpuFrameStats {
     uint32 uniformBinds = 0;
     uint32 submissions = 0;
     uint32 computeDispatches = 0;
+    uint32 rayTracedPasses = 0;
+    uint32 accelerationStructureBuilds = 0;
+    uint32 volumetricFogPasses = 0;
+    uint32 rayVolumetricFogPasses = 0;
     uint64 vertexBytes = 0;
     uint64 uploadBytes = 0;
     double cpuWaitMs = 0.0;

@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 16u
+#define LUX_FORGE_API_VERSION 17u
 
 #if defined(_WIN32)
 #if defined(LUX_FORGE_BUILD)
@@ -52,6 +52,7 @@ typedef struct LuxForgeInfo {
     uint32_t driverVersion;
     uint32_t maxTextureSize; // native 2D limit, capped by the engine's supported 16384 limit
     int gpuTimestamps;
+    int rayTracing;
 } LuxForgeInfo;
 
 // Results of beginFrame.
@@ -85,6 +86,10 @@ typedef struct LuxForgeStats {
     uint32_t validationErrors;
     uint32_t validationWarnings;
     uint32_t computeDispatches;
+    uint32_t rayTracedPasses;
+    uint32_t accelerationStructureBuilds;
+    uint32_t volumetricFogPasses;
+    uint32_t rayVolumetricFogPasses;
 } LuxForgeStats;
 
 typedef struct LuxForgePointLight {
@@ -155,6 +160,10 @@ typedef struct LuxForgeScene {
     float shadowOptions[4];    // x: on, y: 1/resolution, z: depth bias, w: normal bias
     uint32_t shadowResolution; // 0 = no shadow pass (then shadowOptions[0] must be 0)
     uint32_t environmentMap;   // from createEnvironment
+    float rayOptions[4];       // effect flags, maximum ray distance, bounces, indirect strength
+    float fogColorDensity[4];  // linear RGB scattering albedo and base extinction
+    float fogOptions[4];       // maximum distance, height falloff, camera altitude, anisotropy
+    int rayTracedFog;
 } LuxForgeScene;
 
 typedef struct LuxForgeApi {

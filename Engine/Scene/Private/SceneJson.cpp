@@ -47,6 +47,26 @@ Json ToJson(Render3DMode value) {
     return static_cast<int>(value);
 }
 
+Json ToJson(const RayTracingSettings& rays) {
+    return {{"shadows", rays.shadows},
+            {"reflections", rays.reflections},
+            {"refractions", rays.refractions},
+            {"indirect_diffuse", rays.indirectDiffuse},
+            {"max_bounces", rays.maxBounces},
+            {"max_distance", rays.maxDistance},
+            {"indirect_strength", rays.indirectStrength}};
+}
+
+Json ToJson(const VolumetricFogSettings& fog) {
+    return {{"color", ToJson(fog.color)},
+            {"density", fog.density},
+            {"max_distance", fog.maxDistance},
+            {"height_falloff", fog.heightFalloff},
+            {"base_height", fog.baseHeight},
+            {"anisotropy", fog.anisotropy},
+            {"ray_traced_shadows", fog.rayTracedShadows}};
+}
+
 Json ToJson(const std::vector<Keyframe>& keys) {
     Json result = Json::array();
     for (const auto& key : keys)
@@ -123,6 +143,26 @@ void ReadJsonValue(const Json& json, Render3DMode& value) {
     ReadJsonValue(json, number);
     RequireValidScene(number >= 0 && number <= 1);
     value = static_cast<Render3DMode>(number);
+}
+
+void ReadJsonValue(const Json& json, RayTracingSettings& rays) {
+    ReadJsonValue(json.at("shadows"), rays.shadows);
+    ReadJsonValue(json.at("reflections"), rays.reflections);
+    ReadJsonValue(json.at("refractions"), rays.refractions);
+    ReadJsonValue(json.at("indirect_diffuse"), rays.indirectDiffuse);
+    ReadJsonValue(json.at("max_bounces"), rays.maxBounces);
+    ReadJsonValue(json.at("max_distance"), rays.maxDistance);
+    ReadJsonValue(json.at("indirect_strength"), rays.indirectStrength);
+}
+
+void ReadJsonValue(const Json& json, VolumetricFogSettings& fog) {
+    ReadJsonValue(json.at("color"), fog.color);
+    ReadJsonValue(json.at("density"), fog.density);
+    ReadJsonValue(json.at("max_distance"), fog.maxDistance);
+    ReadJsonValue(json.at("height_falloff"), fog.heightFalloff);
+    ReadJsonValue(json.at("base_height"), fog.baseHeight);
+    ReadJsonValue(json.at("anisotropy"), fog.anisotropy);
+    ReadJsonValue(json.at("ray_traced_shadows"), fog.rayTracedShadows);
 }
 
 void ReadJsonValue(const Json& json, std::vector<uint8_t>& tiles) {
@@ -275,6 +315,12 @@ bool Scene::SerializeToString(std::string& output) {
         render["shadow_range"] = ToJson(settings_.render3D.shadowRange);
         render["shadow_depth_bias"] = ToJson(settings_.render3D.shadowDepthBias);
         render["shadow_normal_bias"] = ToJson(settings_.render3D.shadowNormalBias);
+        const auto rays = ToJson(settings_.render3D.rayTracing);
+        const auto fog = ToJson(settings_.render3D.fog);
+        if (rays != ToJson(RayTracingSettings{}))
+            render["ray_tracing"] = rays;
+        if (fog != ToJson(VolumetricFogSettings{}))
+            render["volumetric_fog"] = fog;
         settings["render3d"] = std::move(render);
         root["settings"] = std::move(settings);
         root["entities"] = Json::array();
@@ -500,6 +546,10 @@ bool Scene::DeserializeJson(const std::string& data) {
         ReadJsonValue(render.at("shadow_range"), settings.render3D.shadowRange);
         ReadJsonValue(render.at("shadow_depth_bias"), settings.render3D.shadowDepthBias);
         ReadJsonValue(render.at("shadow_normal_bias"), settings.render3D.shadowNormalBias);
+        if (render.contains("ray_tracing"))
+            ReadJsonValue(render.at("ray_tracing"), settings.render3D.rayTracing);
+        if (render.contains("volumetric_fog"))
+            ReadJsonValue(render.at("volumetric_fog"), settings.render3D.fog);
         RequireValidScene(parsed.SetSettings(settings));
         const auto& entities = root.at("entities");
         RequireValidScene(entities.is_array() && entities.size() <= MaxEntities);

@@ -163,6 +163,7 @@ bool ForgeBackend::Initialize(Window& window, const GpuDeviceConfig& config) {
     // Report usable RHI timing, not merely hardware support. The Forge bridge does not yet
     // record/read GPU timestamp queries, so gpuTimeMs remains unavailable on this backend.
     info_.gpuTimestamps = false;
+    info_.rayTracing = forgeInfo.rayTracing != 0;
 
     lib_ = std::move(lib);
     window_ = &window;
@@ -216,6 +217,10 @@ void ForgeBackend::UpdateFrameStats() {
     frameStats_.descriptorBinds = stats.descriptorBinds;
     frameStats_.uniformBinds = stats.uniformBinds;
     frameStats_.computeDispatches = stats.computeDispatches;
+    frameStats_.rayTracedPasses = stats.rayTracedPasses;
+    frameStats_.accelerationStructureBuilds = stats.accelerationStructureBuilds;
+    frameStats_.volumetricFogPasses = stats.volumetricFogPasses;
+    frameStats_.rayVolumetricFogPasses = stats.rayVolumetricFogPasses;
     frameStats_.vertexBytes = stats.vertexBytes;
 }
 
@@ -666,6 +671,20 @@ public:
             scene.shadowResolution = settings.shadowResolution;
         }
         scene.environmentMap = active ? environment_ : neutral_;
+        const auto& rays = settings.rayTracing;
+        const unsigned effects = (rays.shadows ? 1u : 0u) | (rays.reflections ? 2u : 0u) |
+                                 (rays.refractions ? 4u : 0u) | (rays.indirectDiffuse ? 8u : 0u);
+        Copy4(scene.rayOptions, {static_cast<float>(effects), rays.maxDistance,
+                                 static_cast<float>(rays.maxBounces), rays.indirectStrength});
+        const auto& fog = settings.fog;
+        Copy4(scene.fogColorDensity,
+              {static_cast<float>(fog.color.x), static_cast<float>(fog.color.y),
+               static_cast<float>(fog.color.z), fog.density});
+        Copy4(scene.fogOptions,
+              {fog.maxDistance, fog.heightFalloff,
+               static_cast<float>(std::clamp(origin.y - fog.baseHeight, -1e6, 1e6)),
+               fog.anisotropy});
+        scene.rayTracedFog = fog.rayTracedShadows;
 
         uint32_t drawn = 0;
         if (!api.renderScene(lib->device, &scene, draws_.data(),

@@ -14,6 +14,31 @@ struct DirectionalLight {
     float intensity = 1.0f;
 };
 
+struct RayTracingSettings {
+    // Raster shadows remain available through Render3DSettings::shadows.
+    bool shadows = false;
+    bool reflections = false;
+    bool refractions = false;
+    bool indirectDiffuse = false;
+    uint32 maxBounces = 2;
+    float maxDistance = 100.0f;
+    float indirectStrength = .35f;
+
+    bool Enabled() const {
+        return shadows || reflections || refractions || indirectDiffuse;
+    }
+};
+
+struct VolumetricFogSettings {
+    Vec3 color{.8, .86, .95}; // Single-scattering albedo in linear RGB.
+    float density = 0;        // Extinction per world unit at baseHeight. Zero disables the pass.
+    float maxDistance = 100;
+    float heightFalloff = .1f;
+    double baseHeight = 0;
+    float anisotropy = .2f;
+    bool rayTracedShadows = false;
+};
+
 struct Render3DSettings {
     Render3DMode mode = Render3DMode::Pbr;
     DirectionalLight sun{{.5f, -1.0f, .5f}, {1.0f, .98f, .95f}, 1.0f};
@@ -29,6 +54,8 @@ struct Render3DSettings {
     float shadowRange = 50.0f;
     float shadowDepthBias = .0005f;
     float shadowNormalBias = .02f;
+    RayTracingSettings rayTracing;
+    VolumetricFogSettings fog;
 };
 
 LUX_API bool ValidateRender3DSettings(const Render3DSettings& settings);

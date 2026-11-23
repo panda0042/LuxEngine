@@ -34,7 +34,7 @@ cmake --build build --target LuxEditor LuxForgeBackendTests
 ctest --test-dir build -L forge --output-on-failure
 ```
 
-`LUX_ENABLE_FORGE`나 `LUX_RENDER_BACKEND`를 선택할 필요가 없다. 렌더러 파일이 없거나 엔진과 ABI가 맞지 않으면 초기화 오류를 반환한다. ABI 버전은 현재 `16`이며 엔진과 렌더러를 함께 다시 빌드해야 한다.
+`LUX_ENABLE_FORGE`나 `LUX_RENDER_BACKEND`를 선택할 필요가 없다. 렌더러 파일이 없거나 엔진과 ABI가 맞지 않으면 초기화 오류를 반환한다. ABI 버전은 현재 `17`이며 엔진과 렌더러를 함께 다시 빌드해야 한다.
 
 ## 프레임과 자원 수명
 
@@ -53,6 +53,8 @@ Vulkan에서도 `INIT_RS_DESC`와 `initRootSignature`를 호출해 기본 정적
 HDR 내부 버퍼의 RGB는 노출을 적용한 뒤 색 공간 변환을 포함한 ACES SDR 근사와 sRGB 인코딩을 거친다. 자세한 재질과 맵 형식은 [재질 문서](Materials.md)에 정리했다.
 
 `Mesh3D::UploadOcean`으로 만든 수면은 같은 그래픽 큐에서 행·열 역 FFT와 정점 생성 패스를 실행한다. 정점 버퍼를 수면 패스가 직접 읽으며, 여러 타일이 같은 버퍼를 공유할 수 있다. 사용 예시는 [FFT 바다 예제](../samples/OceanSpectrum/README.md)에 있다.
+
+씬별 하드웨어 레이 쿼리와 프러스텀 복셀 포그는 `Render3DSettings`에서 켠다. 적용 범위와 지원 여부 확인 방법은 [레이 조명과 포그](RayLighting.md)에 있다.
 
 ## 실행 파일과 SDK 배포
 

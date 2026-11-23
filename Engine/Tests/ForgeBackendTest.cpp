@@ -3015,6 +3015,118 @@ void WaterComposite() {
           "the opaque color and depth snapshots introduce no GPU validation errors");
 }
 
+void FroxelFog() {
+    Session session(128, 128, {}, true);
+    if (!session.ok)
+        return Check(false, "session for froxel fog");
+    const std::array<Vertex3D, 4> quad{{{{-.5, -.5, 0}, {0, 0, 1}, {0, 0}},
+                                        {{.5, -.5, 0}, {0, 0, 1}, {1, 0}},
+                                        {{.5, .5, 0}, {0, 0, 1}, {1, 1}},
+                                        {{-.5, .5, 0}, {0, 0, 1}, {0, 1}}}};
+    const std::array<uint32, 6> indices{0, 1, 2, 0, 2, 3};
+    Mesh3D plane;
+    if (!plane.Upload(&session.gpu, quad, indices))
+        return Check(false, "froxel fixture plane uploads");
+
+    Renderer3D::Context context(&session.gpu);
+    Render3DSettings settings;
+    settings.imageBasedLighting = false;
+    settings.shadows = false;
+    settings.toneMapping = false;
+    settings.environmentColor = {.5, .5, .5};
+    settings.sun.intensity = 0;
+    settings.fog.color = {};
+    settings.fog.heightFalloff = 0;
+    settings.fog.maxDistance = 24;
+    PerspectiveCamera camera(ToRadians(60), 1, .1, 100);
+    camera.SetTarget({0, 0, -1});
+    camera.SetPosition({0, 0, 0});
+    Material3D wall;
+    wall.albedoColor = {.8f, .8f, .8f, 1};
+    wall.alphaMode = MaterialAlphaMode::Opaque;
+    const auto render = [&](const Render3DSettings& options, double depth, bool water, bool blocker,
+                            std::array<int, 4>& center) {
+        GpuFrameCapture frame;
+        if (!CaptureFrame(session, frame, [&] {
+                if (!session.gpu.Clear(0, 0, 0, 1))
+                    return false;
+                context.BeginScene(camera, options, 1);
+                context.DrawMesh(plane, Mat4::Translate({0, 0, -depth}) * Mat4::Scale({24, 24, 1}),
+                                 wall);
+                if (water) {
+                    auto surface = WaterSurface::MakeMaterial();
+                    surface.water->absorption = {};
+                    context.DrawMesh(plane, Mat4::Translate({0, 0, -3}) * Mat4::Scale({5, 5, 1}),
+                                     surface);
+                }
+                if (blocker)
+                    context.DrawCube({0, 2, -7}, {10, .2, 13}, wall);
+                context.EndScene();
+                return context.GetLastAssetError().empty();
+            })) {
+            std::printf("  froxel frame failed: %s / %s\n", context.GetLastAssetError().c_str(),
+                        session.gpu.GetLastError().c_str());
+            return false;
+        }
+        center = At(frame, .5f, .5f);
+        return true;
+    };
+
+    constexpr float density = .15f;
+    auto fog = settings;
+    fog.fog.density = density;
+    std::array<int, 4> baseline, near, far, waterBaseline, waterFog;
+    if (!render(settings, 12, false, false, baseline))
+        return Check(false, "fog-disabled reference frame captures");
+    Check(session.gpu.GetFrameStats().volumetricFogPasses == 0, "zero density leaves fog disabled");
+    if (!render(fog, 3, false, false, near) || !render(fog, 12, false, false, far) ||
+        !render(settings, 12, true, false, waterBaseline) ||
+        !render(fog, 12, true, false, waterFog))
+        return Check(false, "froxel frames capture at different scene and water depths");
+    const auto attenuated = [density](int sample, double depth) {
+        const double srgb = sample / 255.;
+        const double linear = srgb <= .04045 ? srgb / 12.92 : std::pow((srgb + .055) / 1.055, 2.4);
+        const double absorbed = linear * std::exp(-density * depth);
+        return static_cast<int>(
+            std::lround(255 * (absorbed <= .0031308 ? absorbed * 12.92
+                                                    : 1.055 * std::pow(absorbed, 1 / 2.4) - .055)));
+    };
+    std::printf("  froxel base=%d near=%d far=%d water=%d->%d\n", baseline[0], near[0], far[0],
+                waterBaseline[0], waterFog[0]);
+    Check(baseline[0] > 100 && far[0] + 30 < near[0] &&
+              std::abs(near[0] - attenuated(baseline[0], 3)) <= 3 &&
+              std::abs(far[0] - attenuated(baseline[0], 12)) <= 3,
+          "the froxel transmittance follows Beer-Lambert over metric scene depth");
+    Check(waterBaseline[0] > 45 && std::abs(waterFog[0] - attenuated(waterBaseline[0], 3)) <= 3,
+          "fog integrates to the composited water depth");
+    const auto counters = session.gpu.GetFrameStats();
+    Check(counters.volumetricFogPasses == 1 && counters.computeDispatches == 1,
+          "the scene dispatches one froxel integration pass");
+
+    auto sun = fog;
+    sun.fog.color = {1, 1, 1};
+    sun.fog.anisotropy = 0;
+    sun.sun.direction = {0, -1, 0};
+    sun.sun.intensity = 7;
+    sun.environmentColor = {};
+    std::array<int, 4> unshadowed, shadowed;
+    if (!render(sun, 12, false, true, unshadowed))
+        return Check(false, "unshadowed froxel scattering captures");
+    sun.fog.rayTracedShadows = true;
+    if (!render(sun, 12, false, true, shadowed))
+        return Check(false, "ray-traced froxel scattering captures");
+    if (session.gpu.GetInfo().rayTracing) {
+        std::printf("  froxel sunlight unoccluded=%d occluded=%d\n", unshadowed[0], shadowed[0]);
+        Check(session.gpu.GetFrameStats().rayVolumetricFogPasses == 1 &&
+                  shadowed[0] + 20 < unshadowed[0],
+              "hardware visibility occludes the sun inside the fog volume");
+    } else {
+        Check(session.gpu.GetFrameStats().rayVolumetricFogPasses == 0 && shadowed == unshadowed,
+              "fog retains its raster fallback without hardware ray queries");
+    }
+    Check(session.gpu.GetCounters().validationErrors == 0, "froxel barriers validate");
+}
+
 void OceanFft() {
     Session session(144, 144, {}, true);
     if (!session.ok)
@@ -3118,6 +3230,148 @@ void OceanFft() {
     Check(session.gpu.GetCounters().validationErrors == 0, "GPU ocean barriers validate");
 }
 
+void RayTracedLighting() {
+    std::printf("[ray_traced_lighting]\n");
+    GpuDeviceConfig config;
+    config.vsync = false;
+    Session session(128, 128, config, true);
+    if (!session.ok)
+        return Check(false, "session for hardware ray tracing");
+
+    constexpr std::array<Vec3, 4> horizontal{
+        {{-.5, -.5, 0}, {.5, -.5, 0}, {.5, .5, 0}, {-.5, .5, 0}}};
+    constexpr std::array<Vec3, 4> vertical{
+        {{0, -.5, -.5}, {0, .5, -.5}, {0, .5, .5}, {0, -.5, .5}}};
+    constexpr std::array<uint32, 6> indices{0, 1, 2, 0, 2, 3};
+    const auto quad = [&](Mesh3D& mesh, const std::array<Vec3, 4>& positions, Vec3 normal) {
+        std::array<Vertex3D, 4> vertices;
+        for (size_t i = 0; i < vertices.size(); ++i)
+            vertices[i] = {positions[i], normal, {}};
+        return mesh.Upload(&session.gpu, vertices, indices);
+    };
+    Mesh3D screenPlane;
+    if (!quad(screenPlane, horizontal, {0, 0, 1}))
+        return Check(false, "ray tracing fixture geometry uploads");
+
+    Renderer3D::Context context(&session.gpu);
+    PerspectiveCamera camera(ToRadians(35), 1, .1, 50);
+    camera.SetPosition({0, 0, 3});
+    camera.SetTarget({0, 0, 0});
+    Render3DSettings settings;
+    settings.imageBasedLighting = false;
+    settings.shadows = false;
+    settings.toneMapping = false;
+    settings.environmentColor = {.12, .12, .12};
+    settings.sun.direction = {-2, 0, -1};
+    settings.sun.intensity = 3;
+    const auto capture = [&](GpuFrameCapture& frame, auto&& draw) {
+        return CaptureFrame(session, frame, [&] {
+            if (!session.gpu.Clear(0, 0, 0, 1))
+                return false;
+            context.BeginScene(camera, settings, 1);
+            draw();
+            context.EndScene();
+            return context.GetLastAssetError().empty();
+        });
+    };
+    Material3D matte;
+    matte.alphaMode = MaterialAlphaMode::Opaque;
+    matte.albedoColor = {.9f, .9f, .9f, 1};
+    const auto shadowScene = [&] {
+        context.DrawMesh(screenPlane, Mat4::Scale({3, 3, 1}), matte);
+        // The center's ray toward the sun intersects this quad at (2, 0, 1),
+        // outside the camera frustum. The raster shadow pass is disabled.
+        const Mat4 caster = Mat4::Translate({2, 0, 1}) * Mat4::Scale({.55, .55, 1});
+        context.DrawMesh(screenPlane, caster, matte);
+    };
+    GpuFrameCapture unshadowed, shadowed;
+    if (!capture(unshadowed, shadowScene))
+        return Check(false, "raster receiver frame captures");
+    settings.rayTracing.shadows = true;
+    if (!capture(shadowed, shadowScene)) {
+        std::printf("  graphics error: %s / %s\n", context.GetLastAssetError().c_str(),
+                    session.gpu.GetLastError().c_str());
+        return Check(false, "ray tracing receiver frame captures");
+    }
+    const auto light = At(unshadowed, .5f, .5f);
+    const auto shade = At(shadowed, .5f, .5f);
+    const auto rayStats = session.gpu.GetFrameStats();
+    std::printf("  shadow pixel %d -> %d, RT passes %u, AS builds %u\n", light[0], shade[0],
+                rayStats.rayTracedPasses, rayStats.accelerationStructureBuilds);
+    if (!session.gpu.GetInfo().rayTracing) {
+        Check(light == shade && rayStats.rayTracedPasses == 0 &&
+                  rayStats.accelerationStructureBuilds == 0,
+              "ray tracing settings preserve raster output without ray query support");
+        return;
+    }
+    Check(rayStats.rayTracedPasses > 0 && rayStats.accelerationStructureBuilds >= 2,
+          "builds a BLAS and TLAS and submits the ray-traced scene pass");
+    Check(light[0] > shade[0] + 25, "an off-screen caster blocks sunlight through the TLAS");
+
+    Mesh3D firstMirror, secondMirror, tiltedWater;
+    if (!quad(firstMirror, horizontal, {.555570233, 0, .831469612}) ||
+        !quad(secondMirror, vertical, {1, 0, 0}) ||
+        !quad(tiltedWater, horizontal, {.906307787, 0, .422618262}))
+        return Check(false, "reflection and refraction fixture geometry uploads");
+
+    settings.sun.intensity = 0;
+    settings.rayTracing = {};
+    settings.rayTracing.reflections = true;
+    settings.rayTracing.maxBounces = 1;
+    Material3D mirror;
+    mirror.alphaMode = MaterialAlphaMode::Opaque;
+    mirror.albedoColor = {1, 1, 1, 1};
+    mirror.metallic = 1;
+    mirror.roughness = .045f;
+    Material3D red;
+    red.alphaMode = MaterialAlphaMode::Opaque;
+    red.albedoColor = {1, 0, 0, 1};
+    const auto reflectionScene = [&] {
+        context.DrawMesh(firstMirror, Mat4::Scale({2, 2, 2}), mirror);
+        context.DrawMesh(secondMirror, Mat4::Translate({3, 0, 1.24}), mirror);
+        // From the first mirror, the center ray reaches x=3, z=1.24 and
+        // bounces back toward this red plane at x=1.55, z=1.84.
+        context.DrawMesh(secondMirror, Mat4::Translate({1.55, 0, 1.84}) * Mat4::Scale({1, .8, .45}),
+                         red);
+    };
+    GpuFrameCapture oneBounce, twoBounces;
+    if (!capture(oneBounce, reflectionScene))
+        return Check(false, "single-bounce reflection captures");
+    settings.rayTracing.maxBounces = 2;
+    if (!capture(twoBounces, reflectionScene))
+        return Check(false, "multi-bounce reflection captures");
+    const auto once = At(oneBounce, .5f, .5f);
+    const auto twice = At(twoBounces, .5f, .5f);
+    std::printf("  reflection one=%d,%d,%d two=%d,%d,%d\n", once[0], once[1], once[2], twice[0],
+                twice[1], twice[2]);
+    Check(std::abs(once[0] - once[1]) < 10 && twice[0] > twice[1] + 25,
+          "the second specular bounce reaches the off-screen red plane");
+
+    settings.rayTracing = {};
+    Material3D water;
+    water.albedoColor = {0, 0, 0, 1};
+    water.roughness = .06f;
+    water.water = WaterMaterial3D{{}, 2};
+    const auto refractionScene = [&] {
+        context.DrawMesh(tiltedWater, Mat4::Scale({2, 2, 2}), water);
+        context.DrawMesh(screenPlane, Mat4::Translate({-3.14, 0, -4}), red);
+    };
+    GpuFrameCapture rasterWater, tracedWater;
+    if (!capture(rasterWater, refractionScene))
+        return Check(false, "raster water frame captures");
+    settings.rayTracing.refractions = true;
+    if (!capture(tracedWater, refractionScene))
+        return Check(false, "ray-traced water frame captures");
+    const auto rasterColor = At(rasterWater, .5f, .5f);
+    const auto tracedColor = At(tracedWater, .5f, .5f);
+    std::printf("  refraction raster=%d,%d,%d RT=%d,%d,%d\n", rasterColor[0], rasterColor[1],
+                rasterColor[2], tracedColor[0], tracedColor[1], tracedColor[2]);
+    Check(std::abs(rasterColor[0] - rasterColor[1]) < 10 && tracedColor[0] > tracedColor[1] + 25,
+          "ray-traced water refraction sees geometry absent from opaque scene color");
+    Check(session.gpu.GetCounters().validationErrors == 0,
+          "ray queries and acceleration structure barriers validate");
+}
+
 void LargeMipTexture() {
     Session session(96, 96);
     if (!session.ok)
@@ -3205,6 +3459,8 @@ int main(int argc, char** argv) {
     run("scene_submission", SceneSubmission);
     run("water_composite", WaterComposite);
     run("ocean_fft", OceanFft);
+    run("ray_traced_lighting", RayTracedLighting);
+    run("froxel_fog", FroxelFog);
     run("materials", MaterialModes);
     run("material_textures", MaterialTextures);
     run("large_mips", LargeMipTexture);
