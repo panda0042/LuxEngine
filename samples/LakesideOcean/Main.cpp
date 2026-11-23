@@ -192,7 +192,7 @@ std::string AssetPath(const char* group, const char* filename) {
 class LakesideDemo final : public Application {
 public:
     explicit LakesideDemo(bool smoke)
-        : Application({"LuxEngine · Lakeside Sunrise", smoke ? 640u : 1440u, smoke ? 360u : 810u}),
+        : Application({"LuxEngine · Lakeside at Noon", smoke ? 640u : 1440u, smoke ? 360u : 810u}),
           smoke_(smoke) {}
 
 private:
@@ -236,22 +236,21 @@ private:
             buoy.AddComponent<BoxCollider3DComponent>().size = {BuoyRadius * 2, .3, BuoyRadius * 2};
         }
         settings_.showSkybox = true;
-        settings_.sun = {{-.24, -.096, .966}, {1, .64, .35}, 4.3f};
-        settings_.environmentPath = AssetPath("LakesideOcean", "lakeside_physical_dawn.hdr");
+        settings_.sun = {{-.451, -.618, .644}, {1, .98, .94}, 3.2f};
+        settings_.environmentPath = AssetPath("LakesideOcean", "lakeside_physical_noon.hdr");
         settings_.environmentIntensity = 1;
-        settings_.environmentColor = {.17, .22, .30};
+        settings_.environmentColor = {.23, .29, .38};
         settings_.shadowRange = 110;
         settings_.shadowNormalBias = .05f;
         settings_.virtualShadows = true;
-        settings_.waterReflection = {AssetPath("LakesideSunrise", "lakeside_sunrise_water.hdr"),
-                                     -112, 4, 256};
+        settings_.waterReflection = {AssetPath("RadkowLake", "radkow_lake_water.hdr"), -91, 4, 256};
         shore_.alphaMode = MaterialAlphaMode::Opaque;
         shore_.roughness = 1;
         shore_.normalScale = .65f;
         shore_.baseColorTexture = AssetPath("RockyGravel", "albedo.jpg");
         shore_.normalTexture = AssetPath("RockyGravel", "normal.png");
         shore_.roughnessTexture = AssetPath("RockyGravel", "roughness.png");
-        settings_.fog = {{.78, .83, .92}, .0065f, 155, .095f, .1, .60f, true};
+        settings_.fog = {{.76, .85, .96}, .0025f, 155, .095f, .1, .35f, true};
         settings_.rayTracing.shadows = true;
         settings_.rayTracing.maxDistance = 145;
         settings_.rayTracing.maxBounces = 2;
@@ -272,7 +271,7 @@ private:
                 paused_ = !paused_;
                 break;
             case LuxKey::F:
-                settings_.fog.density = settings_.fog.density > 0 ? 0.f : .0065f;
+                settings_.fog.density = settings_.fog.density > 0 ? 0.f : .0025f;
                 break;
             case LuxKey::R: {
                 auto& ray = settings_.rayTracing;

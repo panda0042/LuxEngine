@@ -64,6 +64,14 @@
       "files": 4,
       "version": "4K color, 2K normal and roughness",
       "manifest_sha256": "298bc7911a256293035a22d218af760c7c4586f6b87441e7be0e343f583d0116"
+    },
+    {
+      "name": "RadkowLake",
+      "source": "https://polyhaven.com/a/radkow_lake",
+      "license": "CC0-1.0",
+      "files": 2,
+      "manifest_sha256": "aea9ae1dd5245c58c9cd1521334a7a238382363576c90a924181ec2ad844a2ec",
+      "version": "4K source, 2K RGBE derivative"
     }
   ],
   "admission": "Existing CC0 graphics/audio plus the official Public Domain DungGeunMo Korean font; source grants, archive CRC/SHA-256 and copied-byte roster verified manually."

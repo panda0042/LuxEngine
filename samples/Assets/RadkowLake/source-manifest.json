@@ -1,0 +1,28 @@
+{
+  "name": "RadkowLake",
+  "source": "https://polyhaven.com/a/radkow_lake",
+  "license": "CC0-1.0",
+  "credits": [
+    "Grzegorz Wronkowski"
+  ],
+  "original": {
+    "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/4k/radkow_lake_4k.exr",
+    "bytes": 83675372,
+    "md5": "a65d42d411dfdfc5e2389f355679640b",
+    "width": 4096,
+    "height": 2048
+  },
+  "conversion": "PrepareHdrEnvironment.py --width 2048 --exposure -2",
+  "files": [
+    {
+      "path": "License.txt",
+      "bytes": 283,
+      "sha256": "bda261162f32530f202570b0bf8e69da24f38d1eb73f6ad51da64d57027faae9"
+    },
+    {
+      "path": "radkow_lake_water.hdr",
+      "bytes": 5756264,
+      "sha256": "0b33fcd06b8216eec847d0069892375b9d323fcb0ef19d7280a823a28519f484"
+    }
+  ]
+}
