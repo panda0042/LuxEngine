@@ -2730,6 +2730,31 @@ void TextureFiltering() {
     Check(IsColor(Pixel(alternating, .245f, .5f), 255, 0, 0) &&
               mixed(Pixel(alternating, .745f, .5f)),
           "filter selection follows each texture descriptor within the same frame");
+    Files files;
+    const auto atlasPath = files.Path("atlas.bmp");
+    const std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)> atlas(
+        SDL_CreateSurface(8, 8, SDL_PIXELFORMAT_RGBA32), SDL_DestroySurface);
+    const SDL_Rect firstFrame{0, 0, 4, 4};
+    Check(atlas &&
+              SDL_FillSurfaceRect(atlas.get(), nullptr,
+                                  SDL_MapSurfaceRGBA(atlas.get(), 0, 255, 0, 255)) &&
+              SDL_FillSurfaceRect(atlas.get(), &firstFrame,
+                                  SDL_MapSurfaceRGBA(atlas.get(), 255, 0, 0, 255)) &&
+              SDL_SaveBMP(atlas.get(), atlasPath.c_str()),
+          "write two-color sprite atlas");
+    const auto atlasFrame = graphics.Capture([&] {
+        graphics.gpu.Clear(0, 0, 0, 1);
+        Renderer2D::BeginScene(OrthographicCamera(-1, 1, -1, 1));
+        Check(Renderer2D::DrawSpriteAsset(Mat4::Translate({-.5, 0, 0}), atlasPath, 0, 2, 2,
+                                          {1, 1, 1, 1}) &&
+                  Renderer2D::DrawSpriteAsset(Mat4::Translate({.5, 0, 0}), atlasPath, 1, 2, 2,
+                                              {1, 1, 1, 1}),
+              "draw two atlas frames in the same batch");
+        Renderer2D::EndScene();
+    });
+    Check(IsColor(Pixel(atlasFrame, .49f, .74f), 255, 0, 0) &&
+              IsColor(Pixel(atlasFrame, .51f, .74f), 0, 255, 0),
+          "linear atlas filtering stays within each frame at a shared corner");
     GpuTexture moved = std::move(nearest);
     Check(!nearest.IsValid() && capture(moved).rgba == sharp.rgba,
           "texture moves preserve filtering");

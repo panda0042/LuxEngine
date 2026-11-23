@@ -13,6 +13,7 @@ struct ModelPart {
     std::filesystem::path albedo;
     float roughness = .9f;
     bool alphaMask = false;
+    float alphaCutoff = .5f;
 };
 
 struct Model {

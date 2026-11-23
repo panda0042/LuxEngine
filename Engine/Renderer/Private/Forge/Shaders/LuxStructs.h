@@ -12,6 +12,7 @@ STRUCT(LuxDraw) {
     DATA(float4, options, None);
     DATA(float4, materialOptions, None);
     DATA(float4, water, None); // RGB absorption per world unit and index of refraction
+    DATA(float4, textureOptions, None);
 };
 
 // Lighting set with SetLighting (16 point lights, like the Vulkan backend).

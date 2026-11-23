@@ -172,7 +172,7 @@ target_link_libraries(LuxForgeBackendTests PRIVATE LuxEngine::Engine)
 target_include_directories(LuxForgeBackendTests PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Renderer/Private")
 lux_set_target_warnings(LuxForgeBackendTests)
 lux_copy_runtime(LuxForgeBackendTests)
-foreach(suite diagnostics basics misuse ownership resize lifecycle frames drawing meshes scene3d materials material_textures scene_submission water_composite)
+foreach(suite diagnostics basics misuse ownership resize lifecycle frames drawing meshes scene3d materials material_textures large_mips scene_submission water_composite)
     add_test(NAME Forge_${suite} COMMAND LuxForgeBackendTests ${suite})
     set_tests_properties(Forge_${suite} PROPERTIES LABELS "gpu;forge" TIMEOUT 180 SKIP_RETURN_CODE 77
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:LuxForgeBackendTests>" ENVIRONMENT "SDL_AUDIO_DRIVER=dummy")

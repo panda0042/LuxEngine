@@ -13,6 +13,30 @@
      : gDraw.materialOptions.z < 2.5f ? SampleTex2D(texture, gMaterialAnisotropicClamp, uv)        \
                                       : SampleTex2D(texture, gMaterialAnisotropicRepeat, uv))
 
+#if defined(STAGE_FRAG)
+bool BelowAlphaCutoff(float alpha, float tintAlpha, float2 uv, float2 position) {
+    float cutoff = gDraw.options.z;
+    if (gDraw.textureOptions.z > 0.5f && gDraw.options.x < 0.5f) {
+        const float2 dx = ddx(uv) * gDraw.textureOptions.xy;
+        const float2 dy = ddy(uv) * gDraw.textureOptions.xy;
+        const float major = max(length(dx), length(dy));
+        float footprint = major;
+        if (gDraw.materialOptions.z > 1.5f) {
+            const float area = abs(dx.x * dy.y - dx.y * dy.x);
+            footprint = max(major * 0.125f, area / max(major, 1e-6f));
+        }
+        const float coverageWeight = saturate(log2(max(footprint, 1.0f)));
+        const uint2 pixel = uint2(position) & 3u;
+        const uint x = pixel.x ^ pixel.y;
+        const uint bayer = ((x & 1u) << 3u) | ((pixel.y & 1u) << 2u) |
+                           (x & 2u) | ((pixel.y & 2u) >> 1u);
+        const float threshold = (float(bayer) + 0.5f) / 16.0f;
+        cutoff = lerp(cutoff, tintAlpha * threshold, coverageWeight);
+    }
+    return tintAlpha * alpha < cutoff;
+}
+#endif
+
 // Port of Shaders/Scene3D.hlsli.
 float3 RotateEnvironment(float3 v) {
     const float c = cos(gScene.options.x);

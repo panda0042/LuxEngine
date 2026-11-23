@@ -2678,19 +2678,28 @@ void MaterialTextures() {
     settings.environmentColor = {.2f, .2f, .2f};
     settings.sun.direction = {0, 0, -1};
     settings.sun.intensity = 2;
-    const auto render = [&](Material3D material, const Mesh3D* geometry = nullptr) {
+    const MaterialTextures3D* runtimeTextures = nullptr;
+    const auto renderFrame = [&](Material3D material, const Mesh3D* geometry = nullptr) {
         GpuFrameCapture capture;
         Check(CaptureFrame(session, capture,
                            [&] {
                                session.gpu.Clear(0, 0, 0, 1);
                                Renderer3D::BeginScene(camera, settings, 1);
-                               Renderer3D::DrawMesh(geometry ? *geometry : plane, Mat4::Identity(),
-                                                    material);
+                               if (runtimeTextures)
+                                   context.DrawMeshWithTextures(geometry ? *geometry : plane,
+                                                                Mat4::Identity(), material,
+                                                                *runtimeTextures);
+                               else
+                                   Renderer3D::DrawMesh(geometry ? *geometry : plane,
+                                                        Mat4::Identity(), material);
                                Renderer3D::EndScene();
                                return true;
                            }),
               "mapped material frame captures");
-        return At(capture, .5f, .5f);
+        return capture;
+    };
+    const auto render = [&](Material3D material, const Mesh3D* geometry = nullptr) {
+        return At(renderFrame(material, geometry), .5f, .5f);
     };
     const auto difference = [](auto a, auto b) {
         return std::abs(int(a[0]) - b[0]) + std::abs(int(a[1]) - b[1]) + std::abs(int(a[2]) - b[2]);
@@ -2699,7 +2708,20 @@ void MaterialTextures() {
     material.albedoColor = {.4f, .4f, .4f, 1};
     const auto base = render(material);
     material.normalTexture = tilted;
-    Check(difference(base, render(material)) > 10, "normal texture changes actual lighting");
+    const auto normalMapped = render(material);
+    Check(difference(base, normalMapped) > 10, "normal texture changes actual lighting");
+    const std::array<uint8, 4> normalPixel{255, 128, 128, 255};
+    const std::array<uint8, 4> blackPixel{0, 0, 0, 255};
+    GpuTexture runtimeNormal, runtimeRoughness;
+    Check(runtimeNormal.Initialize(&session.gpu, 1, 1, normalPixel.data()) &&
+              runtimeRoughness.Initialize(&session.gpu, 1, 1, blackPixel.data()),
+          "runtime material maps upload");
+    MaterialTextures3D generatedMaps;
+    generatedMaps.normal = &runtimeNormal;
+    runtimeTextures = &generatedMaps;
+    material.normalTexture.clear();
+    Check(render(material) == normalMapped, "runtime normal matches file-backed normal");
+    runtimeTextures = nullptr;
     material.normalScale = 0;
     material.normalTexture.clear();
     material.metallic = 1;
@@ -2716,6 +2738,11 @@ void MaterialTextures() {
     material.roughnessTexture = white;
     Check(difference(smooth, render(material)) > 5, "roughness texture changes actual highlight");
     material.roughnessTexture.clear();
+    generatedMaps.normal = nullptr;
+    generatedMaps.roughness = &runtimeRoughness;
+    runtimeTextures = &generatedMaps;
+    Check(render(material) == smooth, "runtime roughness matches file-backed roughness");
+    runtimeTextures = nullptr;
     settings.sun.intensity = 0;
     material.occlusionTexture = black;
     const auto occluded = render(material);
@@ -2754,6 +2781,50 @@ void MaterialTextures() {
           "Repeat sampler wraps UVs while Clamp retains the edge texel");
     material.textureSampling.anisotropic = true;
     Check(render(material, &repeatPlane)[0] > 20, "anisotropic Repeat sampler renders");
+
+    constexpr size_t maskSize = 64;
+    std::vector<uint8> mask(18 + maskSize * maskSize * 4, 255);
+    std::fill_n(mask.begin(), 18, uint8{0});
+    mask[2] = 2;
+    mask[12] = mask[14] = maskSize;
+    mask[16] = 32;
+    mask[17] = 40;
+    constexpr std::array<uint8, 4> alpha{192, 64, 0, 0};
+    for (size_t i = 0; i < maskSize * maskSize; ++i)
+        mask[18 + i * 4 + 3] = alpha[i % alpha.size()];
+    const auto maskPath = folder / "coverage.tga";
+    {
+        std::ofstream output(maskPath, std::ios::binary);
+        output.write(reinterpret_cast<const char*>(mask.data()), mask.size());
+    }
+    const auto maskUtf8 = maskPath.u8string();
+    material.baseColorTexture = {reinterpret_cast<const char*>(maskUtf8.data()), maskUtf8.size()};
+    auto minifiedVertices = vertices;
+    for (auto& vertex : minifiedVertices)
+        vertex.texCoords = vertex.texCoords * 16;
+    Mesh3D minified;
+    Check(minified.Upload(&session.gpu, minifiedVertices, indices), "minified plane uploads");
+    for (const auto [cutoff, expected] : {std::pair{.5f, 64}, std::pair{.001f, 128}}) {
+        material.alphaCutoff = cutoff;
+        const auto capture = renderFrame(material, &minified);
+        int covered = 0;
+        for (uint32 y = capture.height / 2 - 8; y < capture.height / 2 + 8; ++y)
+            for (uint32 x = capture.width / 2 - 8; x < capture.width / 2 + 8; ++x)
+                covered += capture.rgba[(size_t(y) * capture.width + x) * 4] > 20;
+        Check(std::abs(covered - expected) <= 4, "minified alpha mask retains authored coverage");
+    }
+    auto coloredVertices = vertices;
+    for (auto& vertex : coloredVertices)
+        vertex.color = {0, 1, 0, 1};
+    Mesh3D coloredPlane;
+    Check(coloredPlane.Upload(&session.gpu, coloredVertices, indices), "colored plane uploads");
+    const auto green = render({}, &coloredPlane);
+    Check(green[1] > green[0] + 30, "3D mesh upload preserves vertex color");
+    for (auto& vertex : coloredVertices)
+        vertex.color = {1, 0, 0, 1};
+    Check(coloredPlane.UpdateVertices(coloredVertices), "colored plane updates");
+    const auto red = render({}, &coloredPlane);
+    Check(red[0] > red[1] + 30, "3D mesh update preserves vertex color");
     Check(context.GetLastAssetError().empty(), "material texture loading has no hidden errors");
 }
 
@@ -2942,6 +3013,35 @@ void WaterComposite() {
           "the opaque color and depth snapshots introduce no GPU validation errors");
 }
 
+void LargeMipTexture() {
+    Session session(96, 96);
+    if (!session.ok)
+        return Check(false, "8K mip session initializes");
+    constexpr uint32 size = 8192;
+    if (session.gpu.GetInfo().maxTextureSize < size) {
+        std::printf("[large mip texture] adapter does not support 8192px textures\n");
+        return;
+    }
+    constexpr uint64 expectedBytes = 357913940;
+    const auto baseline = session.gpu.GetMemoryStats();
+    GpuTexture texture;
+    TextureSampling sampling;
+    sampling.mipmaps = true;
+    if (!texture.Initialize(&session.gpu, size, size, nullptr, TextureFilter::Linear,
+                            TextureColorSpace::Srgb, sampling))
+        return Check(false, "8K texture uploads with mipmaps enabled");
+    const auto allocated = session.gpu.GetMemoryStats();
+    Check(texture.GetWidth() == size && texture.GetHeight() == size &&
+              texture.GetMipCount() == 14 && texture.GetStorageBytes() == expectedBytes &&
+              allocated.allocationBytes - baseline.allocationBytes == expectedBytes &&
+              allocated.liveTextures == baseline.liveTextures + 1,
+          "GPU accounts for all 14 mip levels of the 8K texture");
+    texture.Release();
+    Check(session.gpu.WaitIdle() &&
+              session.gpu.GetMemoryStats().allocationBytes == baseline.allocationBytes,
+          "8K mip texture storage is reclaimed");
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0); // keep output even if the process crashes
     // Optional: section names to run (basics misuse resize lifecycle frames drawing volume
@@ -3001,6 +3101,7 @@ int main(int argc, char** argv) {
     run("water_composite", WaterComposite);
     run("materials", MaterialModes);
     run("material_textures", MaterialTextures);
+    run("large_mips", LargeMipTexture);
     run("volume", Volume);
     run("resolutions", Resolutions);
     run("wobble", Wobble);

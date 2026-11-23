@@ -7,13 +7,12 @@ STRUCT(ShadowOutput)
     DATA(float2, uv, TEXCOORD0);
 };
 
-// Port of Shaders/Shadow.frag.hlsl: fully transparent texels cast no shadow.
 ROOT_SIGNATURE(DefaultRootSignature)
 void PS_MAIN(ShadowOutput In)
 {
     INIT_MAIN;
     if (gDraw.options.y > 0.5f &&
-        In.color.a * SampleMaterial(gTexture, In.uv).a < gDraw.options.z)
+        BelowAlphaCutoff(SampleMaterial(gTexture, In.uv).a, In.color.a, In.uv, In.position.xy))
         discard;
     RETURN();
 }

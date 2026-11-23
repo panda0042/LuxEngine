@@ -241,9 +241,9 @@
     }
   ],
   "sourceRosterSha256": "9b74bd12355493c42bb6f1c0cd425743ebb2954af6cbddd7f2c572946d5986db",
-  "conversionScriptSha256": "c14d8bb0b97fbf544b3f6c328f63649aad024cc935718bbdd4301cf2613411fc",
+  "conversionScriptSha256": "04d04a6e292f4fb1160991d91c31d08681c8c3222446e2ccdd850f1e6fff7088",
   "recipe": {
-    "version": 1,
+    "version": 2,
     "selection": [
       [
         "rock_a",
@@ -302,18 +302,19 @@
         12000
       ]
     ],
-    "textures": "1024 RGBA PNG, Lanczos; vegetation alpha threshold 0.5 to 0/255",
+    "textures": "2048 RGBA PNG at source resolution; vegetation alpha threshold 0.5 to 0/255",
     "environments": "1024x512 Radiance HDR, area-filtered in linear radiance",
     "meshes": "OBJ Y-up meters; compact independent indices; original UVs/normals; UV and PNG both preserve glTF top-left origin without vertical flips",
     "nodes": "Selected source nodes have identity rotation and scale; their variant preview-grid translations are removed to preserve asset-local pivots.",
     "simplification": "meshoptimizer attribute-aware, normals weight .15, UV weight .5; relative error .012 opaque/.025 foliage; foliage pruning permitted",
     "tools": {
       "numpy": "2.3.5",
-      "Pillow": "11.3.0",
+      "Pillow": "13.0.0",
       "meshoptimizer": "0.2.30a0",
       "opencv-python": "5.0.0.93"
     },
-    "python": "3.14.8"
+    "python": "3.14.8",
+    "texturePython": "3.12.10"
   },
   "admission": {
     "method": "verified_local_source_conversion",
@@ -410,33 +411,33 @@
     },
     {
       "path": "Textures/fern.png",
-      "bytes": 837902,
-      "sha256": "1536f017ae28666ce98b25779293e87adb0fb79ef23f739b3dc6a3daaf4a03ef"
+      "bytes": 2618388,
+      "sha256": "c1d06dd8b9724aa950aabcbc2a920f6b82aa238030f2670b863c37270752e179"
     },
     {
       "path": "Textures/ground.png",
-      "bytes": 2701168,
-      "sha256": "14d7bb7f2093344ccba4439c18b1fcf855bec5d6f6a52a4f94f76e1881f94a86"
+      "bytes": 10418904,
+      "sha256": "18237e3b6fa4df51edff0ecd9dd9b3eb01a9d8d68a7939937de6b31e1f57824b"
     },
     {
       "path": "Textures/pine_bark.png",
-      "bytes": 1794571,
-      "sha256": "1d9f4c70495f437dfe50d601e897667d250c0c65f41b7d32a322f4659fc6aa1d"
+      "bytes": 6038445,
+      "sha256": "cf0e39fc8d4f124c8e1a21872cf4a57b68be81416542282f78173ed428cbf626"
     },
     {
       "path": "Textures/pine_needles.png",
-      "bytes": 1191567,
-      "sha256": "c76764437211673a08516648ed5b9045c77c899f276f2da53a10ca12378f7af9"
+      "bytes": 3672823,
+      "sha256": "85aa1cdbc931f4306266ce1d35a8a9a4eef5d6c428a4645d8a7f80b4c4319089"
     },
     {
       "path": "Textures/rock.png",
-      "bytes": 1293327,
-      "sha256": "dcf0a7820ec81c0b2187db015fdb928415904f2e7eaffa6cc5fd473eb5a2f5c6"
+      "bytes": 4413420,
+      "sha256": "bbe9bec18c5e1295d025f47e1a8f8112324e9194ce78fa4a9456e780a36cdc1d"
     },
     {
       "path": "Textures/trunk.png",
-      "bytes": 1807634,
-      "sha256": "bd7d4339fe4fa938592e66ec9c7b7139337fddcc753b10fee3a0f1408169a8ae"
+      "bytes": 6164857,
+      "sha256": "fcb6c38c56da09e380551ca7f397eb8224e114148b23a16a1a34268c98e62d37"
     },
     {
       "path": "catalog.json",

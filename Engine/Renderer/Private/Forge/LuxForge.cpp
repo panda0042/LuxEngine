@@ -525,7 +525,8 @@ void CollectGarbage(LuxForgeDevice* device, bool everything) {
 }
 
 uint32_t CreateTextureImpl(LuxForgeDevice* device, uint32_t width, uint32_t height,
-                           const void* rgba, bool nearest, bool srgb, uint32_t mipLevels = 1) {
+                           const void* const* mipPixels, bool nearest, bool srgb,
+                           uint32_t mipLevels = 1) {
     if (width == 0 || height == 0 || width > 16384 || height > 16384) {
         device->lastError = "Texture size must be 1..16384";
         return 0;
@@ -539,6 +540,7 @@ uint32_t CreateTextureImpl(LuxForgeDevice* device, uint32_t width, uint32_t heig
     // exactly like the original with clamp-to-edge, for both nearest and linear filtering.
     std::vector<uint8_t> padded;
     if (mipLevels == 1 && (width == 1 || height == 1)) {
+        const auto* rgba = static_cast<const uint8_t*>(mipPixels[0]);
         const uint32_t paddedWidth = width == 1 ? 2 : width;
         const uint32_t paddedHeight = height == 1 ? 2 : height;
         padded.assign(static_cast<size_t>(paddedWidth) * paddedHeight * 4, 0);
@@ -546,14 +548,12 @@ uint32_t CreateTextureImpl(LuxForgeDevice* device, uint32_t width, uint32_t heig
             for (uint32_t y = 0; y < paddedHeight; ++y)
                 for (uint32_t x = 0; x < paddedWidth; ++x)
                     std::memcpy(&padded[(static_cast<size_t>(y) * paddedWidth + x) * 4],
-                                static_cast<const uint8_t*>(rgba) +
-                                    (static_cast<size_t>(height == 1 ? 0 : y) * width +
-                                     (width == 1 ? 0 : x)) *
-                                        4,
+                                rgba + (static_cast<size_t>(height == 1 ? 0 : y) * width +
+                                        (width == 1 ? 0 : x)) *
+                                           4,
                                 4);
         width = paddedWidth;
         height = paddedHeight;
-        rgba = padded.data();
     }
     TextureDesc desc = {};
     desc.mWidth = width;
@@ -577,27 +577,26 @@ uint32_t CreateTextureImpl(LuxForgeDevice* device, uint32_t width, uint32_t heig
         device->lastError = "Texture creation failed";
         return 0;
     }
-    size_t sourceOffset = 0;
+    TextureUpdateDesc update = {texture, 0, mipLevels, 0, 1, RESOURCE_STATE_SHADER_RESOURCE};
+    beginUpdateResource(&update);
+    size_t storageBytes = 0;
     for (uint32_t level = 0; level < mipLevels; ++level) {
         const uint32_t mipWidth = std::max(1u, width >> level);
         const uint32_t mipHeight = std::max(1u, height >> level);
-        TextureUpdateDesc update = {texture, level, 1, 0, 1, RESOURCE_STATE_SHADER_RESOURCE};
-        beginUpdateResource(&update);
         TextureSubresourceUpdate sub = update.getSubresourceUpdateDesc(level, 0);
         const uint32_t rowBytes = mipWidth * 4;
+        const auto* rgba =
+            padded.empty() ? static_cast<const uint8_t*>(mipPixels[level]) : padded.data();
         for (uint32_t row = 0; row < sub.mRowCount; ++row) {
             auto* dst = sub.pMappedData + static_cast<size_t>(row) * sub.mDstRowStride;
             if (rgba)
-                std::memcpy(dst,
-                            static_cast<const uint8_t*>(rgba) + sourceOffset +
-                                static_cast<size_t>(row) * rowBytes,
-                            rowBytes);
+                std::memcpy(dst, rgba + static_cast<size_t>(row) * rowBytes, rowBytes);
             else
                 std::memset(dst, 0, rowBytes);
         }
-        endUpdateResource(&update);
-        sourceOffset += static_cast<size_t>(mipWidth) * mipHeight * 4;
+        storageBytes += static_cast<size_t>(mipWidth) * mipHeight * 4;
     }
+    endUpdateResource(&update);
     // Texture updates are recorded by the resource loader's upload engine and only submitted
     // on flushResourceUpdates; wait for that copy so the texture is ready before first use.
     FlushResourceUpdateDesc flush = {};
@@ -608,7 +607,7 @@ uint32_t CreateTextureImpl(LuxForgeDevice* device, uint32_t width, uint32_t heig
     const uint32_t id = device->freeTextureIds.back();
     device->freeTextureIds.pop_back();
     device->textures[id].texture = texture;
-    device->textures[id].bytes = sourceOffset;
+    device->textures[id].bytes = storageBytes;
     device->textures[id].nearest = nearest;
     device->textures[id].srgb = srgb;
     DescriptorData param = {};
@@ -692,16 +691,18 @@ bool Init2D(LuxForgeDevice* device, std::string& error) {
     VertexLayout layout = {};
     layout.mBindingCount = 1;
     layout.mBindings[0].mStride = LuxForgeDevice::kVertexStride;
-    layout.mAttribCount = 4;
-    const ShaderSemantic semantics[4] = {SEMANTIC_POSITION, SEMANTIC_COLOR, SEMANTIC_TEXCOORD0,
-                                         SEMANTIC_NORMAL};
-    const TinyImageFormat formats[4] = {
+    layout.mAttribCount = 5;
+    const ShaderSemantic semantics[5] = {SEMANTIC_POSITION, SEMANTIC_COLOR, SEMANTIC_TEXCOORD0,
+                                         SEMANTIC_NORMAL, SEMANTIC_TEXCOORD1};
+    const TinyImageFormat formats[5] = {
         TinyImageFormat_R32G32B32_SFLOAT, TinyImageFormat_R32G32B32A32_SFLOAT,
-        TinyImageFormat_R32G32_SFLOAT, TinyImageFormat_R32G32B32_SFLOAT};
-    const uint32_t offsets[4] = {offsetof(LuxForgeVertex, position),
+        TinyImageFormat_R32G32_SFLOAT, TinyImageFormat_R32G32B32_SFLOAT,
+        TinyImageFormat_R32G32B32A32_SFLOAT};
+    const uint32_t offsets[5] = {offsetof(LuxForgeVertex, position),
                                  offsetof(LuxForgeVertex, color), offsetof(LuxForgeVertex, uv),
-                                 offsetof(LuxForgeVertex, normal)};
-    for (uint32_t i = 0; i < 4; ++i) {
+                                 offsetof(LuxForgeVertex, normal),
+                                 offsetof(LuxForgeVertex, uvBounds)};
+    for (uint32_t i = 0; i < layout.mAttribCount; ++i) {
         layout.mAttribs[i].mSemantic = semantics[i];
         layout.mAttribs[i].mFormat = formats[i];
         layout.mAttribs[i].mBinding = 0;
@@ -808,7 +809,8 @@ bool Init2D(LuxForgeDevice* device, std::string& error) {
     for (uint32_t id = LuxForgeDevice::kMaxTextures; id >= 1; --id)
         device->freeTextureIds.push_back(id);
     const uint8_t white[4] = {255, 255, 255, 255};
-    device->whiteTexture = CreateTextureImpl(device, 1, 1, white, false, false);
+    const void* whiteMip[] = {white};
+    device->whiteTexture = CreateTextureImpl(device, 1, 1, whiteMip, false, false);
     if (!device->whiteTexture) {
         error = "White texture could not be created";
         return false;
@@ -1338,13 +1340,13 @@ uint64_t FramesPresented(const LuxForgeDevice* device) {
     return device ? device->framesPresented : 0;
 }
 
-uint32_t CreateTexture(LuxForgeDevice* device, uint32_t width, uint32_t height, const void* rgba,
-                       int nearest, int srgb, uint32_t mipLevels) {
-    if (!device || !device->textureSet || !width || !height || mipLevels == 0 || mipLevels > 15 ||
-        (mipLevels > 1 && (std::max(width, height) >> (mipLevels - 1)) == 0))
+uint32_t CreateTexture(LuxForgeDevice* device, uint32_t width, uint32_t height,
+                       const void* const* mipPixels, int nearest, int srgb, uint32_t mipLevels) {
+    if (!device || !device->textureSet || !width || !height || !mipPixels || mipLevels == 0 ||
+        mipLevels > 15 || (mipLevels > 1 && (std::max(width, height) >> (mipLevels - 1)) == 0))
         return 0;
     const uint32_t id =
-        CreateTextureImpl(device, width, height, rgba, nearest != 0, srgb != 0, mipLevels);
+        CreateTextureImpl(device, width, height, mipPixels, nearest != 0, srgb != 0, mipLevels);
     if (id)
         ++device->liveTextures;
     return id;
@@ -2266,7 +2268,7 @@ bool SceneDrawUsable(const LuxForgeDevice* device, const LuxForgeSceneDraw& draw
         if (texture &&
             (texture > LuxForgeDevice::kMaxTextures || !device->textures[texture].texture))
             return false;
-    if (draw.sampling > 3 || !std::isfinite(draw.normalScale) || draw.normalScale < 0 ||
+    if (draw.sampling > 7 || !std::isfinite(draw.normalScale) || draw.normalScale < 0 ||
         draw.normalScale > 16 || !std::isfinite(draw.occlusionStrength) ||
         draw.occlusionStrength < 0 || draw.occlusionStrength > 1)
         return false;
@@ -2575,9 +2577,14 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
                                (draw.roughnessTexture ? 4 : 0) | (draw.occlusionTexture ? 8 : 0));
         block[44] = draw.normalScale;
         block[45] = draw.occlusionStrength;
-        block[46] = static_cast<float>(draw.sampling);
+        block[46] = static_cast<float>(draw.sampling & 3u);
         block[47] = draw.doubleSided ? 1.f : 0.f;
         std::memcpy(block + 48, draw.water, sizeof draw.water);
+        const auto* baseTexture = device->textures[texture].texture;
+        block[52] = static_cast<float>(baseTexture->mWidth);
+        block[53] = static_cast<float>(baseTexture->mHeight);
+        block[54] = (draw.sampling & 4u) ? 1.f : 0.f;
+        block[55] = 0.f;
         const std::array<uint32_t, 5> maps = {draw.texture, draw.normalTexture,
                                               draw.metallicTexture, draw.roughnessTexture,
                                               draw.occlusionTexture};

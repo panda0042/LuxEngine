@@ -23,3 +23,4 @@ lux_engine_module(Renderer
         Private/Water/OceanSpectrum.cpp
         Private/Water/WaterSurface.cpp
 )
+target_include_directories(LuxModuleRenderer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../RHI/Private")

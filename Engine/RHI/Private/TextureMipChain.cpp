@@ -1,5 +1,6 @@
-#include <LuxEngine/Renderer/RHI/Texture.hpp>
+#include "TextureMipChain.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <exception>
 
@@ -8,6 +9,13 @@ namespace {
 float Decode(float value) {
     return value <= .04045f ? value / 12.92f : std::pow((value + .055f) / 1.055f, 2.4f);
 }
+
+const auto SrgbToLinear = [] {
+    std::array<float, 256> table{};
+    for (size_t index = 0; index < table.size(); ++index)
+        table[index] = Decode(static_cast<float>(index) / 255.f);
+    return table;
+}();
 
 float Encode(float value) {
     return value <= .0031308f ? value * 12.92f : 1.055f * std::pow(value, 1.f / 2.4f) - .055f;
@@ -18,36 +26,30 @@ uint8 Byte(float value) {
 }
 } // namespace
 
-bool BuildTextureMipChain(uint32 width, uint32 height, std::span<const uint8> pixels,
-                          TextureColorSpace colorSpace, bool normalMap,
-                          std::vector<TextureMipLevel>& output) {
-    if (!width || !height || width > 8192 || height > 8192 ||
-        pixels.size() != static_cast<size_t>(width) * height * 4 ||
+bool Rhi::BuildTextureMipTail(uint32 width, uint32 height, std::span<const uint8> pixels,
+                              TextureColorSpace colorSpace, bool normalMap,
+                              std::vector<TextureMipLevel>& output, float alphaMaskCutoff) {
+    const auto layout = GetTextureLayout(width, height, true);
+    if (!layout.mipCount || (!pixels.empty() && pixels.size() != size_t(width) * height * 4) ||
         (colorSpace != TextureColorSpace::Linear && colorSpace != TextureColorSpace::Srgb) ||
-        (normalMap && colorSpace == TextureColorSpace::Srgb))
+        (normalMap && (colorSpace == TextureColorSpace::Srgb || alphaMaskCutoff != 0)) ||
+        !std::isfinite(alphaMaskCutoff) || alphaMaskCutoff < 0 || alphaMaskCutoff > 1)
         return false;
     try {
         std::vector<TextureMipLevel> levels;
-        size_t bytes = 0;
-        for (uint32 w = width, h = height;; w = std::max(1u, w / 2), h = std::max(1u, h / 2)) {
-            bytes += static_cast<size_t>(w) * h * 4;
-            if (bytes > 256ull * 1024 * 1024)
-                return false;
-            if (w == 1 && h == 1)
-                break;
-        }
-        levels.push_back({width, height, std::vector<uint8>(pixels.begin(), pixels.end())});
-        while (levels.back().width > 1 || levels.back().height > 1) {
-            const auto& source = levels.back();
-            TextureMipLevel target{
-                std::max(1u, source.width / 2), std::max(1u, source.height / 2), {}};
+        levels.reserve(layout.mipCount - 1);
+        constexpr std::array<uint8, 4> blank{};
+        const bool alphaWeighted = colorSpace == TextureColorSpace::Srgb || alphaMaskCutoff > 0;
+        while (width > 1 || height > 1) {
+            const bool fromMask = levels.empty() && alphaMaskCutoff > 0;
+            TextureMipLevel target{std::max(1u, width / 2), std::max(1u, height / 2), {}};
             target.pixels.resize(static_cast<size_t>(target.width) * target.height * 4);
             for (uint32 y = 0; y < target.height; ++y) {
-                const float top = static_cast<float>(y) * source.height / target.height;
-                const float bottom = static_cast<float>(y + 1) * source.height / target.height;
+                const float top = static_cast<float>(y) * height / target.height;
+                const float bottom = static_cast<float>(y + 1) * height / target.height;
                 for (uint32 x = 0; x < target.width; ++x) {
-                    const float left = static_cast<float>(x) * source.width / target.width;
-                    const float right = static_cast<float>(x + 1) * source.width / target.width;
+                    const float left = static_cast<float>(x) * width / target.width;
+                    const float right = static_cast<float>(x + 1) * width / target.width;
                     float sum[4] = {}, weight = 0, alphaWeight = 0;
                     for (uint32 sy = static_cast<uint32>(top);
                          sy < static_cast<uint32>(std::ceil(bottom)); ++sy) {
@@ -57,15 +59,20 @@ bool BuildTextureMipChain(uint32 width, uint32 height, std::span<const uint8> pi
                                                 std::max(left, static_cast<float>(sx))) *
                                                (std::min(bottom, static_cast<float>(sy + 1)) -
                                                 std::max(top, static_cast<float>(sy)));
-                            const auto* pixel =
-                                &source.pixels[(static_cast<size_t>(sy) * source.width + sx) * 4];
-                            const float alpha = pixel[3] / 255.f;
+                            const auto* pixel = pixels.empty()
+                                                    ? blank.data()
+                                                    : &pixels[(size_t(sy) * width + sx) * 4];
+                            const float sourceAlpha = pixel[3] / 255.f;
+                            const float alpha =
+                                fromMask ? float(sourceAlpha >= alphaMaskCutoff) : sourceAlpha;
                             for (unsigned channel = 0; channel < 3; ++channel) {
                                 float value = pixel[channel] / 255.f;
                                 if (normalMap)
                                     value = value * 2.f - 1.f;
                                 else if (colorSpace == TextureColorSpace::Srgb)
-                                    value = Decode(value) * alpha;
+                                    value = SrgbToLinear[pixel[channel]] * alpha;
+                                else if (alphaWeighted)
+                                    value *= alpha;
                                 sum[channel] += value * area;
                             }
                             sum[3] += alpha * area;
@@ -74,21 +81,45 @@ bool BuildTextureMipChain(uint32 width, uint32 height, std::span<const uint8> pi
                         }
                     }
                     auto* pixel = &target.pixels[(static_cast<size_t>(y) * target.width + x) * 4];
-                    float length = std::sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]);
+                    const float length =
+                        normalMap ? std::sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2])
+                                  : 0.f;
                     for (unsigned channel = 0; channel < 3; ++channel) {
                         float value = sum[channel] / weight;
                         if (normalMap)
                             value = length > 1e-8f ? sum[channel] / length * .5f + .5f
                                                    : (channel == 2 ? 1.f : .5f);
-                        else if (colorSpace == TextureColorSpace::Srgb)
-                            value = Encode(alphaWeight > 1e-8f ? sum[channel] / alphaWeight : 0.f);
+                        else if (alphaWeighted) {
+                            value = alphaWeight > 1e-8f ? sum[channel] / alphaWeight : 0.f;
+                            if (colorSpace == TextureColorSpace::Srgb)
+                                value = Encode(value);
+                        }
                         pixel[channel] = Byte(value);
                     }
                     pixel[3] = Byte(sum[3] / weight);
                 }
             }
             levels.push_back(std::move(target));
+            width = levels.back().width;
+            height = levels.back().height;
+            pixels = levels.back().pixels;
         }
+        output = std::move(levels);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool BuildTextureMipChain(uint32 width, uint32 height, std::span<const uint8> pixels,
+                          TextureColorSpace colorSpace, bool normalMap,
+                          std::vector<TextureMipLevel>& output, float alphaMaskCutoff) {
+    std::vector<TextureMipLevel> levels;
+    if (pixels.empty() || !Rhi::BuildTextureMipTail(width, height, pixels, colorSpace, normalMap,
+                                                    levels, alphaMaskCutoff))
+        return false;
+    try {
+        levels.insert(levels.begin(), {width, height, {pixels.begin(), pixels.end()}});
         output = std::move(levels);
         return true;
     } catch (const std::exception&) {

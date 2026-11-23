@@ -2,7 +2,7 @@
 
 namespace LuxEngine {
 bool GpuTexture::Initialize(std::nullptr_t, uint32, uint32, const void*, TextureFilter,
-                            TextureColorSpace, TextureSampling) {
+                            TextureColorSpace, TextureSampling, float) {
     Release();
     return false;
 }

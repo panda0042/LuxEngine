@@ -5,6 +5,7 @@ STRUCT(VSOutput)
     DATA(float4, position, SV_Position);
     DATA(float4, color, COLOR);
     DATA(float2, uv, TEXCOORD0);
+    DATA(float4, uvBounds, TEXCOORD1);
 };
 
 ROOT_SIGNATURE(DefaultRootSignature)
@@ -15,7 +16,8 @@ float4 PS_MAIN(VSOutput In)
     if (gDraw.options.x > 0.5f)
         texel = SampleTex2D(gTexture, gSamplerPointClamp, In.uv);
     else
-        texel = SampleTex2D(gTexture, gSamplerBilinearClamp, In.uv);
+        texel = SampleTex2D(gTexture, gSamplerBilinearClamp,
+                            clamp(In.uv, In.uvBounds.xy, In.uvBounds.zw));
 #if defined(LUX_DIAG_COLOR)
     RETURN(In.color);
 #elif defined(LUX_DIAG_TEXTURE)

@@ -44,6 +44,12 @@ struct Material3D {
     std::optional<WaterMaterial3D> water;
 };
 
+struct MaterialTextures3D {
+    GpuTexture* baseColor = nullptr;
+    GpuTexture* normal = nullptr;
+    GpuTexture* roughness = nullptr;
+};
+
 struct PointLight {
     Vec3 position{0.0f, 0.0f, 0.0f};
     Vec3 color{1.0f, 1.0f, 1.0f};
@@ -140,6 +146,8 @@ public:
         void DrawMesh(const Mesh3D& mesh, const Mat4& transform, const Material3D& material);
         void DrawMesh(const Mesh3D& mesh, const Mat4& transform, const Material3D& material,
                       GpuTexture* texture);
+        void DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& transform,
+                                  const Material3D& material, const MaterialTextures3D& textures);
         bool DrawMeshAsset(const std::string& path, const Mat4& transform,
                            const Material3D& material, int32 modelSubmesh = -1, int32 clip = -1,
                            double time = 0.0, uint64 instance = 0, const ModelPose* pose = nullptr,
@@ -156,9 +164,9 @@ public:
         bool GetMeshBounds(const std::string& path, Vec3& minimum, Vec3& maximum) const;
 
     private:
-        Ref<GpuTexture>
-        ResolveBaseColorTexture(const std::string& path, TextureSampling sampling,
-                                TextureColorSpace colorSpace = TextureColorSpace::Srgb);
+        Ref<GpuTexture> ResolveBaseColorTexture(const std::string& path, TextureSampling sampling,
+                                                TextureColorSpace colorSpace,
+                                                float alphaMaskCutoff = 0);
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };

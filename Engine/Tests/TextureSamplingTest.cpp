@@ -1,4 +1,5 @@
 #include <LuxEngine/Renderer/RHI/Texture.hpp>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <iostream>
@@ -68,6 +69,20 @@ void Normals() {
     Check(normal[0] > 210 && normal[1] > 210, "Normal mip orientation is wrong");
 }
 
+void AlphaMaskCoverage() {
+    const std::array<uint8, 16> pixels{255, 0, 0, 192, 0, 0, 255, 64, 0, 0, 255, 64, 0, 0, 255, 64};
+    std::vector<TextureMipLevel> levels;
+    Check(BuildTextureMipChain(4, 1, pixels, TextureColorSpace::Srgb, false, levels, .5f),
+          "Alpha mask mip chain was rejected");
+    Check(std::equal(pixels.begin(), pixels.end(), levels.front().pixels.begin()),
+          "Mask mip generation changed the original texture");
+    Check(levels.back().pixels == std::vector<uint8>({255, 0, 0, 64}),
+          "Minified mask did not preserve coverage and covered texel color");
+    Check(BuildTextureMipChain(4, 1, pixels, TextureColorSpace::Srgb, false, levels, .2f) &&
+              levels.back().pixels[3] == 255,
+          "Mask coverage ignored the material cutoff");
+}
+
 void AtomicFailure() {
     std::vector<TextureMipLevel> levels{{1, 1, {1, 2, 3, 4}}};
     const std::array<uint8, 4> pixel{};
@@ -89,6 +104,7 @@ int main() {
         Dimensions();
         Colour();
         Normals();
+        AlphaMaskCoverage();
         AtomicFailure();
         std::cout << "Texture mip dimensions, colour space, normals and failure contracts passed\n";
         return 0;

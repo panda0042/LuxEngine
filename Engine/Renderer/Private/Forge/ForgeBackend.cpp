@@ -473,14 +473,14 @@ bool ForgeBackend::HasBuffer(uint64 handle) const {
     return buffers_.count(handle) != 0;
 }
 
-bool ForgeBackend::CreateTexture(uint32 width, uint32 height, const void* pixelData,
-                                 TextureFilter filter, TextureColorSpace colorSpace,
-                                 uint32 mipLevels, TextureSampling, uint64& handle) {
+bool ForgeBackend::CreateTexture(uint32 width, uint32 height,
+                                 std::span<const void* const> mipPixels, TextureFilter filter,
+                                 TextureColorSpace colorSpace, uint64& handle) {
     if (!Usable())
         return false;
     const uint32_t id = lib_->api->createTexture(
-        lib_->device, width, height, pixelData, filter == TextureFilter::Nearest ? 1 : 0,
-        colorSpace == TextureColorSpace::Srgb ? 1 : 0, mipLevels);
+        lib_->device, width, height, mipPixels.data(), filter == TextureFilter::Nearest ? 1 : 0,
+        colorSpace == TextureColorSpace::Srgb ? 1 : 0, static_cast<uint32>(mipPixels.size()));
     if (!id)
         return ForgeFailure();
     handle = id;

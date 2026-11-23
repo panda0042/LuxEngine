@@ -23,7 +23,8 @@ DEFAULT_OUTPUT = REPOSITORY / "samples/RainyCreek/Assets"
 SOURCE_ROSTER = Path(__file__).with_name("RainyCreekSources.json")
 SOURCE_EXTENSIONS = {".gltf", ".bin", ".jpg", ".hdr"}
 OUTPUT_EXTENSIONS = {".obj", ".png", ".hdr", ".json", ".txt"}
-MAX_OUTPUT_BYTES = 35 * 1024 * 1024
+MAX_OUTPUT_BYTES = 64 * 1024 * 1024
+TEXTURE_SIZE = (2048, 2048)
 MODEL_SELECTION = (
     ("rock_a", "rock/rock.gltf", 0, 9000, None, None),
     ("rock_b", "rock/rock.gltf", 2, 5000, None, None),
@@ -215,12 +216,12 @@ def prepare_texture(source, output, relative, alpha=None):
     from PIL import Image
 
     image = Image.open(source).convert("RGBA")
-    image = image.resize((1024, 1024), Image.Resampling.LANCZOS)
+    if image.size != TEXTURE_SIZE:
+        raise AssetError(f"Unexpected source texture size: {source.name}")
     if alpha is not None:
         mask = Image.open(alpha).convert("L")
-        mask = mask.resize((1024, 1024), Image.Resampling.LANCZOS)
-        # Current Lux texture shaders discard zero alpha. Encode the glTF 0.5
-        # cutoff explicitly instead of relying on an unsupported blend mode.
+        if mask.size != image.size:
+            raise AssetError(f"Source alpha size differs from color: {alpha.name}")
         image.putalpha(mask.point(lambda value: 255 if value >= 128 else 0))
     path = output / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -377,9 +378,9 @@ def prepare(source, output):
             "sourceRosterSha256": digest(SOURCE_ROSTER),
             "conversionScriptSha256": digest(Path(__file__)),
             "recipe": {
-                "version": 1,
+                "version": 2,
                 "selection": [list(item) for item in MODEL_SELECTION],
-                "textures": "1024 RGBA PNG, Lanczos; vegetation alpha threshold 0.5 to 0/255",
+                "textures": "2048 RGBA PNG at source resolution; vegetation alpha threshold 0.5 to 0/255",
                 "environments": "1024x512 Radiance HDR, area-filtered in linear radiance",
                 "meshes": (
                     "OBJ Y-up meters; compact independent indices; original UVs/normals; "
@@ -398,6 +399,7 @@ def prepare(source, output):
                     for name in ("numpy", "Pillow", "meshoptimizer", "opencv-python")
                 },
                 "python": sys.version.split()[0],
+                "texturePython": sys.version.split()[0],
             },
             "admission": {
                 "method": "verified_local_source_conversion",
@@ -419,7 +421,7 @@ def prepare(source, output):
 
 
 def write_json(path, data):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_bytes((json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
 
 
 def write_notice(path, sources):
@@ -491,8 +493,8 @@ def verify_image_header(path):
     if path.suffix == ".png":
         if header[:8] != b"\x89PNG\r\n\x1a\n" or header[12:16] != b"IHDR":
             raise AssetError(f"Invalid PNG header: {path.name}")
-        if struct.unpack(">IIBBBBB", header[16:29]) != (1024, 1024, 8, 6, 0, 0, 0):
-            raise AssetError(f"Expected a 1024x1024 RGBA PNG: {path.name}")
+        if struct.unpack(">IIBBBBB", header[16:29]) != (*TEXTURE_SIZE, 8, 6, 0, 0, 0):
+            raise AssetError(f"Expected a 2048x2048 RGBA PNG: {path.name}")
     elif path.suffix == ".hdr":
         if not header.startswith(b"#?RADIANCE\n") or b"-Y 512 +X 1024\n" not in header:
             raise AssetError(f"Expected a 1024x512 Radiance HDR: {path.name}")

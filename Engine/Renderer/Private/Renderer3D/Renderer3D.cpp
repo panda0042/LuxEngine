@@ -1,5 +1,6 @@
 #include "RHI/RenderBackend.hpp"
 #include "ShadowProjection.hpp"
+#include "TextureMipChain.hpp"
 #include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/Core/Log.hpp>
@@ -18,6 +19,19 @@
 
 namespace LuxEngine {
 namespace {
+bool FiniteVertexColor(const Vec4& color) {
+    return std::isfinite(color.x) && std::isfinite(color.y) && std::isfinite(color.z) &&
+           std::isfinite(color.w);
+}
+
+float AlphaMaskCutoff(const Material3D& material) {
+    if (material.alphaMode != MaterialAlphaMode::Mask || material.alphaCutoff <= 0 ||
+        material.albedoColor.w <= 0)
+        return 0;
+    const float cutoff = material.alphaCutoff / material.albedoColor.w;
+    return cutoff <= 1 ? std::ceil(cutoff * 255.f) / 255.f : 0;
+}
+
 constexpr size_t MaxSceneSubmissions = 65536;
 constexpr size_t MaxShadowOnlySubmissions = 16384;
 constexpr size_t MaxPointLights = 16;
@@ -214,9 +228,7 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
         if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
             !std::isfinite(position.z) || !std::isfinite(normal.x) || !std::isfinite(normal.y) ||
             !std::isfinite(normal.z) || !std::isfinite(vertex.texCoords.x) ||
-            !std::isfinite(vertex.texCoords.y) || !std::isfinite(vertex.color.x) ||
-            !std::isfinite(vertex.color.y) || !std::isfinite(vertex.color.z) ||
-            !std::isfinite(vertex.color.w))
+            !std::isfinite(vertex.texCoords.y) || !FiniteVertexColor(vertex.color))
             return false;
         const auto relative = position - origin;
         ExtendBounds(minimum, maximum, relative);
@@ -262,8 +274,7 @@ bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
             !std::isfinite(n.x) || !std::isfinite(n.y) || !std::isfinite(n.z) ||
             !std::isfinite(vertex.texCoords.x) || !std::isfinite(vertex.texCoords.y) ||
-            !std::isfinite(vertex.color.x) || !std::isfinite(vertex.color.y) ||
-            !std::isfinite(vertex.color.z) || !std::isfinite(vertex.color.w))
+            !FiniteVertexColor(vertex.color))
             return false;
         const auto relative = p - origin;
         ExtendBounds(minimum, maximum, relative);
@@ -455,12 +466,19 @@ void Renderer3D::Context::DrawMesh(const Mat4& transform, const Material3D& mate
 
 void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
                                    const Material3D& material) {
-    auto texture = ResolveBaseColorTexture(material.baseColorTexture, material.textureSampling);
+    auto texture = ResolveBaseColorTexture(material.baseColorTexture, material.textureSampling,
+                                           TextureColorSpace::Srgb, AlphaMaskCutoff(material));
     DrawMesh(mesh, transform, material, texture.get());
 }
 
 void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
                                    const Material3D& material, GpuTexture* texture) {
+    DrawMeshWithTextures(mesh, transform, material, {texture});
+}
+
+void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& transform,
+                                               const Material3D& material,
+                                               const MaterialTextures3D& textures) {
     if (!impl_ || !impl_->active || !mesh.IsValid())
         return;
     auto lockedState = impl_->LockValidState();
@@ -468,7 +486,10 @@ void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
         return;
     if (!mesh.vertices_.BelongsTo(*impl_->device) || !mesh.indices_.BelongsTo(*impl_->device))
         return;
-    if (texture && !texture->BelongsTo(*impl_->device))
+    const auto* texture = textures.baseColor;
+    if ((texture && !texture->BelongsTo(*impl_->device)) ||
+        (textures.normal && !textures.normal->BelongsTo(*impl_->device)) ||
+        (textures.roughness && !textures.roughness->BelongsTo(*impl_->device)))
         return;
     const auto model = transform * Mat4::Translate(mesh.origin_);
     const auto relativeModel = Mat4::Translate(impl_->camera * -1) * model;
@@ -497,13 +518,18 @@ void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
         maps[index] = ResolveBaseColorTexture(path, sampling, TextureColorSpace::Linear);
         return maps[index] ? maps[index]->handle_ : uint64{0};
     };
-    const uint64 normal = map(0, material.normalTexture, normalSampling);
+    const uint64 normal =
+        textures.normal ? textures.normal->handle_ : map(0, material.normalTexture, normalSampling);
     const uint64 metallic = map(1, material.metallicTexture, material.textureSampling);
-    const uint64 roughness = map(2, material.roughnessTexture, material.textureSampling);
+    const uint64 roughness = textures.roughness
+                                 ? textures.roughness->handle_
+                                 : map(2, material.roughnessTexture, material.textureSampling);
     const uint64 occlusion = map(3, material.occlusionTexture, material.textureSampling);
+    const bool alphaCoverage = texture && texture->alphaMaskCutoff_ > 0 &&
+                               texture->alphaMaskCutoff_ == AlphaMaskCutoff(material);
     const uint32 sampling =
         (material.textureSampling.addressMode == TextureAddressMode::Repeat ? 1u : 0u) |
-        (material.textureSampling.anisotropic ? 2u : 0u);
+        (material.textureSampling.anisotropic ? 2u : 0u) | (alphaCoverage ? 4u : 0u);
     Vec4 water{0, 0, 0, 0};
     if (material.water) {
         const auto airToWater = material.water->indexOfRefraction;
@@ -546,13 +572,17 @@ void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
 
 Ref<GpuTexture> Renderer3D::Context::ResolveBaseColorTexture(const std::string& path,
                                                              TextureSampling sampling,
-                                                             TextureColorSpace colorSpace) {
+                                                             TextureColorSpace colorSpace,
+                                                             float alphaMaskCutoff) {
     if (path.empty() || !impl_ || !impl_->LockValidState())
         return nullptr;
+    if (!sampling.mipmaps)
+        alphaMaskCutoff = 0;
     const std::string key =
         path + "\n" + std::to_string(static_cast<int>(colorSpace)) +
         std::to_string(sampling.mipmaps) + std::to_string(static_cast<int>(sampling.addressMode)) +
-        std::to_string(sampling.anisotropic) + std::to_string(sampling.normalMap);
+        std::to_string(sampling.anisotropic) + std::to_string(sampling.normalMap) + ":" +
+        std::to_string(std::bit_cast<uint32>(alphaMaskCutoff));
     auto found = impl_->textures.find(key);
     if (found == impl_->textures.end()) {
         if (impl_->textures.size() >= MaxCachedAssets) {
@@ -574,18 +604,9 @@ Ref<GpuTexture> Renderer3D::Context::ResolveBaseColorTexture(const std::string& 
             std::vector<uint8> pixels;
             const bool decoded = AssetManager::IsBaseColorTextureFile(path) &&
                                  AssetManager::DecodeTextureCpu(path, width, height, pixels);
-            size_t bytes = pixels.size();
-            if (decoded && (!sampling.mipmaps || (width == 1 && height == 1)))
-                bytes =
-                    static_cast<size_t>(width == 1 ? 2 : width) * (height == 1 ? 2 : height) * 4;
-            if (sampling.mipmaps)
-                for (uint32 w = std::max(1, width), h = std::max(1, height); w > 1 || h > 1;) {
-                    w = std::max(1u, w / 2);
-                    h = std::max(1u, h / 2);
-                    bytes += static_cast<size_t>(w) * h * 4;
-                }
-            constexpr size_t Budget = 256ull * 1024 * 1024;
-            bool room = decoded && bytes <= Budget;
+            const size_t bytes = Rhi::GetTextureLayout(width, height, sampling.mipmaps).bytes;
+            constexpr size_t Budget = 512ull * 1024 * 1024;
+            bool room = decoded && bytes && bytes <= Budget;
             if (room) {
                 while (impl_->textureBytes - cached.bytes + bytes > Budget &&
                        impl_->textures.size() > 1) {
@@ -602,9 +623,10 @@ Ref<GpuTexture> Renderer3D::Context::ResolveBaseColorTexture(const std::string& 
                 room = impl_->textureBytes - cached.bytes + bytes <= Budget;
             }
             auto next = CreateRef<GpuTexture>();
-            if (room && next->Initialize(impl_->device, static_cast<uint32>(width),
-                                         static_cast<uint32>(height), pixels.data(),
-                                         TextureFilter::Linear, colorSpace, sampling)) {
+            if (room &&
+                next->Initialize(impl_->device, static_cast<uint32>(width),
+                                 static_cast<uint32>(height), pixels.data(), TextureFilter::Linear,
+                                 colorSpace, sampling, alphaMaskCutoff)) {
                 impl_->textureBytes = impl_->textureBytes - cached.bytes + bytes;
                 cached.texture = std::move(next);
                 cached.bytes = bytes;

@@ -1,6 +1,7 @@
 #include <LuxEngine/Environment/EnvironmentMap.hpp>
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -271,7 +272,9 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& pat
         Source source;
         if (!path.empty() && !Decode(path, source.width, source.height, source.pixels, data->error))
             return data;
-        data->sky = Cube(256, 1, [&](Vec3 n, uint32) { return source.Sample(n); });
+        const uint32 skySize =
+            std::clamp(std::bit_floor(static_cast<uint32>(source.width)) / 4, 256u, 1024u);
+        data->sky = Cube(skySize, 1, [&](Vec3 n, uint32) { return source.Sample(n); });
         const auto& kernels = Kernels();
         data->diffuse = Cube(32, 1, [&](Vec3 n, uint32) {
             const TangentFrame frame(n);

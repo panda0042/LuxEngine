@@ -36,6 +36,7 @@ struct RenderVertex {
     Vec4 color;
     GpuVec2 uv;
     GpuVec3 normal{};
+    Vec4 uvBounds{0, 0, 1, 1};
 };
 
 enum class GpuValidation { Auto, Off, On, Synchronization };

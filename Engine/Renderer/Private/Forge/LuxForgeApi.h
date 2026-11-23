@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 13u
+#define LUX_FORGE_API_VERSION 15u
 
 #if defined(_WIN32)
 #if defined(LUX_FORGE_BUILD)
@@ -59,12 +59,13 @@ typedef struct LuxForgeInfo {
 #define LUX_FORGE_FRAME_SKIPPED 1
 #define LUX_FORGE_FRAME_ERROR (-1)
 
-// Vertex layout of drawTriangles (matches LuxEngine::RenderVertex): 48 bytes.
+// Vertex layout of drawTriangles (matches LuxEngine::RenderVertex): 64 bytes.
 typedef struct LuxForgeVertex {
     float position[3];
     float color[4];
     float uv[2];
     float normal[3];
+    float uvBounds[4];
 } LuxForgeVertex;
 
 typedef struct LuxForgeStats {
@@ -184,9 +185,10 @@ typedef struct LuxForgeApi {
     // Current swap chain size.
     void (*size)(const LuxForgeDevice* device, uint32_t* width, uint32_t* height);
 
-    // Textures: RGBA8 pixels (NULL = transparent black). Returns an id > 0, or 0 on failure.
+    // Textures: a pointer to RGBA8 pixels for each mip (NULL mip = transparent black).
     uint32_t (*createTexture)(LuxForgeDevice* device, uint32_t width, uint32_t height,
-                              const void* rgba, int nearest, int srgb, uint32_t mipLevels);
+                              const void* const* mipPixels, int nearest, int srgb,
+                              uint32_t mipLevels);
     // Released once the GPU no longer uses it; unknown ids are ignored.
     void (*destroyTexture)(LuxForgeDevice* device, uint32_t texture);
     int (*hasTexture)(const LuxForgeDevice* device, uint32_t texture);

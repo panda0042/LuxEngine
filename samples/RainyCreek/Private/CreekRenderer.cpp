@@ -32,19 +32,22 @@ CreekRenderer::CreekRenderer() = default;
 CreekRenderer::~CreekRenderer() = default;
 
 std::shared_ptr<le::GpuTexture> CreekRenderer::LoadTexture(le::GpuDevice& device,
-                                                           const std::filesystem::path& path) {
-    if (const auto found = textures_.find(path); found != textures_.end())
+                                                           const std::filesystem::path& path,
+                                                           float alphaMaskCutoff) {
+    const auto key = std::pair{path, alphaMaskCutoff};
+    if (const auto found = textures_.find(key); found != textures_.end())
         return found->second;
     int width = 0, height = 0;
     std::vector<le::uint8> pixels;
     if (!le::AssetManager::DecodeTextureCpu(ToUtf8(path), width, height, pixels))
         throw std::runtime_error("Rainy Creek 텍스처를 읽지 못했습니다: " + ToUtf8(path));
     auto texture = std::make_shared<le::GpuTexture>();
-    if (!texture->Initialize(&device, static_cast<le::uint32>(width),
-                             static_cast<le::uint32>(height), pixels.data(),
-                             le::TextureFilter::Linear, le::TextureColorSpace::Srgb))
+    const auto sampling = le::Material3D{}.textureSampling;
+    if (!texture->Initialize(
+            &device, static_cast<le::uint32>(width), static_cast<le::uint32>(height), pixels.data(),
+            le::TextureFilter::Linear, le::TextureColorSpace::Srgb, sampling, alphaMaskCutoff))
         throw std::runtime_error("Rainy Creek 텍스처를 업로드하지 못했습니다.");
-    textures_.emplace(path, texture);
+    textures_.emplace(key, texture);
     return texture;
 }
 
@@ -61,13 +64,11 @@ CreekRenderer::Part CreekRenderer::LoadPart(le::GpuDevice& device, const ModelPa
     Part result;
     if (!result.mesh.Upload(&device, vertices, raw.indices))
         throw std::runtime_error("Rainy Creek 모델을 업로드하지 못했습니다.");
-    result.texture = LoadTexture(device, part.albedo);
+    result.texture = LoadTexture(device, part.albedo, part.alphaMask ? part.alphaCutoff : 0.f);
     result.material.roughness = part.roughness;
-    // TODO(Material3D): alpha cutoff와 양면 재질 API가 생기면 이진 식생 마스크를 대체합니다.
-    // TODO(Material3D): normal/roughness 텍스처 슬롯이 필요합니다. 현재는 albedo와 상수 거칠기만
-    // 사용합니다.
-    // TODO(Material3D): 원본 식생의 specular/IOR 속성과 Repeat 샘플러·밉맵 설정이 필요합니다.
-    // 현재 Clamp 샘플러에서는 bark의 반복 UV가 늘어나며 먼 침엽의 축소 표시가 거칠 수 있습니다.
+    result.material.alphaMode =
+        part.alphaMask ? le::MaterialAlphaMode::Mask : le::MaterialAlphaMode::Opaque;
+    result.material.alphaCutoff = part.alphaCutoff;
     return result;
 }
 

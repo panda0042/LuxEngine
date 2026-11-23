@@ -83,7 +83,8 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
     INIT_MAIN;
     float4 texel = SampleMaterial(gTexture, In.uv);
     float4 color = In.color * texel;
-    if (gDraw.options.y > 0.5f && gDraw.options.y < 1.5f && color.a < gDraw.options.z)
+    if (gDraw.options.y > 0.5f && gDraw.options.y < 1.5f &&
+        BelowAlphaCutoff(texel.a, In.color.a, In.uv, In.position.xy))
         discard;
     if (gDraw.options.y < 1.5f)
         color.a = 1.0f;

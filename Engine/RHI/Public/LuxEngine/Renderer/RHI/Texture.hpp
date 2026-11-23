@@ -32,9 +32,10 @@ struct TextureMipLevel {
     std::vector<uint8> pixels;
 };
 
+// A positive mask cutoff stores the covered area in alpha from mip level 1 onward.
 LUX_API bool BuildTextureMipChain(uint32 width, uint32 height, std::span<const uint8> pixels,
                                   TextureColorSpace colorSpace, bool normalMap,
-                                  std::vector<TextureMipLevel>& output);
+                                  std::vector<TextureMipLevel>& output, float alphaMaskCutoff = 0);
 
 class LUX_API GpuTexture {
 public:
@@ -49,11 +50,12 @@ public:
     bool Initialize(GpuDevice* device, uint32 width, uint32 height, const void* pixelData = nullptr,
                     TextureFilter filter = TextureFilter::Linear,
                     TextureColorSpace colorSpace = TextureColorSpace::Linear,
-                    TextureSampling sampling = {});
+                    TextureSampling sampling = {}, float alphaMaskCutoff = 0);
 
     bool Initialize(std::nullptr_t, uint32, uint32, const void* = nullptr,
                     TextureFilter = TextureFilter::Linear,
-                    TextureColorSpace = TextureColorSpace::Linear, TextureSampling = {});
+                    TextureColorSpace = TextureColorSpace::Linear, TextureSampling = {},
+                    float alphaMaskCutoff = 0);
 
     void Release();
 
@@ -78,6 +80,7 @@ private:
     uint32 height_ = 0;
     uint32 mipCount_ = 0;
     size_t storageBytes_ = 0;
+    float alphaMaskCutoff_ = 0;
     TextureColorSpace colorSpace_ = TextureColorSpace::Linear;
 };
 

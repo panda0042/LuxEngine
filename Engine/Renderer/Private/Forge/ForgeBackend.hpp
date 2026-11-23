@@ -54,9 +54,8 @@ public:
     void DestroyBuffer(uint64 handle) override;
     bool HasBuffer(uint64 handle) const override;
 
-    bool CreateTexture(uint32 width, uint32 height, const void* pixelData, TextureFilter filter,
-                       TextureColorSpace colorSpace, uint32 mipLevels, TextureSampling sampling,
-                       uint64& handle) override;
+    bool CreateTexture(uint32 width, uint32 height, std::span<const void* const> mipPixels,
+                       TextureFilter filter, TextureColorSpace colorSpace, uint64& handle) override;
     void DestroyTexture(uint64 handle) override;
     bool HasTexture(uint64 handle) const override;
 

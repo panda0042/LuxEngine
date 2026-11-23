@@ -303,12 +303,25 @@ bool Renderer2D::Context::DrawSpriteAsset(const Mat4& transform, const std::stri
     impl_->textures.push_back(texture);
     constexpr std::array<Vec2, 6> corners{
         {{-.5, -.5}, {.5, -.5}, {.5, .5}, {.5, .5}, {-.5, .5}, {-.5, -.5}}};
+    const uint32 column = frame % columns, row = frame / columns;
+    const auto bounds = [](uint32 cell, uint32 count, uint32 size) -> std::pair<float, float> {
+        if (count == 1)
+            return {0.f, 1.f};
+        const double start = double(cell) * size / count;
+        const double end = double(cell + 1) * size / count;
+        const double first = std::min(std::ceil(start - .5), double(size - 1));
+        const double last = std::max(first, std::ceil(end - .5) - 1);
+        return {float((first + .5) / size), float((last + .5) / size)};
+    };
+    const auto [left, right] = bounds(column, columns, texture->GetWidth());
+    const auto [top, bottom] = bounds(row, rows, texture->GetHeight());
     for (size_t i = 0; i < 6; ++i) {
         auto& vertex = vertices[i];
         vertex.position = transform.TransformPoint({corners[i].x, corners[i].y, 0}) - impl_->origin;
         vertex.position.z = 0;
-        vertex.uv = {(double(frame % columns) + corners[i].x + .5) / columns,
-                     (double(frame / columns) + .5 - corners[i].y) / rows};
+        vertex.uv = {(double(column) + corners[i].x + .5) / columns,
+                     (double(row) + .5 - corners[i].y) / rows};
+        vertex.uvBounds = {left, top, right, bottom};
     }
     return true;
 }

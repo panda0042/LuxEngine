@@ -86,9 +86,9 @@ public:
     virtual void DestroyBuffer(uint64 handle) = 0;
     virtual bool HasBuffer(uint64 handle) const = 0;
 
-    virtual bool CreateTexture(uint32 width, uint32 height, const void* pixelData,
-                               TextureFilter filter, TextureColorSpace colorSpace, uint32 mipLevels,
-                               TextureSampling sampling, uint64& handle) = 0;
+    virtual bool CreateTexture(uint32 width, uint32 height, std::span<const void* const> mipPixels,
+                               TextureFilter filter, TextureColorSpace colorSpace,
+                               uint64& handle) = 0;
     virtual void DestroyTexture(uint64 handle) = 0;
     virtual bool HasTexture(uint64 handle) const = 0;
 

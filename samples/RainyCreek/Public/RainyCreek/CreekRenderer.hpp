@@ -35,11 +35,13 @@ private:
 
     Part LoadPart(LuxEngine::GpuDevice& device, const ModelPart& part);
     std::shared_ptr<LuxEngine::GpuTexture> LoadTexture(LuxEngine::GpuDevice& device,
-                                                       const std::filesystem::path& path);
+                                                       const std::filesystem::path& path,
+                                                       float alphaMaskCutoff = 0);
     Catalog catalog_;
     LuxEngine::Renderer3D::Context context_;
     std::map<std::string, GpuModel> models_;
-    std::map<std::filesystem::path, std::shared_ptr<LuxEngine::GpuTexture>> textures_;
+    std::map<std::pair<std::filesystem::path, float>, std::shared_ptr<LuxEngine::GpuTexture>>
+        textures_;
     LuxEngine::Mesh3D terrain_;
     LuxEngine::Mesh3D lampPost_;
     LuxEngine::Mesh3D lampGlass_;

@@ -36,8 +36,11 @@ std::vector<ModelPart> ReadParts(const fs::path& root, const Json& entries) {
         part.albedo = Resolve(root, entry.at("albedo"));
         part.roughness = entry.value("roughness", .9f);
         part.alphaMask = entry.value("alphaMask", false);
+        part.alphaCutoff = entry.value("alphaCutoff", part.alphaMask ? .5f : 0.f);
         if (!std::isfinite(part.roughness) || part.roughness < 0 || part.roughness > 1)
             throw std::runtime_error("모델의 거칠기 값이 올바르지 않습니다.");
+        if (!std::isfinite(part.alphaCutoff) || part.alphaCutoff < 0 || part.alphaCutoff > 1)
+            throw std::runtime_error("모델의 알파 임계값이 올바르지 않습니다.");
         result.push_back(std::move(part));
     }
     return result;
@@ -71,7 +74,6 @@ void ValidateTexture(const fs::path& path, bool alphaMask) {
     if (!le::AssetManager::DecodeTextureCpu(ToUtf8(path), width, height, pixels) || width <= 0 ||
         height <= 0 || pixels.size() != static_cast<size_t>(width) * height * 4)
         throw std::runtime_error("텍스처를 읽지 못했습니다: " + ToUtf8(path));
-    // 현재 Renderer3D는 alpha == 0만 버립니다. 변환 시 이진 마스크를 만들어 사용합니다.
     if (alphaMask)
         for (size_t index = 3; index < pixels.size(); index += 4)
             if (pixels[index] != 0 && pixels[index] != 255)
