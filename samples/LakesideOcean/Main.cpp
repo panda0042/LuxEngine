@@ -1,3 +1,4 @@
+#include <Common/SampleApplication.hpp>
 #include <LuxEngine/Application.hpp>
 #include <LuxEngine/EntryPoint.hpp>
 #include <LuxEngine/Renderer/Water/OceanSpectrum.hpp>
@@ -7,6 +8,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -14,6 +16,7 @@
 #include <numbers>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -23,6 +26,16 @@ constexpr double Patch = 64;
 constexpr double HalfPatch = Patch / 2;
 constexpr double BuoyRadius = .21;
 constexpr double Tau = 2 * std::numbers::pi;
+
+enum class CameraView { Default, Shore, Waterline };
+
+struct Options {
+    bool smoke = false;
+    bool benchmark = false;
+    std::filesystem::path capture;
+    unsigned tick = 120;
+    CameraView view = CameraView::Default;
+};
 
 double Shore(double z) {
     return -12 + 4 * std::sin(z * .071) + 2.5 * std::sin(z * .148);
@@ -191,13 +204,23 @@ std::string AssetPath(const char* group, const char* filename) {
 
 class LakesideDemo final : public Application {
 public:
-    explicit LakesideDemo(bool smoke)
-        : Application({"LuxEngine · Lakeside at Noon", smoke ? 640u : 1440u, smoke ? 360u : 810u}),
-          smoke_(smoke) {}
+    explicit LakesideDemo(Options options)
+        : Application({"LuxEngine · Lakeside at Noon", options.smoke ? 640u : 1440u,
+                       options.smoke ? 360u : 810u}),
+          options_(std::move(options)) {}
+
+    int Run() {
+        const int result = Application::Run();
+        return result == 0 && (options_.benchmark || !options_.capture.empty()) && !runFinished_
+                   ? 1
+                   : result;
+    }
 
 private:
     void OnInit() override {
         auto& gpu = GetGpuDevice();
+        if (options_.benchmark && (!gpu.GetInfo().gpuTimestamps || !gpu.SetVSync(false)))
+            throw std::runtime_error("Lakeside benchmark needs GPU timestamps and disabled VSync");
         renderer_.Init(&gpu);
         MakeTerrain(gpu, terrain_);
         MakeCapillaryNormal(gpu, capillary_);
@@ -254,6 +277,9 @@ private:
         settings_.rayTracing.shadows = true;
         settings_.rayTracing.maxDistance = 145;
         settings_.rayTracing.maxBounces = 2;
+        if (!options_.capture.empty())
+            for (unsigned tick = 0; tick < options_.tick; ++tick)
+                StepLake(GetFixedUpdateStep());
         start_ = std::chrono::steady_clock::now();
     }
 
@@ -262,6 +288,9 @@ private:
         EventDispatcher dispatcher(event);
         dispatcher.Dispatch<KeyPressedEvent>([&](KeyPressedEvent& key) {
             if (key.IsRepeat())
+                return false;
+            if ((options_.smoke || options_.benchmark || !options_.capture.empty()) &&
+                key.GetKeyCode() != static_cast<int>(LuxKey::Escape))
                 return false;
             switch (static_cast<LuxKey>(key.GetKeyCode())) {
             case LuxKey::Escape:
@@ -291,8 +320,11 @@ private:
     }
 
     void OnUpdate(double dt) override {
-        if (paused_)
-            return;
+        if (!paused_ && !options_.benchmark && options_.capture.empty())
+            StepLake(dt);
+    }
+
+    void StepLake(double dt) {
         time_ += dt;
         if (!ocean_.Update(static_cast<float>(time_)))
             throw std::runtime_error("Could not sample the animated lake");
@@ -313,6 +345,8 @@ private:
 
     void OnRender(float) override {
         auto& gpu = GetGpuDevice();
+        if (options_.benchmark && benchmarkFrames_)
+            StepLake(GetFixedUpdateStep());
         if (!water_.UpdateOcean(static_cast<float>(time_)))
             throw std::runtime_error("GPU FFT dispatch failed: " + gpu.GetLastError());
         uint32 width = 0, height = 0;
@@ -322,7 +356,15 @@ private:
         const double drift = .35 * std::sin(.11 * time_);
         camera.SetPosition({3.9 + drift, 1.53 + .09 * std::sin(.23 * time_), 12.7});
         camera.SetTarget({-4, 1.25, -47});
-        gpu.Clear(.22f, .31f, .40f, 1);
+        if (options_.view == CameraView::Shore) {
+            camera.SetPosition({-7, 2.2, 7});
+            camera.SetTarget({-15, -.15, -12});
+        } else if (options_.view == CameraView::Waterline) {
+            camera.SetPosition({4, .48, 12.7});
+            camera.SetTarget({-4, .60, -47});
+        }
+        if (!gpu.Clear(.22f, .31f, .40f, 1))
+            throw std::runtime_error("Could not clear the lakeside frame: " + gpu.GetLastError());
         renderer_.BeginScene(camera, settings_, .9f);
         Material3D earth;
         earth.alphaMode = MaterialAlphaMode::Opaque;
@@ -369,23 +411,83 @@ private:
                                                Mat4::Translate({column * Patch, 0, row * Patch}),
                                                water, {.normal = &capillary_});
         renderer_.EndScene();
+        if (!options_.capture.empty() && renderer_.IsEnvironmentReady() &&
+            gpu.GetFrameStats().waterReflectionPasses == 1) {
+            if (!gpu.RequestFrameCapture())
+                throw std::runtime_error("Could not request a lakeside capture");
+            captureRequested_ = true;
+        }
     }
 
     void OnFramePresented() override {
-        if (!smoke_)
+        if (!options_.smoke && !options_.benchmark && options_.capture.empty())
             return;
-        const auto stats = GetGpuDevice().GetFrameStats();
-        renderedWaves_ |= stats.computeDispatches >= 3;
-        if (++frames_ >= 5 && stats.waterReflectionPasses == 1 && renderer_.IsEnvironmentReady()) {
-            if (!renderedWaves_ || stats.volumetricFogPasses != 1 ||
-                GetGpuDevice().GetCounters().validationErrors)
+        auto& gpu = GetGpuDevice();
+        const auto stats = gpu.GetFrameStats();
+        const bool environmentReady =
+            stats.waterReflectionPasses == 1 && renderer_.IsEnvironmentReady();
+        if (options_.benchmark && environmentReady) {
+            RecordBenchmark(stats);
+            return;
+        }
+        if (stats.computeDispatches == 3 + stats.volumetricFogPasses)
+            ++waveUpdates_;
+        ++frames_;
+        const bool smokeReady =
+            options_.smoke && frames_ >= 5 && waveUpdates_ >= 2 && environmentReady;
+        if (captureRequested_ || smokeReady) {
+            if (stats.volumetricFogPasses != 1 || gpu.GetCounters().validationErrors)
                 throw std::runtime_error("Lakeside frame did not render the expected passes");
             if (!renderer_.GetLastAssetError().empty())
                 throw std::runtime_error("Lakeside asset error: " + renderer_.GetLastAssetError());
+            if (captureRequested_) {
+                LuxSamples::WritePpmCapture(gpu, options_.capture);
+                runFinished_ = true;
+                std::cout << "Lakeside tick " << options_.tick << " | virtual shadow pages "
+                          << stats.virtualShadowPages << " | ray-traced passes "
+                          << stats.rayTracedPasses << '\n';
+            }
             Close();
-        } else if (std::chrono::steady_clock::now() - start_ > std::chrono::seconds(20))
-            throw std::runtime_error("Lakeside HDRI did not become ready: " +
-                                     renderer_.GetLastAssetError());
+        } else if (std::chrono::steady_clock::now() - start_ > std::chrono::seconds(20)) {
+            throw std::runtime_error("Lakeside validation timed out after " +
+                                     std::to_string(waveUpdates_) +
+                                     " FFT updates: " + renderer_.GetLastAssetError());
+        }
+    }
+
+    void RecordBenchmark(const GpuFrameStats& stats) {
+        constexpr unsigned WarmupFrames = 60, Samples = 240;
+        auto& gpu = GetGpuDevice();
+        if (gpu.GetCounters().validationErrors || !renderer_.GetLastAssetError().empty() ||
+            stats.volumetricFogPasses != 1)
+            throw std::runtime_error("Lakeside benchmark did not render the expected frame");
+        if (++benchmarkFrames_ < WarmupFrames)
+            return;
+        if (stats.gpuTimingFrame > lastTimingFrame_) {
+            lastTimingFrame_ = stats.gpuTimingFrame;
+            if (stats.gpuTimeMs > 0 && stats.gpuShadowTimeMs > 0) {
+                frameTimes_.push_back(stats.gpuTimeMs);
+                shadowTimes_.push_back(stats.gpuShadowTimeMs);
+            }
+        }
+        if (frameTimes_.size() == Samples) {
+            std::sort(frameTimes_.begin(), frameTimes_.end());
+            std::sort(shadowTimes_.begin(), shadowTimes_.end());
+            uint32 width = 0, height = 0;
+            GetWindow().GetFramebufferSize(width, height);
+            std::cout << "Lakeside " << gpu.GetInfo().deviceName << " | " << width << 'x' << height
+                      << " | " << Samples << " GPU frames | frame ms p50 "
+                      << frameTimes_[Samples / 2 - 1] << " p95 "
+                      << frameTimes_[Samples * 95 / 100 - 1] << " | shadow ms p50 "
+                      << shadowTimes_[Samples / 2 - 1] << " p95 "
+                      << shadowTimes_[Samples * 95 / 100 - 1] << " | virtual shadow pages "
+                      << stats.virtualShadowPages << '/' << stats.requestedShadowPages
+                      << " | draws " << stats.drawCalls << '\n';
+            runFinished_ = true;
+            Close();
+        } else if (std::chrono::steady_clock::now() - start_ > std::chrono::seconds(60)) {
+            throw std::runtime_error("Lakeside GPU timestamp benchmark timed out");
+        }
     }
 
     void OnShutdown() override {
@@ -399,8 +501,11 @@ private:
         terrain_.Release();
     }
 
-    bool smoke_, paused_ = false, renderedWaves_ = false;
-    int frames_ = 0;
+    Options options_;
+    bool paused_ = false, captureRequested_ = false, runFinished_ = false;
+    unsigned frames_ = 0, waveUpdates_ = 0, benchmarkFrames_ = 0;
+    uint64 lastTimingFrame_ = 0;
+    std::vector<double> frameTimes_, shadowTimes_;
     double time_ = 0;
     std::chrono::steady_clock::time_point start_;
     Render3DSettings settings_;
@@ -413,16 +518,53 @@ private:
 };
 
 int Run(int argc, char** argv) {
+    constexpr auto usage = "SampleLakesideOcean [--smoke-test | --benchmark | "
+                           "--capture PATH.ppm [--tick 0..600] [--view default|shore|waterline]]\n";
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
-        std::cout << "SampleLakesideOcean [--smoke-test]\n"
-                     "Space: pause waves. F: fog. R: hardware rays. C: radiance cascades.\n"
+        std::cout << usage
+                  << "Space: pause waves. F: fog. R: hardware rays. C: radiance cascades.\n"
                      "Escape: quit.\n";
         return 0;
     }
-    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke-test";
-    if (argc != 1 && !smoke)
+    const auto invalidOptions = [usage] {
+        std::cerr << usage;
         return 2;
-    LakesideDemo app(smoke);
+    };
+    Options options;
+    if (argc == 2 && std::string_view(argv[1]) == "--smoke-test") {
+        options.smoke = true;
+    } else if (argc == 2 && std::string_view(argv[1]) == "--benchmark") {
+        options.benchmark = true;
+    } else if (argc > 1) {
+        if (argc < 3 || std::string_view(argv[1]) != "--capture")
+            return invalidOptions();
+        options.capture =
+            std::filesystem::path(std::u8string_view(reinterpret_cast<const char8_t*>(argv[2])));
+        if (options.capture.extension() != ".ppm")
+            return invalidOptions();
+        for (int index = 3; index < argc; index += 2) {
+            if (index + 1 == argc)
+                return invalidOptions();
+            const std::string_view name(argv[index]);
+            const std::string_view value(argv[index + 1]);
+            if (name == "--tick") {
+                const auto [end, error] =
+                    std::from_chars(value.data(), value.data() + value.size(), options.tick);
+                if (error != std::errc{} || end != value.data() + value.size() ||
+                    options.tick > 600)
+                    return invalidOptions();
+            } else if (name == "--view" && value == "default") {
+                options.view = CameraView::Default;
+            } else if (name == "--view" && value == "shore") {
+                options.view = CameraView::Shore;
+            } else if (name == "--view" && value == "waterline") {
+                options.view = CameraView::Waterline;
+            } else {
+                return invalidOptions();
+            }
+        }
+    }
+    LakesideDemo app(std::move(options));
     return app.Initialize() ? app.Run() : 1;
 }
 } // namespace

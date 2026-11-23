@@ -160,10 +160,19 @@ int SampleApplication::Run() {
 }
 
 void SampleApplication::Capture() {
+    WritePpmCapture(GetGpuDevice(), options_.capture);
+    options_.capture.clear();
+}
+
+void WritePpmCapture(le::GpuDevice& device, const std::filesystem::path& path) {
     le::GpuFrameCapture image;
-    if (!GetGpuDevice().ReadFrameCapture(image))
+    if (!device.ReadFrameCapture(image) || !image.width || !image.height ||
+        image.rgba.size() % 4 != 0 ||
+        image.rgba.size() / 4 != static_cast<le::uint64>(image.width) * image.height)
         throw std::runtime_error("화면 캡처를 읽지 못했습니다.");
-    std::ofstream output(options_.capture, std::ios::binary | std::ios::trunc);
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output)
+        throw std::runtime_error("캡처 파일을 열지 못했습니다.");
     output << "P6\n" << image.width << ' ' << image.height << "\n255\n";
     for (size_t index = 0; index < image.rgba.size(); index += 4)
         output.write(reinterpret_cast<const char*>(image.rgba.data() + index), 3);
@@ -171,7 +180,6 @@ void SampleApplication::Capture() {
     output.close();
     if (!output)
         throw std::runtime_error("화면 캡처를 저장하지 못했습니다.");
-    options_.capture.clear();
 }
 
 void SampleApplication::OnShutdown() {
