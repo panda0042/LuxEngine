@@ -66,14 +66,19 @@ int main() {
             settings.imageBasedLighting = false;
             settings.toneMapping = false;
             settings.sun.direction = {0, 0, -1};
+            Material3D material;
+            material.albedoColor = {1, .2f, .1f, 1};
             if (forceFallback)
                 for (int pass = 0; pass < 16; ++pass) {
                     Renderer3D::BeginScene(camera, settings, 1);
                     Renderer3D::EndScene();
+                    Renderer3D::BeginScene(camera, settings, 1);
+                    Renderer3D::DrawCube({origin + .125, .9, 0}, {.15, .15, .15}, material);
+                    Renderer3D::EndScene();
+                    if (!renderer.GetLastAssetError().empty())
+                        throw std::runtime_error("Empty scenes consumed the rendered pass budget");
                 }
             Renderer3D::BeginScene(camera, settings, 1);
-            Material3D material;
-            material.albedoColor = {1, .2f, .1f, 1};
             if (offscreenX)
                 for (int i = 0; i < 16384; ++i)
                     Renderer3D::DrawCube({origin + offscreenX, 0, 0}, {1, 1, 1}, material);
