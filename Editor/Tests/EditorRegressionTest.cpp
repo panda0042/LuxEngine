@@ -340,6 +340,15 @@ void TestPicking3D(LuxUI::Application& app, bool gpu = false) {
             throw GpuUnavailable(renderer->LastError().toStdString());
     }
     EditorDocument document;
+    if (gpu) {
+        auto settings = document.GetScene().GetSettings();
+        settings.render3D.imageBasedLighting = false;
+        settings.render3D.shadows = false;
+        settings.render3D.toneMapping = false;
+        settings.render3D.sun.intensity = 0;
+        settings.render3D.environmentColor = {.4f, .4f, .4f};
+        Check(document.GetScene().SetSettings(settings), "picking fixture lighting applies");
+    }
     auto mesh = document.CreateEntity("Offset mesh");
     mesh.GetComponent<TransformComponent>().position = {6, 0, 6};
     mesh.GetComponent<TransformComponent>().scale = {3, 2, 2};
@@ -391,10 +400,10 @@ void TestPicking3D(LuxUI::Application& app, bool gpu = false) {
                 Check(renderer->Render3D(document.GetScene(), std::lround(size.width() * ratio),
                                          std::lround(size.height() * ratio), {}, yaw, pitch, 22,
                                          image),
-                      "real Vulkan 3D image renders without a software fallback");
+                      "real GPU 3D image renders without a software fallback");
                 const LuxUI::Color pixel = image.pixelColor(std::lround(center.x() * ratio),
                                                             std::lround(center.y() * ratio));
-                Check(pixel.red() > 3 && pixel.blue() > 3 && pixel.green() < 15,
+                Check(pixel.red() > 80 && pixel.blue() > 80 && pixel.green() < 15,
                       "reference projection lands on the actual GPU mesh");
             }
             document.Select(std::nullopt);
