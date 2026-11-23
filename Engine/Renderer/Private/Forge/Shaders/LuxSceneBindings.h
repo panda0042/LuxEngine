@@ -13,10 +13,13 @@ DECL_SAMPLER(Persistent, SamplerState, gMaterialClamp)
 DECL_SAMPLER(Persistent, SamplerState, gMaterialRepeat)
 DECL_SAMPLER(Persistent, SamplerState, gMaterialAnisotropicClamp)
 DECL_SAMPLER(Persistent, SamplerState, gMaterialAnisotropicRepeat)
+DECL_TEXTURE(Persistent, TexCube(float4), gWaterSpecularEnv)
 #ifdef LUX_RAY_BINDINGS
 DECL_RAYTRACING(Persistent, RaytracingAccelerationStructure, gRayScene)
 DECL_BUFFER(Persistent, Buffer(float4), gRayInstances)
 DECL_BUFFER(Persistent, Buffer(float4), gRayTriangles)
+DECL_BUFFER(Persistent, Buffer(float4), gRestirLighting)
+DECL_BUFFER(Persistent, Buffer(float4), gCascadeIrradiance)
 #endif
 END_SRT_SET(Persistent)
 BEGIN_SRT_SET(PerFrame)

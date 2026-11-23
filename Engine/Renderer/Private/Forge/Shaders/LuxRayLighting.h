@@ -2,6 +2,8 @@
 #define LUX_RAY_LIGHTING_H
 
 #include "LuxRayVisibility.h"
+#include "LuxRestirCommon.h"
+#include "LuxRadianceCascadesLighting.h"
 
 bool RayEffect(uint effect) {
     return (uint(gScene.rayOptions.x) & effect) != 0u;
@@ -11,6 +13,42 @@ float3 BiasRayOrigin(float3 position, float3 normal, float3 direction) {
     const float scale = max(abs(position.x), max(abs(position.y), abs(position.z)));
     const float bias = 0.002f + scale * 2.5e-7f;
     return position + normal * (dot(normal, direction) < 0.0f ? -bias : bias);
+}
+
+uint RestirReceiverIndex(float2 pixel, float3 position, float3 normal) {
+    const uint2 size = uint2(gScene.frameSize.xy);
+    const uint spacing = RestirSpacing(size);
+    const uint2 grid = RestirGrid(size, spacing);
+    const uint2 cell = min(uint2(pixel) / spacing, grid - 1u);
+    const uint index = (cell.y * grid.x + cell.x) * LUX_RESTIR_OUTPUT_FLOATS4;
+    const float4 receiver = gRestirLighting[index];
+    const float3 receiverNormal = gRestirLighting[index + 1u].xyz;
+    const float3 delta = receiver.xyz - position;
+    const float footprint = max(length(gScene.right.xyz) * gScene.frameSize.z,
+                                length(gScene.up.xyz) * gScene.frameSize.w) *
+                            float(spacing) * receiver.w;
+    // Reject inputs across occluders, on cutout/deformed triangle silhouettes,
+    // and when the raster shading normal disagrees with the ray-hit geometry.
+    if (receiver.w <= 0.0f || dot(receiverNormal, normal) < 0.9f ||
+        abs(dot(delta, receiverNormal)) > max(0.008f, receiver.w * 0.0015f) ||
+        length(delta) > max(0.012f, footprint * 4.0f))
+        return 0xffffffffu;
+    return index;
+}
+
+float3 RestirDirectLighting(float4 reservoir, float3 position, float3 base, float metallic,
+                            float roughness, float3 normal, float3 view) {
+    if (reservoir.y <= 0.0f)
+        return float3(0.0f, 0.0f, 0.0f);
+    const uint light = uint(reservoir.x);
+    const float3 lightPosition = gLights.pointPositionRadius[light].xyz;
+    const float3 origin = BiasRayOrigin(position, normal, lightPosition - position);
+    const float3 delta = lightPosition - origin;
+    const float distance = length(delta);
+    if (distance > 0.008f && RayOccluded(origin, delta / distance, max(distance - 0.005f, 0.0011f)))
+        return float3(0.0f, 0.0f, 0.0f);
+    return RestirPointContribution(light, position, base, metallic, roughness, normal, view) *
+           reservoir.y;
 }
 
 float RayDirectionalShadow(float3 position, float3 normal) {
@@ -174,7 +212,7 @@ float3 DiffuseRay(float3 normal, uint seed) {
 }
 
 float3 RayEnvironmentLighting(float3 base, float metal, float roughness, float3 normal, float3 view,
-                              float3 position, float2 pixel) {
+                              float3 position, float2 pixel, float4 restirGI) {
     const float nv = saturate(dot(normal, view));
     const float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), base, metal);
     const float3 fresnel =
@@ -184,7 +222,11 @@ float3 RayEnvironmentLighting(float3 base, float metal, float roughness, float3 
     const float3 diffuseWeight =
         (useIbl ? 1.0f - fresnel : float3(1.0f, 1.0f, 1.0f)) * (1.0f - metal) * base;
     float3 irradiance = RayDiffuseEnvironment(normal);
-    if (RayEffect(8u) && metal < 1.0f && gScene.rayOptions.w > 0.0f) {
+    if (RayEffect(64u))
+        irradiance = SampleRadianceCascades(position, normal, irradiance);
+    if (restirGI.w > 0.0f) {
+        irradiance = restirGI.rgb;
+    } else if (!RayEffect(64u) && RayEffect(8u) && metal < 1.0f && gScene.rayOptions.w > 0.0f) {
         const uint seed = PixelRayHash(uint(pixel.x) + uint(pixel.y) * uint(gScene.frameSize.x));
         const float3 first = DiffuseRay(normal, seed);
         const float3 second = DiffuseRay(normal, seed ^ 0xa511e9b3u);

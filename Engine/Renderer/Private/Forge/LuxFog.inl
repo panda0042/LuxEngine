@@ -16,9 +16,10 @@ struct FogConstants {
     float shadowMatrix[16];
     float shadowOptions[4];
     float composite[4];
+    uint32_t virtualShadowPages[4];
 };
 
-static_assert(sizeof(FogConstants) == 224);
+static_assert(sizeof(FogConstants) == 240);
 
 void ShutdownFog(LuxForgeDevice* device) {
     auto* fog = device->fog;
@@ -178,7 +179,8 @@ void FillFogConstants(LuxForgeDevice* device, const LuxForgeScene& scene, bool s
 }
 
 bool RenderFog(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass, bool water,
-               bool shadows, [[maybe_unused]] AccelerationStructure* rayScene = nullptr) {
+               bool shadows, [[maybe_unused]] AccelerationStructure* rayScene = nullptr,
+               const uint32_t* virtualShadowPages = nullptr) {
     if (!(scene.fogColorDensity[3] > 0) || !(scene.fogOptions[0] > 0) || !InitFog(device))
         return false;
     auto& fog = *device->fog;
@@ -186,6 +188,9 @@ bool RenderFog(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass
     const uint32_t offset = entry * kFogUniformStride;
     FogConstants constants = {};
     FillFogConstants(device, scene, shadows, constants);
+    if (virtualShadowPages)
+        std::memcpy(constants.virtualShadowPages, virtualShadowPages,
+                    sizeof(constants.virtualShadowPages));
 #if defined(VULKAN) && defined(ENABLE_RAYTRACING)
     const bool ray = rayScene && InitRayFog(device, fog);
     if (ray)

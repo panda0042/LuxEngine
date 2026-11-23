@@ -71,11 +71,16 @@ void RebaseSceneReferences(LuxEngine::Scene& scene, const fs::path& owner,
             replace(resource, resolve(resource));
     };
     const auto& currentSettings = scene.GetSettings();
-    if (!currentSettings.render3D.environmentPath.empty()) {
-        auto environment = resolve(currentSettings.render3D.environmentPath);
-        if (environment != currentSettings.render3D.environmentPath) {
-            auto settings = currentSettings;
-            settings.render3D.environmentPath = std::move(environment);
+    if (!currentSettings.render3D.environmentPath.empty() ||
+        !currentSettings.render3D.waterReflection.environmentPath.empty()) {
+        auto settings = currentSettings;
+        for (auto* path : {&settings.render3D.environmentPath,
+                           &settings.render3D.waterReflection.environmentPath})
+            if (!path->empty())
+                *path = resolve(*path);
+        if (settings.render3D.environmentPath != currentSettings.render3D.environmentPath ||
+            settings.render3D.waterReflection.environmentPath !=
+                currentSettings.render3D.waterReflection.environmentPath) {
             if (edits)
                 edits->settings = std::move(settings);
             else if (!scene.SetSettings(settings))

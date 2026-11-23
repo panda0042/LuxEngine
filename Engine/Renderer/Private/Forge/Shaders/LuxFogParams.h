@@ -14,6 +14,7 @@ STRUCT(LuxFogData) {
     DATA(float4x4, shadowMatrix, None);
     DATA(float4, shadowOptions, None); // enable, texel size, depth bias, normal bias
     DATA(float4, composite, None);     // 1/width, 1/height, exposure, ACES enable
+    DATA(uint4, virtualShadowPages, None);
 };
 
 #define LUX_FOG_COLUMNS 64u

@@ -54,7 +54,13 @@ bool ValidateRender3DSettings(const Render3DSettings& s) {
            bounded(s.fog.color.y, 0, 1) && bounded(s.fog.color.z, 0, 1) &&
            bounded(s.fog.density, 0, 10) && bounded(s.fog.maxDistance, .1, 100000) &&
            bounded(s.fog.heightFalloff, 0, 10) && std::isfinite(s.fog.baseHeight) &&
-           bounded(s.fog.anisotropy, -.9f, .9f);
+           bounded(s.fog.anisotropy, -.9f, .9f) && Utf8(s.waterReflection.environmentPath) &&
+           s.waterReflection.environmentPath.size() <= 4096 &&
+           s.waterReflection.environmentPath.find('\0') == std::string::npos &&
+           bounded(s.waterReflection.rotation, -36000, 36000) &&
+           bounded(s.waterReflection.intensity, 0, 10000) &&
+           bounded(s.radianceCascades.strength, 0, 1) &&
+           bounded(s.radianceCascades.spacing, .5, 64);
 }
 
 bool IsDefaultRender3DSettings(const Render3DSettings& s) {
@@ -70,7 +76,10 @@ bool IsDefaultRender3DSettings(const Render3DSettings& s) {
             v.rayTracing.refractions, v.rayTracing.indirectDiffuse, v.rayTracing.maxBounces,
             v.rayTracing.maxDistance, v.rayTracing.indirectStrength, v.fog.color.x, v.fog.color.y,
             v.fog.color.z, v.fog.density, v.fog.maxDistance, v.fog.heightFalloff, v.fog.baseHeight,
-            v.fog.anisotropy, v.fog.rayTracedShadows);
+            v.fog.anisotropy, v.fog.rayTracedShadows, v.rayTracing.restirDirect,
+            v.rayTracing.restirIndirect, v.virtualShadows, v.waterReflection.environmentPath,
+            v.waterReflection.rotation, v.waterReflection.intensity, v.radianceCascades.strength,
+            v.radianceCascades.spacing);
     };
     return fields(s) == fields(d);
 }

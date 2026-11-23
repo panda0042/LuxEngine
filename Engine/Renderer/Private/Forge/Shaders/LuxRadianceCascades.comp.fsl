@@ -1,0 +1,178 @@
+#include "LuxStructs.h"
+#if defined(VULKAN)
+#include "fsl_ext.h"
+#endif
+#include "LuxRadianceCascades.srt.h"
+#include "LuxRadianceCascadesSampling.h"
+#if defined(VULKAN)
+#include "LuxRayVisibility.h"
+
+float3 CascadeRayDirection(uint2 cell, uint angles) {
+    // A uniform azimuth and uniform cosine of the polar angle give equal solid angles.
+    const float2 uv = (float2(cell) + 0.5f) / float(angles);
+    const float y = 1.0f - 2.0f * uv.y;
+    const float radius = sqrt(max(1.0f - y * y, 0.0f));
+    const float phi = uv.x * 6.28318530718f;
+    return float3(radius * cos(phi), y, radius * sin(phi));
+}
+
+float3 CascadeSky(float3 direction) {
+    if (gCascade.optics.y < 0.5f)
+        return gCascade.environment.rgb * gCascade.environment.w;
+    const float c = cos(gCascade.optics.x);
+    const float s = sin(gCascade.optics.x);
+    const float3 rotated = float3(c * direction.x + s * direction.z, direction.y,
+                                  c * direction.z - s * direction.x);
+    return SampleLvlTexCube(gCascadeSky, gSamplerTrilinearClamp, rotated, 0.0f).rgb *
+           gCascade.environment.w;
+}
+
+float3 CascadeSurfaceRadiance(float3 position, float3 normal, float3 base, float metallic) {
+    const float3 sunny = -gLights.direction.xyz;
+    const float cosine = max(dot(sunny, normal), 0.0f);
+    const float3 surfaceOrigin = position + normal * 0.002f;
+    float3 irradiance = float3(0.0f, 0.0f, 0.0f);
+    if (cosine > 0.0f && gLights.colorIntensity.w > 0.0f &&
+        !RayOccluded(surfaceOrigin, sunny, gCascade.optics.w))
+        irradiance += gLights.colorIntensity.rgb * gLights.colorIntensity.w * cosine;
+
+    for (uint light = 0u; light < min(gLights.count.x, 16u); ++light) {
+        const float4 source = gLights.pointPositionRadius[light];
+        const float4 intensity = gLights.pointColorIntensity[light];
+        const float3 delta = source.xyz - position;
+        const float distance = length(delta);
+        const float3 travel = delta / max(distance, 1e-5f);
+        const float facing = max(dot(normal, travel), 0.0f);
+        const float falloff = saturate(1.0f - distance / max(source.w, 1e-5f));
+        if (facing > 0.0f && falloff > 0.0f && intensity.w > 0.0f && distance > 0.004f &&
+            !RayOccluded(surfaceOrigin, travel, distance - 0.002f))
+            irradiance += intensity.rgb * (intensity.w * facing * falloff * falloff);
+    }
+    return base * (1.0f - metallic) *
+           (irradiance * 0.318309886184f + gCascade.environment.rgb * gCascade.environment.w);
+}
+
+float4 TraceCascadeInterval(float3 position, float3 direction) {
+    float4 result = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    RayDesc ray;
+    ray.Origin = position;
+    ray.Direction = direction;
+    ray.TMin = max(0.001f, gCascade.interval.y);
+    ray.TMax = gCascade.interval.z;
+    RayQueryClosestHit(gRayScene, RAY_TRAVERSAL_FLAG_DEFAULT, RAY_FLAG_FORCE_OPAQUE, ray, 0x1u,
+                       hit);
+    RayQueryBeginForEachCandidate(hit) {
+        RayQueryProceed(hit);
+    }
+    RayQueryEndForEachCandidate(hit)
+    if (RayQueryIsHitTriangle(hit)) {
+        const uint instance = 5u * RayQueryInstanceID(hit);
+        const float4 material = gRayInstances[instance];
+        const float4 optics = gRayInstances[instance + 1u];
+        const uint primitive = asuint(optics.z) + RayQueryPrimitiveIndex(hit);
+        const float3 local = gRayTriangles[primitive].xyz;
+        float3 normal = float3(dot(gRayInstances[instance + 2u].xyz, local),
+                               dot(gRayInstances[instance + 3u].xyz, local),
+                               dot(gRayInstances[instance + 4u].xyz, local));
+        const float magnitude = dot(normal, normal);
+        normal = magnitude > 1e-10f ? normal * rsqrt(magnitude) : -direction;
+        if (dot(normal, direction) > 0.0f)
+            normal = -normal;
+        const float3 hitPosition = position + direction * RayQueryRayT(hit);
+        const float3 radiance = CascadeSurfaceRadiance(hitPosition, normal, material.rgb,
+                                                       material.w);
+        result = float4(clamp(radiance, 0.0f, 65504.0f), 0.0f);
+    }
+    return result;
+}
+
+float3 MergeOuterCascade(float3 position, uint2 cell) {
+    const uint probes = gCascade.shape.z;
+    const uint angles = gCascade.shape.w;
+    const float3 coordinate = clamp(CascadeGridPosition(position, gCascade.origin.xyz, probes,
+                                                         2.0f * gCascade.interval.x),
+                                    0.0f, float(probes - 1u));
+    const uint3 lower = uint3(coordinate);
+    const float3 fraction = coordinate - float3(lower);
+    float3 result = float3(0.0f, 0.0f, 0.0f);
+    for (uint corner = 0u; corner < 8u; ++corner) {
+        const uint3 offset = CascadeCorner(corner);
+        const uint3 sampleProbe = min(lower + offset, probes - 1u);
+        const uint base = CascadeProbeIndex(sampleProbe, probes) * angles * angles +
+                          cell.y * angles * 2u + cell.x * 2u;
+        const float3 radiance =
+            (gCascadePrevious[base].rgb + gCascadePrevious[base + 1u].rgb +
+             gCascadePrevious[base + angles].rgb + gCascadePrevious[base + angles + 1u].rgb) *
+            0.25f;
+        result += radiance * CascadeCornerWeight(offset, fraction);
+    }
+    return result;
+}
+
+void ProjectCascadeProbe(uint probe) {
+    const uint angles = gCascade.shape.y;
+    const uint samples = angles * angles;
+    const uint base = probe * samples;
+    float3 dc = float3(0.0f, 0.0f, 0.0f);
+    float3 x = dc;
+    float3 y = dc;
+    float3 z = dc;
+    for (uint directionIndex = 0u; directionIndex < samples; ++directionIndex) {
+        const float3 direction = CascadeRayDirection(uint2(directionIndex % angles, directionIndex / angles),
+                                                     angles);
+        const float3 radiance = gCascadePrevious[base + directionIndex].rgb;
+        dc += radiance;
+        x += radiance * direction.x;
+        y += radiance * direction.y;
+        z += radiance * direction.z;
+    }
+    // First-order spherical harmonics with the diffuse convolution folded in. The lit
+    // result is irradiance divided by pi, matching the scene's IBL diffuse convention.
+    const float scale = rcp(float(samples));
+    const uint offset = LUX_CASCADE_SH_HEADER + probe * LUX_CASCADE_SH_STRIDE;
+    gCascadeOutput[offset] = float4(dc.r, 2.0f * x.r, 2.0f * y.r, 2.0f * z.r) * scale;
+    gCascadeOutput[offset + 1u] = float4(dc.g, 2.0f * x.g, 2.0f * y.g, 2.0f * z.g) * scale;
+    gCascadeOutput[offset + 2u] = float4(dc.b, 2.0f * x.b, 2.0f * y.b, 2.0f * z.b) * scale;
+    if (probe == 0u) {
+        gCascadeOutput[0] = gCascade.origin;
+        gCascadeOutput[1] = float4(gCascade.optics.z, 0.0f, 0.0f, 0.0f);
+    }
+}
+#endif
+
+ROOT_SIGNATURE(ComputeRootSignature)
+NUM_THREADS(64, 1, 1)
+void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
+{
+    INIT_MAIN;
+#if defined(VULKAN)
+    const uint probes = gCascade.shape.x;
+    const uint angles = gCascade.shape.y;
+    const uint probeCount = probes * probes * probes;
+    const uint index = threadId.x;
+    if (gCascade.interval.w > 0.5f) {
+        if (index < probeCount)
+            ProjectCascadeProbe(index);
+    } else if (index < probeCount * angles * angles) {
+        const uint ray = index % (angles * angles);
+        const uint2 cell = uint2(ray % angles, ray / angles);
+        const float3 direction = CascadeRayDirection(cell, angles);
+        const uint probe = index / (angles * angles);
+        const float3 coordinate = float3(CascadeProbeCoordinate(probe, probes));
+        const float3 position = gCascade.origin.xyz +
+                                 (coordinate - (float(probes) - 1.0f) * 0.5f) *
+                                 gCascade.interval.x;
+        float4 interval = TraceCascadeInterval(position, direction);
+        if (interval.w > 0.0f) {
+            const float3 incoming = gCascade.shape.z > 0u ? MergeOuterCascade(position, cell)
+                                                        : CascadeSky(direction);
+            interval.rgb += interval.w * incoming;
+        }
+        gCascadeOutput[index] = interval;
+    }
+#else
+    if (threadId.x == 0u)
+        gCascadeOutput[0] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+#endif
+    RETURN();
+}

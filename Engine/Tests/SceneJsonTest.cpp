@@ -58,10 +58,14 @@ void Test() {
     auto settings = scene.GetSettings();
     settings.render3D.environmentPath = "Assets/환경.hdr";
     settings.render3D.rayTracing.shadows = true;
+    settings.render3D.rayTracing.restirIndirect = true;
     settings.render3D.rayTracing.maxBounces = 3;
     settings.render3D.fog.density = .0625f;
     settings.render3D.fog.baseHeight = 1000000000.25;
     settings.render3D.fog.rayTracedShadows = true;
+    settings.render3D.virtualShadows = true;
+    settings.render3D.waterReflection = {"Assets/lakeside.hdr", -112, 4};
+    settings.render3D.radianceCascades = {.5f, 4};
     Check(scene.SetSettings(settings), "render settings setup");
     std::string text;
     Check(scene.SerializeToString(text), "JSON serialization succeeds");
@@ -80,6 +84,9 @@ void Test() {
     legacyJson["settings"]["render3d"]["shadow_resolution"] = 4096;
     legacyJson["settings"]["render3d"].erase("ray_tracing");
     legacyJson["settings"]["render3d"].erase("volumetric_fog");
+    legacyJson["settings"]["render3d"].erase("virtual_shadows");
+    legacyJson["settings"]["render3d"].erase("water_reflection");
+    legacyJson["settings"]["render3d"].erase("radiance_cascades");
     Scene migrated;
     Check(migrated.DeserializeFromString(legacyJson.dump()), "older render mode loads");
     const auto& migratedRender = migrated.GetSettings().render3D;
@@ -98,7 +105,10 @@ void Test() {
     const auto& render = restored.GetSettings().render3D;
     Check(render.rayTracing.shadows && render.rayTracing.maxBounces == 3 &&
               render.fog.density == .0625f && render.fog.baseHeight == 1000000000.25 &&
-              render.fog.rayTracedShadows,
+              render.fog.rayTracedShadows && render.virtualShadows &&
+              render.rayTracing.restirIndirect && render.waterReflection.rotation == -112 &&
+              render.waterReflection.environmentPath == "Assets/lakeside.hdr" &&
+              render.radianceCascades.strength == .5f,
           "ray tracing and volume settings survive a save and reload");
     std::string second;
     Check(restored.SerializeToString(second) && second == text, "deterministic lossless roundtrip");

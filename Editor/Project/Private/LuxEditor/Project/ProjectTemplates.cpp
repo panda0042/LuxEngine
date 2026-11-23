@@ -985,9 +985,10 @@ protected:
         }
         if (cameras.perspective || !cameras.cameraEntity) {
             auto renderSettings = settings.render3D;
-            if (!renderSettings.environmentPath.empty())
-                renderSettings.environmentPath =
-                    scene_->ResolveAssetPath(renderSettings.environmentPath);
+            for (auto* path : {&renderSettings.environmentPath,
+                               &renderSettings.waterReflection.environmentPath})
+                if (!path->empty())
+                    *path = scene_->ResolveAssetPath(*path);
             le::Renderer3D::BeginScene(cameras.camera3D, renderSettings, settings.exposure);
             scene_->OnRender3D();
             le::Renderer3D::EndScene();

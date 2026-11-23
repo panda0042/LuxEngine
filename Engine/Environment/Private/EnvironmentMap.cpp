@@ -261,9 +261,10 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Neutral() {
     return data;
 }
 
-std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& path) {
+namespace {
+std::shared_ptr<EnvironmentData> PrepareEnvironment(const std::string& path, bool reflectionOnly) {
     const auto start = std::chrono::steady_clock::now();
-    auto data = std::make_shared<EnvironmentData>();
+    auto data = reflectionOnly ? EnvironmentData::Neutral() : std::make_shared<EnvironmentData>();
     try {
         Source source;
         if (path.empty()) {
@@ -272,17 +273,21 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& pat
             source.height = static_cast<int>(source.atmosphere.height);
         } else if (!Decode(path, source.width, source.height, source.pixels, data->error))
             return data;
-        const uint32 skySize =
-            std::clamp(std::bit_floor(static_cast<uint32>(source.width)) / 4, 256u, 1024u);
-        data->sky = Cube(skySize, 1, [&](Vec3 n, uint32) { return source.Sample(n); });
         const auto& kernels = Kernels();
-        data->diffuse = Cube(32, 1, [&](Vec3 n, uint32) {
-            const TangentFrame frame(n);
-            Vec3 sum{};
-            for (const auto& direction : kernels.diffuse)
-                sum += source.Sample(frame.Rotate(direction));
-            return sum * (1.f / EnvironmentSamples);
-        });
+        if (!reflectionOnly) {
+            const uint32 skySize =
+                std::clamp(std::bit_floor(static_cast<uint32>(source.width)) / 4, 256u, 1024u);
+            data->sky = Cube(skySize, 1, [&](Vec3 n, uint32) { return source.Sample(n); });
+            data->diffuse = Cube(32, 1, [&](Vec3 n, uint32) {
+                const TangentFrame frame(n);
+                Vec3 sum{};
+                for (const auto& direction : kernels.diffuse)
+                    sum += source.Sample(frame.Rotate(direction));
+                return sum * (1.f / EnvironmentSamples);
+            });
+            const auto& brdf = BrdfPixels();
+            data->brdf = {BrdfSize, 1, 1, {brdf.begin(), brdf.end()}};
+        }
         data->specular = Cube(128, SpecularLevels, [&](Vec3 n, uint32 level) {
             if (!level)
                 return source.Sample(n);
@@ -293,8 +298,6 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& pat
                     sum += source.Sample(frame.Rotate(direction)) * direction.z;
             return sum * (1 / std::max(kernels.specularWeight[level - 1], 1e-5f));
         });
-        const auto& brdf = BrdfPixels();
-        data->brdf = {BrdfSize, 1, 1, {brdf.begin(), brdf.end()}};
         const size_t bytes = (data->sky.pixels.size() + data->diffuse.pixels.size() +
                               data->specular.pixels.size() + data->brdf.pixels.size()) *
                              sizeof(float);
@@ -307,6 +310,15 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& pat
     data->preparationMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     return data;
+}
+} // namespace
+
+std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& path) {
+    return PrepareEnvironment(path, false);
+}
+
+std::shared_ptr<EnvironmentData> EnvironmentData::PrepareReflection(const std::string& path) {
+    return PrepareEnvironment(path, true);
 }
 
 bool EnvironmentData::ValidateFile(const std::string& path, std::string& error) {

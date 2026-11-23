@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 17u
+#define LUX_FORGE_API_VERSION 18u
 
 #if defined(_WIN32)
 #if defined(LUX_FORGE_BUILD)
@@ -90,6 +90,10 @@ typedef struct LuxForgeStats {
     uint32_t accelerationStructureBuilds;
     uint32_t volumetricFogPasses;
     uint32_t rayVolumetricFogPasses;
+    uint32_t waterReflectionPasses;
+    uint32_t restirPasses;
+    uint32_t radianceCascadePasses;
+    uint32_t virtualShadowPages;
 } LuxForgeStats;
 
 typedef struct LuxForgePointLight {
@@ -143,6 +147,7 @@ typedef struct LuxForgeSceneDraw {
     uint32_t sampling;
     uint32_t shadowOnly;
     float water[4];
+    uint32_t shadowPageMask;
 } LuxForgeSceneDraw;
 
 // One HDR scene pass (port of the Vulkan backend's Scene3DRenderer). The vec4 fields and the
@@ -164,6 +169,11 @@ typedef struct LuxForgeScene {
     float fogColorDensity[4];  // linear RGB scattering albedo and base extinction
     float fogOptions[4];       // maximum distance, height falloff, camera altitude, anisotropy
     int rayTracedFog;
+    uint32_t waterEnvironmentMap;
+    float waterReflection[4]; // enabled, rotation (radians), intensity, reserved
+    float cascadeOptions[4];  // strength, finest spacing, reserved, reserved
+    float cascadeOrigin[4];   // offset from camera to the snapped probe lattice
+    uint32_t virtualShadows;
 } LuxForgeScene;
 
 typedef struct LuxForgeApi {

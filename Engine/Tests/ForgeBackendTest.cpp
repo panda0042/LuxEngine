@@ -3372,6 +3372,236 @@ void RayTracedLighting() {
           "ray queries and acceleration structure barriers validate");
 }
 
+void VirtualShadowMap() {
+    std::printf("[virtual_shadow_map]\n");
+    Session session(160, 160, {}, true);
+    if (!session.ok)
+        return Check(false, "session for virtual shadows");
+
+    Renderer3D::Context context(&session.gpu);
+    PerspectiveCamera camera(ToRadians(55), 1, .1, 100);
+    camera.SetPosition({6, 7, 9});
+    camera.SetTarget({0, 1, 0});
+    Render3DSettings settings;
+    settings.imageBasedLighting = false;
+    settings.environmentColor = {.04, .04, .04};
+    settings.sun.direction = {.7, -1, .3};
+    settings.sun.intensity = 3;
+    settings.shadowResolution = 1024;
+    Material3D ground, object;
+    ground.albedoColor = {.5f, .5f, .5f, 1};
+    object.albedoColor = {.6f, .15f, .04f, 1};
+
+    const auto capture = [&](GpuFrameCapture& frame, double receiverWidth = 10.) {
+        return CaptureFrame(session, frame, [&] {
+            if (!session.gpu.Clear(.03f, .04f, .05f, 1))
+                return false;
+            context.BeginScene(camera, settings, 1);
+            context.DrawCube({0, -.1, 0}, {receiverWidth, .2, receiverWidth}, ground);
+            context.DrawCube({0, 1, 0}, {1, 2, 1}, object);
+            context.EndScene();
+            return context.GetLastAssetError().empty();
+        });
+    };
+
+    GpuFrameCapture lit, paged, dense;
+    settings.shadows = false;
+    if (!capture(lit))
+        return Check(false, "unshadowed receiver renders");
+    const auto baselineBytes = session.gpu.GetMemoryStats().allocationBytes;
+
+    settings.shadows = true;
+    settings.virtualShadows = true;
+    if (!capture(paged) || lit.rgba.size() != paged.rgba.size())
+        return Check(false, "virtual shadow pages render");
+    const auto pages = session.gpu.GetFrameStats().virtualShadowPages;
+    const auto pagedBytes = session.gpu.GetMemoryStats().allocationBytes - baselineBytes;
+    Check(pages > 1 && pages <= 9 && pagedBytes == 768ull * 768 * 4,
+          "receiver coverage maps multiple pages into the smaller physical atlas");
+    int darkened = 0;
+    for (size_t i = 0; i < paged.rgba.size(); i += 4)
+        darkened += lit.rgba[i] > paged.rgba[i] + 20;
+    Check(darkened > 25, "casters darken receivers through the page table");
+
+    settings.virtualShadows = false;
+    if (!capture(dense) || dense.rgba.size() != paged.rgba.size())
+        return Check(false, "dense reference shadows render");
+    int changed = 0;
+    for (size_t i = 0; i < dense.rgba.size(); i += 4)
+        changed += std::abs(int(dense.rgba[i]) - int(paged.rgba[i])) > 2;
+    std::printf("  resident pages %u, atlas bytes %llu, changed pixels %d\n", pages,
+                static_cast<unsigned long long>(pagedBytes), changed);
+    Check(changed < 16, "paged PCF matches dense shadow edges across virtual page boundaries");
+
+    settings.virtualShadows = true;
+    Check(capture(dense, 120.) && session.gpu.GetFrameStats().virtualShadowPages == 0,
+          "oversubscribed atlas falls back to dense coverage");
+    Check(session.gpu.GetCounters().validationErrors == 0,
+          "virtual shadow pass reports no GPU validation errors");
+}
+
+void RadianceCascades() {
+    std::printf("[radiance_cascades]\n");
+    GpuDeviceConfig config;
+    config.vsync = false;
+    Session session(128, 128, config, true);
+    if (!session.ok)
+        return Check(false, "session for radiance cascades");
+
+    Renderer3D::Context context(&session.gpu);
+    PerspectiveCamera camera(ToRadians(35), 1, .1, 50);
+    camera.SetPosition({0, 0, 3});
+    camera.SetTarget({0, 0, 0});
+    Render3DSettings settings;
+    settings.imageBasedLighting = false;
+    settings.shadows = false;
+    settings.toneMapping = false;
+    settings.environmentColor = {0, 0, 0};
+    settings.sun.direction = {1, 0, 0};
+    settings.sun.color = {1, 1, 1};
+    settings.sun.intensity = 9;
+    settings.radianceCascades.spacing = 2;
+    Material3D receiver;
+    receiver.alphaMode = MaterialAlphaMode::Opaque;
+    Material3D red;
+    red.alphaMode = MaterialAlphaMode::Opaque;
+    red.albedoColor = {1, 0, 0, 1};
+    const auto capture = [&](GpuFrameCapture& frame) {
+        return CaptureFrame(session, frame, [&] {
+            if (!session.gpu.Clear(0, 0, 0, 1))
+                return false;
+            context.BeginScene(camera, settings, 1);
+            context.DrawCube({0, 0, -.1}, {3, 3, .2}, receiver);
+            // The sun illuminates this red wall from the left. It lies outside the
+            // camera frustum and beyond the nearest interval around the center probes.
+            context.DrawCube({8, 0, 4}, {.2, 16, 16}, red);
+            context.EndScene();
+            return context.GetLastAssetError().empty();
+        });
+    };
+
+    GpuFrameCapture baseline, withCascades;
+    if (!capture(baseline))
+        return Check(false, "radiance baseline captures");
+    settings.radianceCascades.strength = 1;
+    if (!capture(withCascades))
+        return Check(false, "radiance cascades frame captures");
+    const auto without = At(baseline, .5f, .5f);
+    const auto with = At(withCascades, .5f, .5f);
+    const auto stats = session.gpu.GetFrameStats();
+    std::printf("  far-wall transfer RGB %d,%d,%d -> %d,%d,%d, cascade passes %u\n", without[0],
+                without[1], without[2], with[0], with[1], with[2], stats.radianceCascadePasses);
+    if (session.gpu.GetInfo().rayTracing) {
+        Check(stats.radianceCascadePasses == 1 && stats.computeDispatches == 4,
+              "three interval dispatches and a probe irradiance projection");
+        Check(with[0] > without[0] + 15 && with[0] > with[1] + 15,
+              "a non-local interval transfers indirect radiance to the receiver");
+    } else {
+        Check(stats.radianceCascadePasses == 0 && without == with,
+              "unsupported devices keep their raster lighting");
+    }
+    Check(session.gpu.GetCounters().validationErrors == 0,
+          "radiance cascade resources and barriers validate");
+}
+
+void RestirLighting() {
+    std::printf("[restir_lighting]\n");
+    GpuDeviceConfig config;
+    config.vsync = false;
+    Session session(128, 128, config, true);
+    if (!session.ok)
+        return Check(false, "session for ReSTIR lighting");
+
+    constexpr std::array<Vertex3D, 4> quad{{{{-.5, -.5, 0}, {0, 0, 1}, {}},
+                                            {{.5, -.5, 0}, {0, 0, 1}, {}},
+                                            {{.5, .5, 0}, {0, 0, 1}, {}},
+                                            {{-.5, .5, 0}, {0, 0, 1}, {}}}};
+    constexpr std::array<uint32, 6> indices{0, 1, 2, 0, 2, 3};
+    Mesh3D plane;
+    if (!plane.Upload(&session.gpu, quad, indices))
+        return Check(false, "ReSTIR fixture geometry uploads");
+
+    Renderer3D::Context context(&session.gpu);
+    PerspectiveCamera camera(ToRadians(35), 1, .1, 50);
+    camera.SetPosition({0, 0, 3});
+    camera.SetTarget({0, 0, 0});
+    Render3DSettings settings;
+    settings.imageBasedLighting = false;
+    settings.shadows = false;
+    settings.toneMapping = false;
+    settings.sun.intensity = 0;
+    settings.environmentColor = {0, 0, 0};
+    auto white = Material3D{};
+    white.alphaMode = MaterialAlphaMode::Opaque;
+    auto red = white;
+    red.albedoColor = {1, .015f, .015f, 1};
+    const auto capture = [&](GpuFrameCapture& frame, std::span<const PointLight> points,
+                             auto&& draw) {
+        return CaptureFrame(session, frame, [&] {
+            if (!session.gpu.Clear(0, 0, 0, 1))
+                return false;
+            context.BeginScene(camera, settings, 1, points);
+            context.DrawMesh(plane, Mat4::Scale({4, 4, 1}), white);
+            draw();
+            context.EndScene();
+            return context.GetLastAssetError().empty();
+        });
+    };
+
+    // Equal proposal targets make the unoccluded sum exact for every seeded reservoir.
+    const std::array lights{PointLight{.position = {3, 0, 2}, .intensity = 1.5f, .radius = 10.f},
+                            PointLight{.position = {3, 0, 2}, .intensity = 1.5f, .radius = 10.f}};
+    const auto blocker = [&] {
+        context.DrawMesh(plane, Mat4::Translate({1.5, 0, 1}) * Mat4::Scale({.55, .55, 1}), white);
+    };
+    GpuFrameCapture baseline, restirDI;
+    if (!capture(baseline, lights, blocker))
+        return Check(false, "baseline point-lit frame captures");
+    settings.rayTracing.restirDirect = true;
+    if (!capture(restirDI, lights, blocker))
+        return Check(false, "ReSTIR DI frame captures");
+    const auto reference = At(baseline, .5f, .5f);
+    const auto blocked = At(restirDI, .5f, .5f);
+    auto stats = session.gpu.GetFrameStats();
+    std::printf("  ReSTIR DI point shadow %d -> %d, passes %u\n", reference[0], blocked[0],
+                stats.restirPasses);
+    if (!session.gpu.GetInfo().rayTracing) {
+        Check(stats.restirPasses == 0 && reference == blocked,
+              "ReSTIR preserves raster output without ray query support");
+        return;
+    }
+    Check(stats.restirPasses == 1 && stats.computeDispatches >= 2,
+          "ReSTIR DI submits the candidate and spatial reuse dispatches");
+    Check(reference[0] > blocked[0] + 40, "ReSTIR DI samples point-light visibility through TLAS");
+    GpuFrameCapture unblocked;
+    if (!capture(unblocked, lights, [] {}))
+        return Check(false, "unoccluded ReSTIR point-light frame captures");
+    Check(std::abs(int(reference[0]) - int(At(unblocked, .5f, .5f)[0])) <= 3,
+          "weighted reservoirs recover the sum of unoccluded point lights");
+
+    const auto redWall = [&] {
+        // Behind the camera, this wall contributes through indirect transport only.
+        context.DrawMesh(plane, Mat4::Translate({0, 0, 4.5}) * Mat4::Scale({24, 24, 1}), red);
+    };
+    settings.environmentColor = {.25, .25, .25};
+    settings.rayTracing.restirDirect = false;
+    GpuFrameCapture neutral, bounce;
+    if (!capture(neutral, {}, redWall))
+        return Check(false, "baseline indirect frame captures");
+    settings.rayTracing.restirIndirect = true;
+    if (!capture(bounce, {}, redWall))
+        return Check(false, "ReSTIR GI frame captures");
+    const auto original = At(neutral, .5f, .5f);
+    const auto indirect = At(bounce, .5f, .5f);
+    stats = session.gpu.GetFrameStats();
+    std::printf("  ReSTIR GI bounce %d,%d,%d -> %d,%d,%d, passes %u\n", original[0], original[1],
+                original[2], indirect[0], indirect[1], indirect[2], stats.restirPasses);
+    Check(stats.restirPasses == 1 && indirect[0] > indirect[1] + 50,
+          "ReSTIR GI transfers off-screen secondary diffuse radiance");
+    Check(session.gpu.GetCounters().validationErrors == 0,
+          "ReSTIR reservoir and lighting buffer barriers validate");
+}
+
 void LargeMipTexture() {
     Session session(96, 96);
     if (!session.ok)
@@ -3460,9 +3690,12 @@ int main(int argc, char** argv) {
     run("water_composite", WaterComposite);
     run("ocean_fft", OceanFft);
     run("ray_traced_lighting", RayTracedLighting);
+    run("restir_lighting", RestirLighting);
     run("froxel_fog", FroxelFog);
+    run("virtual_shadow_map", VirtualShadowMap);
     run("materials", MaterialModes);
     run("material_textures", MaterialTextures);
+    run("radiance_cascades", RadianceCascades);
     run("large_mips", LargeMipTexture);
     run("volume", Volume);
     run("resolutions", Resolutions);

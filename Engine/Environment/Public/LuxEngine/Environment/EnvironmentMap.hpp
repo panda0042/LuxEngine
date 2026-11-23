@@ -18,6 +18,7 @@ struct LUX_API EnvironmentData {
     double preparationMs = 0;
     std::string error;
     static std::shared_ptr<EnvironmentData> Prepare(const std::string& path);
+    static std::shared_ptr<EnvironmentData> PrepareReflection(const std::string& path);
     static std::shared_ptr<EnvironmentData> Neutral();
     static bool ValidateFile(const std::string& path, std::string& error);
     static uint64 Revision(const std::string& path);

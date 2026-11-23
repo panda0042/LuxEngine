@@ -94,6 +94,18 @@
 #include "LuxOceanFFT.comp.fsl"
 #end
 
+#comp FT_RAYTRACING luxrestirinit.comp
+#include "LuxRestirInit.comp.fsl"
+#end
+
+#comp FT_RAYTRACING luxrestirresolve.comp
+#include "LuxRestirResolve.comp.fsl"
+#end
+
+#comp FT_RAYTRACING luxradiancecascades.comp
+#include "LuxRadianceCascades.comp.fsl"
+#end
+
 #comp luxoceanassemble.comp
 #include "LuxOceanAssemble.comp.fsl"
 #end

@@ -1,0 +1,139 @@
+#include "fsl_ext.h"
+#include "LuxRestirInit.srt.h"
+#include "LuxRestirResampling.h"
+
+float3 RestirSky(float3 direction, float mip) {
+    if (gScene.options.y < 0.5f)
+        return gScene.environment.rgb * gScene.environment.w;
+    const float c = cos(gScene.options.x), s = sin(gScene.options.x);
+    const float3 rotated = float3(c * direction.x + s * direction.z, direction.y,
+                                  -s * direction.x + c * direction.z);
+    return SampleLvlTexCube(gRestirEnvironment, gSamplerTrilinearClamp, rotated, mip).rgb *
+           gScene.environment.w;
+}
+
+float3 RestirCosineSample(float3 normal, float2 uniformPair) {
+    const float radius = sqrt(uniformPair.x);
+    const float angle = 6.283185307179586f * uniformPair.y;
+    const float3 axis = abs(normal.y) < 0.999f ? float3(0.0f, 1.0f, 0.0f)
+                                             : float3(1.0f, 0.0f, 0.0f);
+    const float3 tangent = normalize(cross(axis, normal));
+    const float3 bitangent = cross(normal, tangent);
+    return tangent * (radius * cos(angle)) + bitangent * (radius * sin(angle)) +
+           normal * sqrt(1.0f - uniformPair.x);
+}
+
+float3 RestirSecondaryRadiance(RestirSurface surface, float limit) {
+    // The outgoing radiance stored at the secondary vertex is diffuse, so it
+    // transfers to neighboring receivers without a view-dependent specular lobe.
+    const float3 diffuse = surface.base * (1.0f - surface.metallic);
+    float3 irradiance = RestirSky(surface.normal, 7.0f);
+    const float3 sunDirection = -gLights.direction.xyz;
+    const float sunCosine = saturate(dot(surface.normal, sunDirection));
+    const float3 origin = surface.position + surface.normal * 0.004f;
+    if (sunCosine > 0.0f && gLights.colorIntensity.w > 0.0f &&
+        !RayOccluded(origin, sunDirection, limit))
+        irradiance += sunCosine * gLights.colorIntensity.rgb * gLights.colorIntensity.w *
+                      (1.0f / 3.141592653589793f);
+
+    const uint count = min(gLights.count.x, 16u);
+    for (uint i = 0u; i < count; ++i) {
+        const float4 light = gLights.pointPositionRadius[i];
+        const float4 color = gLights.pointColorIntensity[i];
+        const float3 delta = light.xyz - surface.position;
+        const float range = length(delta);
+        const float falloff = saturate(1.0f - range / max(light.w, 1e-5f));
+        const float3 direction = SafeDirection(delta, surface.normal);
+        const float cosine = saturate(dot(surface.normal, direction));
+        if (falloff > 0.0f && cosine > 0.0f && color.w > 0.0f &&
+            (range < 0.01f || !RayOccluded(origin, direction, max(range - 0.006f, 0.0011f))))
+            irradiance += color.rgb * color.w * falloff * falloff * cosine *
+                          (1.0f / 3.141592653589793f);
+    }
+    return diffuse * irradiance;
+}
+
+void RestirStoreCandidates(uint start, RestirSurface surface, RestirDIReservoir direct,
+                           RestirGIReservoir indirect) {
+    gRestirCandidates[start] = float4(surface.position, surface.distance);
+    gRestirCandidates[start + 1u] = float4(surface.normal, float(surface.instance));
+    gRestirCandidates[start + 2u] = float4(surface.base, surface.metallic);
+    gRestirCandidates[start + 3u] = float4(surface.roughness, indirect.count, 0.0f, 0.0f);
+    gRestirCandidates[start + 4u] =
+        float4(float(direct.light), direct.target, direct.weightSum, direct.count);
+    gRestirCandidates[start + 5u] =
+        float4(indirect.proposal.positionOrDirection, indirect.proposal.kind);
+    gRestirCandidates[start + 6u] = float4(indirect.proposal.normal, indirect.target);
+    gRestirCandidates[start + 7u] = float4(indirect.proposal.radiance, indirect.weightSum);
+}
+
+ROOT_SIGNATURE(ComputeRootSignature)
+NUM_THREADS(8, 8, 1)
+void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
+{
+    INIT_MAIN;
+    const uint2 size = uint2(gScene.frameSize.xy);
+    const uint spacing = RestirSpacing(size);
+    const uint2 grid = RestirGrid(size, spacing);
+    if (threadId.x >= grid.x || threadId.y >= grid.y) {
+        RETURN();
+    }
+    const uint cell = threadId.y * grid.x + threadId.x;
+    const float2 pixel = min((float2(threadId.xy) + 0.5f) * float(spacing),
+                             float2(size) - 0.5f);
+    const float2 ndc = pixel * gScene.frameSize.zw * 2.0f - 1.0f;
+    const float3 origin = gScene.camera.xyz;
+    const float3 direction = SafeDirection(gScene.forward.xyz + ndc.x * gScene.right.xyz -
+                                          ndc.y * gScene.up.xyz, gScene.forward.xyz);
+    const float limit = gScene.rayOptions.y;
+    const RestirSurface surface = RestirTrace(origin, direction, limit);
+    RestirDIReservoir direct = RestirEmptyDI();
+    RestirGIReservoir indirect = RestirEmptyGI();
+    const uint effects = uint(gScene.rayOptions.x);
+    if (surface.distance > 0.0f) {
+        const uint lightCount = min(gLights.count.x, 16u);
+        const uint seed = RestirHash(cell);
+        if ((effects & LUX_RESTIR_DI) != 0u && lightCount > 0u) {
+            const uint candidateCount = 4u;
+            for (uint i = 0u; i < candidateCount; ++i) {
+                const uint baseSeed = seed + i * 2u;
+                const uint light = min(uint(RestirRandom(baseSeed) * float(lightCount)),
+                                       lightCount - 1u);
+                const float target = RestirDITarget(light, surface);
+                direct = RestirDIUpdate(direct, light, target, target * float(lightCount), 1.0f,
+                                        RestirRandom(baseSeed + 1u));
+            }
+        }
+        if ((effects & LUX_RESTIR_GI) != 0u && surface.metallic < 0.999f) {
+            for (uint i = 0u; i < 2u; ++i) {
+                const uint baseSeed = seed ^ (0xa511e9b3u + i * 3u);
+                const float2 uniformPair = float2(RestirRandom(baseSeed),
+                                                   RestirRandom(baseSeed + 1u));
+                const float3 wi = RestirCosineSample(surface.normal, uniformPair);
+                const RestirSurface secondary =
+                    RestirTrace(surface.position + 0.004f * surface.normal, wi, limit);
+                RestirSample proposal;
+                proposal.kind = secondary.distance > 0.0f ? 1.0f : 2.0f;
+                proposal.positionOrDirection = secondary.distance > 0.0f ? secondary.position
+                                                                         : wi;
+                proposal.normal = secondary.normal;
+                proposal.radiance = secondary.distance > 0.0f
+                                        ? RestirSecondaryRadiance(secondary, limit)
+                                        : RestirSky(wi, 3.0f);
+                float pdf = saturate(dot(surface.normal, wi)) * (1.0f / 3.141592653589793f);
+                if (proposal.kind == 1.0f) {
+                    const float3 delta = proposal.positionOrDirection - surface.position;
+                    const float d2 = dot(delta, delta);
+                    const float3 outgoing = SafeDirection(-delta, proposal.normal);
+                    pdf *= saturate(dot(proposal.normal, outgoing)) / max(d2, 0.0001f);
+                }
+                const float target = RestirLuminance(RestirGIContribution(proposal, surface));
+                const float weight = pdf > 1e-10f ? target / pdf : 0.0f;
+                indirect = RestirGIUpdate(indirect, proposal, target, weight, 1.0f,
+                                           RestirRandom(baseSeed + 2u));
+            }
+        }
+    }
+    RestirStoreCandidates(cell * LUX_RESTIR_CANDIDATE_FLOATS4, surface, direct, indirect);
+    RETURN();
+}

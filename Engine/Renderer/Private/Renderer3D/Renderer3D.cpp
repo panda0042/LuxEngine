@@ -1,3 +1,4 @@
+#include "LuxVirtualShadowPages.hpp"
 #include "RHI/RenderBackend.hpp"
 #include "ShadowProjection.hpp"
 #include "TextureMipChain.hpp"
@@ -551,6 +552,7 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
                                                      mesh.minimum_, mesh.maximum_);
         const auto& settings = impl_->settings;
         const bool useRays = settings.rayTracing.Enabled() ||
+                             settings.radianceCascades.strength > 0 ||
                              (settings.fog.density > 0 && settings.fog.rayTracedShadows);
         const bool rayCaster =
             opaqueCaster && !mesh.ocean_ && useRays && impl_->device->GetInfo().rayTracing;
@@ -602,6 +604,13 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
         water = {static_cast<float>(absorption.x), static_cast<float>(absorption.y),
                  static_cast<float>(absorption.z), airToWater};
     }
+    const auto& settings = impl_->settings;
+    const uint32 shadowPageMask =
+        settings.virtualShadows && impl_->shadowProjection
+            ? Rhi::VirtualShadowPageMask(*impl_->shadowProjection, relativeModel, mesh.minimum_,
+                                         mesh.maximum_, settings.shadowResolution,
+                                         settings.shadowNormalBias)
+            : LUX_VIRTUAL_SHADOW_ALL_PAGES;
     if (!impl_->modern->AddDraw({mesh.vertices_.handle_,
                                  mesh.indices_.handle_,
                                  texture ? texture->handle_ : 0,
@@ -621,7 +630,8 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
                                  material.occlusionStrength,
                                  sampling,
                                  shadowOnly,
-                                 water}))
+                                 water,
+                                 shadowPageMask}))
         return;
     ++impl_->stats.meshCount;
     ++impl_->stats.drawCalls;

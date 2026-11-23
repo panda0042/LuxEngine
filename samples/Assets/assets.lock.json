@@ -48,6 +48,14 @@
       "license": "LicenseRef-Public-Domain",
       "files": 2,
       "manifest_sha256": "ed6a860f28c74b34f6afcab145e1f579c445432064edfa7a34280693d0807b51"
+    },
+    {
+      "name": "LakesideSunrise",
+      "source": "https://polyhaven.com/a/lakeside_sunrise",
+      "license": "CC0-1.0",
+      "files": 2,
+      "manifest_sha256": "07fc9fcb42d98b358f8ce833f409a18fba58e08417f30ab0152f4b268ed370ca",
+      "version": "24K source, 2K RGBE derivative"
     }
   ],
   "admission": "Existing CC0 graphics/audio plus the official Public Domain DungGeunMo Korean font; source grants, archive CRC/SHA-256 and copied-byte roster verified manually."

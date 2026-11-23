@@ -1,0 +1,140 @@
+#include "fsl_ext.h"
+#include "LuxRestirResolve.srt.h"
+#include "LuxRestirResampling.h"
+
+RestirSurface RestirLoadSurface(uint start) {
+    const float4 position = gRestirCandidates[start];
+    const float4 normal = gRestirCandidates[start + 1u];
+    const float4 material = gRestirCandidates[start + 2u];
+    RestirSurface surface;
+    surface.position = position.xyz;
+    surface.distance = position.w;
+    surface.normal = normal.xyz;
+    surface.instance = uint(normal.w);
+    surface.base = material.rgb;
+    surface.metallic = material.w;
+    surface.roughness = gRestirCandidates[start + 3u].x;
+    return surface;
+}
+
+RestirDIReservoir RestirLoadDI(uint start) {
+    const float4 value = gRestirCandidates[start + 4u];
+    RestirDIReservoir reservoir;
+    reservoir.light = uint(value.x);
+    reservoir.target = value.y;
+    reservoir.weightSum = value.z;
+    reservoir.count = value.w;
+    return reservoir;
+}
+
+RestirGIReservoir RestirLoadGI(uint start) {
+    const float4 location = gRestirCandidates[start + 5u];
+    const float4 normal = gRestirCandidates[start + 6u];
+    const float4 outgoing = gRestirCandidates[start + 7u];
+    RestirGIReservoir reservoir;
+    reservoir.proposal.positionOrDirection = location.xyz;
+    reservoir.proposal.kind = location.w;
+    reservoir.proposal.normal = normal.xyz;
+    reservoir.target = normal.w;
+    reservoir.proposal.radiance = outgoing.rgb;
+    reservoir.weightSum = outgoing.w;
+    reservoir.count = gRestirCandidates[start + 3u].y;
+    return reservoir;
+}
+
+bool RestirCompatible(RestirSurface receiver, RestirSurface neighbor) {
+    const float3 delta = neighbor.position - receiver.position;
+    return neighbor.distance > 0.0f && receiver.instance == neighbor.instance &&
+           dot(receiver.normal, neighbor.normal) > 0.96f &&
+           abs(dot(delta, receiver.normal)) <= max(0.01f, receiver.distance * 0.0015f) &&
+           abs(receiver.distance - neighbor.distance) <= max(0.03f, receiver.distance * 0.09f);
+}
+
+float3 RestirResolveGI(RestirGIReservoir reservoir, RestirSurface surface) {
+    if (reservoir.target <= 0.0f || reservoir.count <= 0.0f)
+        return float3(0.0f, 0.0f, 0.0f);
+    const float3 origin = surface.position + surface.normal * 0.004f;
+    const RestirSample proposal = reservoir.proposal;
+    const float3 delta = proposal.positionOrDirection - origin;
+    const float range = length(delta);
+    const float3 direction = proposal.kind == 1.0f ? SafeDirection(delta, surface.normal)
+                                                   : proposal.positionOrDirection;
+    // Stop the ray just before the secondary surface, allowing for floating point
+    // error at the receiving and sampled triangles without skipping nearby blockers.
+    const float limit = proposal.kind == 1.0f ? max(range - 0.007f, 0.0011f)
+                                              : gScene.rayOptions.y;
+    if (RayOccluded(origin, direction, limit))
+        return float3(0.0f, 0.0f, 0.0f);
+    const float finalWeight = reservoir.weightSum / (reservoir.count * reservoir.target);
+    return min(RestirGIContribution(proposal, surface) * finalWeight,
+               float3(65504.0f, 65504.0f, 65504.0f));
+}
+
+ROOT_SIGNATURE(ComputeRootSignature)
+NUM_THREADS(8, 8, 1)
+void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
+{
+    INIT_MAIN;
+    const uint2 size = uint2(gScene.frameSize.xy);
+    const uint2 grid = RestirGrid(size, RestirSpacing(size));
+    if (threadId.x >= grid.x || threadId.y >= grid.y) {
+        RETURN();
+    }
+    const uint cell = threadId.y * grid.x + threadId.x;
+    const uint start = cell * LUX_RESTIR_CANDIDATE_FLOATS4;
+    const RestirSurface surface = RestirLoadSurface(start);
+    RestirDIReservoir direct = RestirLoadDI(start);
+    RestirGIReservoir indirect = RestirLoadGI(start);
+    if (surface.distance > 0.0f) {
+        const uint effects = uint(gScene.rayOptions.x);
+        const uint seed = RestirHash(cell ^ 0x444055b1u);
+        const int scale = 1 + int(RestirHash(seed + 1u) & 1u);
+        for (uint i = 0u; i < 4u; ++i) {
+            const int2 delta = i < 2u ? int2(i == 0u ? -scale : scale, 0)
+                                      : int2(0, i == 2u ? -scale : scale);
+            const int2 coordinate = int2(threadId.xy) + delta;
+            if (coordinate.x < 0 || coordinate.y < 0 ||
+                coordinate.x >= int(grid.x) || coordinate.y >= int(grid.y))
+                continue;
+            const uint neighbor = (uint(coordinate.y) * grid.x + uint(coordinate.x)) *
+                                  LUX_RESTIR_CANDIDATE_FLOATS4;
+            if (!RestirCompatible(surface, RestirLoadSurface(neighbor)))
+                continue;
+            if ((effects & LUX_RESTIR_DI) != 0u) {
+                const RestirDIReservoir donor = RestirLoadDI(neighbor);
+                if (donor.target > 0.0f) {
+                    const float target = RestirDITarget(donor.light, surface);
+                    // Reservoir reuse re-evaluates the selected sample's target
+                    // on the receiving surface before combining its effective count.
+                    const float weight = target * donor.weightSum / donor.target;
+                    direct = RestirDIUpdate(direct, donor.light, target, weight, donor.count,
+                                            RestirRandom(seed + i * 2u));
+                } else {
+                    direct.count += donor.count;
+                }
+            }
+            if ((effects & LUX_RESTIR_GI) != 0u) {
+                const RestirGIReservoir donor = RestirLoadGI(neighbor);
+                if (donor.target > 0.0f) {
+                    const float target = RestirLuminance(RestirGIContribution(donor.proposal, surface));
+                    const float weight = target * donor.weightSum / donor.target;
+                    indirect = RestirGIUpdate(indirect, donor.proposal, target, weight,
+                                               donor.count, RestirRandom(seed + i * 2u + 1u));
+                } else {
+                    indirect.count += donor.count;
+                }
+            }
+        }
+    }
+    const float directWeight = direct.target > 0.0f
+                                   ? direct.weightSum / (direct.count * direct.target)
+                                   : 0.0f;
+    const uint outputIndex = cell * LUX_RESTIR_OUTPUT_FLOATS4;
+    gRestirResult[outputIndex] = float4(surface.position, surface.distance);
+    gRestirResult[outputIndex + 1u] = float4(surface.normal, 0.0f);
+    gRestirResult[outputIndex + 2u] =
+        float4(float(direct.light), directWeight, direct.count, 0.0f);
+    const float3 indirectLighting = RestirResolveGI(indirect, surface);
+    gRestirResult[outputIndex + 3u] = float4(indirectLighting, indirect.count);
+    RETURN();
+}

@@ -1,0 +1,31 @@
+{
+  "name": "LakesideSunrise",
+  "source": "https://polyhaven.com/a/lakeside_sunrise",
+  "license": "CC0-1.0",
+  "credits": [
+    "Greg Zaal (photography)",
+    "Jarod Guest (processing)",
+    "Poly Haven (publisher)"
+  ],
+  "original": {
+    "download": "https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/16k%2B/lakeside_sunrise_24k.exr",
+    "bytes": 3402731529,
+    "md5": "fda5c4c0f60317530407d13268adde47",
+    "width": 24576,
+    "height": 12288,
+    "format": "OpenEXR RGB float plus alpha"
+  },
+  "files": [
+    {
+      "path": "License.txt",
+      "bytes": 369,
+      "sha256": "c886fb18b6013c61dcc20780e7bb4148096baeabac476fed92f0dde0f94a4087"
+    },
+    {
+      "path": "lakeside_sunrise_water.hdr",
+      "bytes": 6048929,
+      "sha256": "04fa305cf1c8b78a684255debd71b7f41d007475ebbcd6ee7396adcafda7a3b8"
+    }
+  ],
+  "conversion": "Read linear RGB from EXR and average nonoverlapping 12×12 blocks to 2048×1024. Clamp averaged negatives to zero and scale RGB by 0.25 before Radiance RGBE encoding."
+}

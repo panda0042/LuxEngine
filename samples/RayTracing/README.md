@@ -9,6 +9,10 @@ out/bin/SampleRayTracing
 
 - **R** toggles ray-traced shadows, reflections and water refraction.
 - **G** toggles ray-traced indirect diffuse lighting.
+- **D** toggles ReSTIR direct lighting for point lights.
+- **I** toggles ReSTIR indirect lighting.
+- **C** toggles Radiance Cascades.
+- **V** toggles virtual directional shadow pages with dense fallback when needed.
 - **F** toggles froxel fog.
 - **T** toggles ray-traced sun visibility in the fog.
 - **Escape** closes the sample.
