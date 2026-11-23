@@ -2660,13 +2660,16 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
         Transition(cmd, device->sceneDepth, RESOURCE_STATE_SHADER_RESOURCE);
         Transition(cmd, device->waterHdr, RESOURCE_STATE_RENDER_TARGET);
         Transition(cmd, device->waterDepth, RESOURCE_STATE_DEPTH_WRITE);
+        // D3D12 requires initialization before drawing to a non-zeroed target.
+        const LoadActionType loadAction =
+            device->waterHdr.lastUsedFrame == 0 ? LOAD_ACTION_CLEAR : LOAD_ACTION_DONTCARE;
         BindRenderTargetsDesc bind = {};
         bind.mRenderTargetCount = 1;
         bind.mRenderTargets[0].pRenderTarget = device->waterHdr.target;
-        bind.mRenderTargets[0].mLoadAction = LOAD_ACTION_DONTCARE;
+        bind.mRenderTargets[0].mLoadAction = loadAction;
         bind.mRenderTargets[0].mStoreAction = STORE_ACTION_STORE;
         bind.mDepthStencil.pDepthStencil = device->waterDepth.target;
-        bind.mDepthStencil.mLoadAction = LOAD_ACTION_DONTCARE;
+        bind.mDepthStencil.mLoadAction = loadAction;
         bind.mDepthStencil.mStoreAction = STORE_ACTION_STORE;
         bind.mDepthStencil.mLoadActionStencil = LOAD_ACTION_DONTCARE;
         bind.mDepthStencil.mStoreActionStencil = STORE_ACTION_DONTCARE;
