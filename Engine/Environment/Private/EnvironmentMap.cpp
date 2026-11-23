@@ -1,5 +1,6 @@
 #include <LuxEngine/Environment/EnvironmentMap.hpp>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -12,6 +13,10 @@
 namespace LuxEngine {
 namespace {
 constexpr float Pi = std::numbers::pi_v<float>;
+constexpr uint32 SpecularLevels = 8;
+constexpr uint32 EnvironmentSamples = 64;
+constexpr uint32 BrdfSize = 128;
+constexpr uint32 BrdfSamples = 128;
 std::mutex revisionsMutex;
 std::unordered_map<std::string, uint64> revisions;
 uint64 nextRevision = 1;
@@ -39,17 +44,95 @@ float RadicalInverse(uint32 bits) {
     return static_cast<float>(bits) * 2.3283064365386963e-10f;
 }
 
-Vec3 TangentSample(Vec3 n, float x, float y, float z) {
-    const Vec3 up = std::abs(n.z) < .999f ? Vec3{0, 0, 1} : Vec3{1, 0, 0};
-    const Vec3 t = up.Cross(n).Normalized();
-    return (t * x + n.Cross(t) * y + n * z).Normalized();
-}
+struct TangentFrame {
+    Vec3 tangent, bitangent, normal;
 
-Vec3 Ggx(Vec3 n, float roughness, float u, float v) {
+    explicit TangentFrame(Vec3 n) : normal(n) {
+        const Vec3 up = std::abs(n.z) < .999f ? Vec3{0, 0, 1} : Vec3{1, 0, 0};
+        tangent = up.Cross(n).Normalized();
+        bitangent = n.Cross(tangent);
+    }
+
+    Vec3 Rotate(const Vec3& sample) const {
+        return tangent * sample.x + bitangent * sample.y + normal * sample.z;
+    }
+};
+
+Vec3 Ggx(float roughness, float u, float v) {
     const float a = roughness * roughness;
     const float cosine = std::sqrt((1 - v) / (1 + (a * a - 1) * v));
     const float sine = std::sqrt(std::max(0.f, 1 - cosine * cosine));
-    return TangentSample(n, std::cos(2 * Pi * u) * sine, std::sin(2 * Pi * u) * sine, cosine);
+    return {std::cos(2 * Pi * u) * sine, std::sin(2 * Pi * u) * sine, cosine};
+}
+
+struct EnvironmentKernels {
+    std::array<Vec3, EnvironmentSamples> diffuse;
+    std::array<std::array<Vec3, EnvironmentSamples>, SpecularLevels - 1> specular;
+    std::array<float, SpecularLevels - 1> specularWeight;
+};
+
+const EnvironmentKernels& Kernels() {
+    static const auto kernels = [] {
+        EnvironmentKernels result{};
+        for (uint32 i = 0; i < EnvironmentSamples; ++i) {
+            const float u = (i + .5f) / EnvironmentSamples;
+            const float v = RadicalInverse(i);
+            const float radius = std::sqrt(v);
+            result.diffuse[i] = {radius * std::cos(2 * Pi * u), radius * std::sin(2 * Pi * u),
+                                 std::sqrt(1 - v)};
+            for (uint32 level = 1; level < SpecularLevels; ++level) {
+                const auto half = Ggx(static_cast<float>(level) / (SpecularLevels - 1), u, v);
+                const Vec3 reflected = half * (2 * half.z) - Vec3{0, 0, 1};
+                result.specular[level - 1][i] = reflected;
+                result.specularWeight[level - 1] += std::max(0., reflected.z);
+            }
+        }
+        return result;
+    }();
+    return kernels;
+}
+
+const auto& BrdfPixels() {
+    // The split-sum BRDF integral depends only on view angle and roughness, not the HDRI.
+    static const auto pixels = [] {
+        std::array<float, BrdfSize * BrdfSize * 4> image{};
+        const TangentFrame frame({0, 0, 1});
+        for (uint32 y = 0; y < BrdfSize; ++y) {
+            const float rough = (y + .5f) / BrdfSize;
+            const float alpha = rough * rough, a2 = alpha * alpha;
+            std::array<Vec3, BrdfSamples> halves;
+            for (uint32 i = 0; i < BrdfSamples; ++i)
+                halves[i] = frame.Rotate(Ggx(rough, (i + .5f) / BrdfSamples, RadicalInverse(i)));
+            for (uint32 x = 0; x < BrdfSize; ++x) {
+                const float nv = (x + .5f) / BrdfSize;
+                const Vec3 v{std::sqrt(1 - nv * nv), 0, nv};
+                const float smithView = std::sqrt(nv * nv * (1 - a2) + a2);
+                float a = 0, b = 0;
+                for (const auto& half : halves) {
+                    const double dot = v.Dot(half);
+                    const float nl = static_cast<float>(2 * dot * half.z - v.z);
+                    if (nl <= 0)
+                        continue;
+                    const float nh = std::max(static_cast<float>(half.z), 1e-5f);
+                    const float vh = std::max(static_cast<float>(dot), 0.f);
+                    const float visibility =
+                        .5f /
+                        std::max(nl * smithView + nv * std::sqrt(nl * nl * (1 - a2) + a2), 1e-5f);
+                    const float g = 4 * nl * visibility * vh / nh;
+                    const float d = 1 - vh, d2 = d * d;
+                    const float f = d2 * d2 * d;
+                    a += (1 - f) * g;
+                    b += f * g;
+                }
+                const auto index = (y * BrdfSize + x) * 4;
+                image[index] = a / BrdfSamples;
+                image[index + 1] = b / BrdfSamples;
+                image[index + 3] = 1;
+            }
+        }
+        return image;
+    }();
+    return pixels;
 }
 
 Vec3 CubeDirection(uint32 face, float u, float v) {
@@ -69,7 +152,9 @@ Vec3 CubeDirection(uint32 face, float u, float v) {
     }
 }
 
-bool Decode(const std::string& path, int& width, int& height, std::vector<float>& pixels,
+using HdrPixels = std::unique_ptr<float, decltype(&stbi_image_free)>;
+
+bool Decode(const std::string& path, int& width, int& height, HdrPixels& pixels,
             std::string& error) {
     try {
         const auto file = std::filesystem::path(
@@ -96,16 +181,15 @@ bool Decode(const std::string& path, int& width, int& height, std::vector<float>
             !stbi_info_from_memory(bytes.data(), static_cast<int>(size), &width, &height,
                                    &channels) ||
             width < 2 || height < 1 || width > 8192 || height > 4096 || width != 2 * height ||
-            static_cast<uint64>(width) * height * 4 * sizeof(float) > (256ull << 20))
+            static_cast<uint64>(width) * height * 3 * sizeof(float) > (256ull << 20))
             throw std::runtime_error("Invalid 2:1 HDR dimensions or decoded size");
-        std::unique_ptr<float, decltype(&stbi_image_free)> decoded(
-            stbi_loadf_from_memory(bytes.data(), static_cast<int>(size), &width, &height, &channels,
-                                   4),
-            &stbi_image_free);
-        if (!decoded)
+        pixels.reset(stbi_loadf_from_memory(bytes.data(), static_cast<int>(size), &width, &height,
+                                            &channels, 3));
+        if (!pixels)
             throw std::runtime_error("HDR decode failed");
-        pixels.assign(decoded.get(), decoded.get() + static_cast<size_t>(width) * height * 4);
-        for (float& v : pixels) {
+        const float* const end = pixels.get() + static_cast<size_t>(width) * height * 3;
+        for (auto* p = pixels.get(); p != end; ++p) {
+            auto& v = *p;
             if (!std::isfinite(v) || v < 0)
                 throw std::runtime_error("Nonfinite or negative HDR sample");
             v = std::min(v, 65504.f);
@@ -113,19 +197,19 @@ bool Decode(const std::string& path, int& width, int& height, std::vector<float>
         return true;
     } catch (const std::exception& e) {
         error = std::string(e.what()) + ": " + path;
-        pixels.clear();
+        pixels.reset();
         return false;
     }
 }
 
 struct Source {
     int width = 0, height = 0;
-    std::vector<float> pixels;
+    HdrPixels pixels{nullptr, &stbi_image_free};
 
     Vec3 Sample(Vec3 d) const {
-        if (pixels.empty()) {
+        if (!pixels) {
             const float sky = std::max<double>(0.f, d.y);
-            const Vec3 sun = Vec3{-.5f, 1, .5f}.Normalized();
+            static const Vec3 sun = Vec3{-.5f, 1, .5f}.Normalized();
             const float highlight = 6 * std::pow(std::max<double>(0.f, d.Dot(sun)), 64.f);
             return Vec3{.18f + .45f * sky, .2f + .6f * sky, .25f + .9f * sky} +
                    Vec3{1, .85f, .65f} * highlight;
@@ -136,8 +220,9 @@ struct Source {
         const auto at = [&](int px, int py) {
             const size_t i = (static_cast<size_t>(std::clamp(py, 0, height - 1)) * width +
                               (px % width + width) % width) *
-                             4;
-            return Vec3{pixels[i], pixels[i + 1], pixels[i + 2]};
+                             3;
+            const float* sample = pixels.get() + i;
+            return Vec3{sample[0], sample[1], sample[2]};
         };
         const float fx = u - std::floor(u), fy = v - std::floor(v);
         return (at(x, y) * (1 - fx) + at(x + 1, y) * fx) * (1 - fy) +
@@ -147,6 +232,12 @@ struct Source {
 
 template <class Sample> EnvironmentImage Cube(uint32 size, uint32 levels, Sample sample) {
     EnvironmentImage image{size, levels, 6, {}};
+    size_t count = 0;
+    for (uint32 level = 0; level < levels; ++level) {
+        const uint32 side = std::max(1u, size >> level);
+        count += static_cast<size_t>(side) * side * 6 * 4;
+    }
+    image.pixels.reserve(count);
     for (uint32 level = 0; level < levels; ++level) {
         const uint32 side = std::max(1u, size >> level);
         for (uint32 face = 0; face < 6; ++face)
@@ -181,57 +272,26 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& pat
         if (!path.empty() && !Decode(path, source.width, source.height, source.pixels, data->error))
             return data;
         data->sky = Cube(256, 1, [&](Vec3 n, uint32) { return source.Sample(n); });
+        const auto& kernels = Kernels();
         data->diffuse = Cube(32, 1, [&](Vec3 n, uint32) {
+            const TangentFrame frame(n);
             Vec3 sum{};
-            for (uint32 i = 0; i < 64; ++i) {
-                const float u = (i + .5f) / 64, v = RadicalInverse(i);
-                sum += source.Sample(TangentSample(n, std::sqrt(v) * std::cos(2 * Pi * u),
-                                                   std::sqrt(v) * std::sin(2 * Pi * u),
-                                                   std::sqrt(1 - v)));
-            }
-            return sum * (1.f / 64);
+            for (const auto& direction : kernels.diffuse)
+                sum += source.Sample(frame.Rotate(direction));
+            return sum * (1.f / EnvironmentSamples);
         });
-        data->specular = Cube(128, 8, [&](Vec3 n, uint32 level) {
+        data->specular = Cube(128, SpecularLevels, [&](Vec3 n, uint32 level) {
             if (!level)
                 return source.Sample(n);
+            const TangentFrame frame(n);
             Vec3 sum{};
-            float weight = 0;
-            for (uint32 i = 0; i < 64; ++i) {
-                const Vec3 h =
-                    Ggx(n, static_cast<float>(level) / 7, (i + .5f) / 64, RadicalInverse(i));
-                const Vec3 l = h * (2 * n.Dot(h)) - n;
-                const float nl = std::max<double>(0.f, n.Dot(l));
-                sum += source.Sample(l) * nl;
-                weight += nl;
-            }
-            return sum * (1 / std::max(weight, 1e-5f));
+            for (const auto& direction : kernels.specular[level - 1])
+                if (direction.z > 0)
+                    sum += source.Sample(frame.Rotate(direction)) * direction.z;
+            return sum * (1 / std::max(kernels.specularWeight[level - 1], 1e-5f));
         });
-        data->brdf = {128, 1, 1, {}};
-        data->brdf.pixels.reserve(128 * 128 * 4);
-        for (uint32 y = 0; y < 128; ++y)
-            for (uint32 x = 0; x < 128; ++x) {
-                const float nv = (x + .5f) / 128, rough = (y + .5f) / 128;
-                const Vec3 n{0, 0, 1}, v{std::sqrt(1 - nv * nv), 0, nv};
-                float a = 0, b = 0;
-                for (uint32 i = 0; i < 128; ++i) {
-                    const Vec3 h = Ggx(n, rough, (i + .5f) / 128, RadicalInverse(i));
-                    const Vec3 l = (h * (2 * v.Dot(h)) - v).Normalized();
-                    const float nl = std::max<double>(l.z, 0.f), nh = std::max<double>(h.z, 1e-5f),
-                                vh = std::max<double>(v.Dot(h), 0.f);
-                    if (nl <= 0)
-                        continue;
-                    const float alpha = rough * rough, a2 = alpha * alpha;
-                    const float visibility =
-                        .5f / std::max(nl * std::sqrt(nv * nv * (1 - a2) + a2) +
-                                           nv * std::sqrt(nl * nl * (1 - a2) + a2),
-                                       1e-5f);
-                    const float g = 4 * nl * visibility * vh / nh;
-                    const float f = std::pow(1 - vh, 5.f);
-                    a += (1 - f) * g;
-                    b += f * g;
-                }
-                data->brdf.pixels.insert(data->brdf.pixels.end(), {a / 128, b / 128, 0, 1});
-            }
+        const auto& brdf = BrdfPixels();
+        data->brdf = {BrdfSize, 1, 1, {brdf.begin(), brdf.end()}};
         const size_t bytes = (data->sky.pixels.size() + data->diffuse.pixels.size() +
                               data->specular.pixels.size() + data->brdf.pixels.size()) *
                              sizeof(float);
@@ -248,7 +308,7 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& pat
 
 bool EnvironmentData::ValidateFile(const std::string& path, std::string& error) {
     int w = 0, h = 0;
-    std::vector<float> pixels;
+    HdrPixels pixels{nullptr, &stbi_image_free};
     error.clear();
     return Decode(path, w, h, pixels, error);
 }

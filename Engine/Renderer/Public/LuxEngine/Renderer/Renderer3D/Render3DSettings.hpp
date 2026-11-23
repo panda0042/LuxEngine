@@ -5,6 +5,7 @@
 
 namespace LuxEngine {
 
+// Legacy is accepted for source and scene-file compatibility. Scene rendering always uses PBR.
 enum class Render3DMode { Legacy, Pbr };
 
 struct DirectionalLight {
@@ -14,7 +15,7 @@ struct DirectionalLight {
 };
 
 struct Render3DSettings {
-    Render3DMode mode = Render3DMode::Legacy;
+    Render3DMode mode = Render3DMode::Pbr;
     DirectionalLight sun{{.5f, -1.0f, .5f}, {1.0f, .98f, .95f}, 1.0f};
     Vec3 environmentColor{.15f, .15f, .15f};
     float environmentIntensity = 1.0f;

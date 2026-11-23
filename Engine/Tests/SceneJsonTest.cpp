@@ -56,7 +56,6 @@ void Test() {
     reference.entityMap = {{9, child.GetId()}};
     child.AddComponent<InstanceSourceComponent>() = {root.GetId(), 9};
     auto settings = scene.GetSettings();
-    settings.render3D.mode = Render3DMode::Pbr;
     settings.render3D.environmentPath = "Assets/환경.hdr";
     Check(scene.SetSettings(settings), "render settings setup");
     std::string text;
@@ -69,6 +68,23 @@ void Test() {
     Check(json["entities"][0]["components"]["camera"]["near_clip"] == .25 &&
               json["entities"][0]["components"]["camera"]["far_clip"] == 2500,
           "camera clipping settings are saved as named numeric fields");
+    Check(json["settings"]["render3d"]["mode"] == 1, "new scenes save the PBR renderer");
+    auto legacyJson = json;
+    legacyJson["settings"]["render3d"]["mode"] = 0;
+    legacyJson["settings"]["render3d"]["tone_mapping"] = false;
+    legacyJson["settings"]["render3d"]["shadow_resolution"] = 4096;
+    Scene migrated;
+    Check(migrated.DeserializeFromString(legacyJson.dump()), "older render mode loads");
+    const auto& migratedRender = migrated.GetSettings().render3D;
+    Check(migratedRender.mode == Render3DMode::Pbr && !migratedRender.toneMapping &&
+              migratedRender.shadowResolution == 4096 &&
+              migratedRender.environmentPath == settings.render3D.environmentPath,
+          "old scenes render as PBR and preserve their authored controls");
+    std::string migratedText;
+    Check(migrated.SerializeToString(migratedText) &&
+              Json::parse(migratedText)["settings"]["render3d"]["mode"] == 1,
+          "saving an old scene writes the canonical PBR mode");
+
     Scene restored;
     Check(restored.DeserializeFromString(text), "all component types load");
     std::string second;

@@ -1,6 +1,7 @@
 #include <LuxEngine/EntryPoint.hpp>
 #include <RainyCreek/CreekGeometry.hpp>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -98,26 +99,67 @@ void Terrain() {
 }
 
 void Water() {
-    const auto first = rc::BuildWater(0);
-    SameMesh(first, rc::BuildWater(12));
-    SameMesh(first, rc::BuildWater(24));
-    bool moved = false;
-    for (unsigned phase = 0; phase < 12; ++phase) {
-        const auto mesh = rc::BuildWater(phase);
-        Validate(mesh);
-        Check(mesh.indices == first.indices, "Water animation changed its topology");
-        for (size_t i = 0; i < mesh.vertices.size(); ++i) {
-            const auto& vertex = mesh.vertices[i];
-            Check(std::abs(vertex.position.x - rc::StreamCenter(vertex.position.z)) < 1.151f,
+    auto water = rc::BuildWater();
+    const auto mesh = [](const le::WaterSurface& surface) {
+        return rc::CpuMesh{{surface.GetVertices().begin(), surface.GetVertices().end()},
+                           {surface.GetIndices().begin(), surface.GetIndices().end()}};
+    };
+    const auto first = mesh(water);
+    Check(first.vertices.size() == 9u * 177u, "Water exceeds its creek mesh budget");
+    Validate(first);
+    Check(water.SetTime(1), "Water must accept one full wave period");
+    SameMesh(first, mesh(water));
+    for (double time : {0.03, 0.07, .257, .83}) {
+        Check(water.SetTime(time), "Water must accept fractional seconds");
+        const auto moved = mesh(water);
+        Validate(moved);
+        Check(moved.indices == first.indices, "Water animation changed its topology");
+        bool animated = false;
+        for (size_t i = 0; i < moved.vertices.size(); ++i) {
+            const auto& vertex = moved.vertices[i];
+            Check(std::abs(vertex.position.x - rc::StreamCenter(vertex.position.z)) < 1.162f,
                   "Water escaped the creek banks");
-            Check(std::abs(vertex.position.y - rc::WaterHeight()) <= .01051f,
+            Check(std::abs(vertex.position.y - rc::WaterHeight()) <= .01801,
                   "Wave height is outside its bounded range");
-            Check(vertex.normal.y > .99f, "Water normal has an unstable slope");
-            moved = moved || !Near(vertex.position.y, first.vertices[i].position.y);
+            const auto sample = water.Sample(vertex.position.x, vertex.position.z);
+            Check(sample && std::abs(sample->height - vertex.position.y) <= 1e-10 &&
+                      sample->normal.Dot(vertex.normal) >= 1 - 1e-10 &&
+                      std::abs(sample->foam - (1 - vertex.color.w)) < 1e-6 &&
+                      sample->jacobian > 0 && std::isfinite(sample->velocity.y),
+                  "Height and slope queries differ from the mesh");
+            animated |= !Near(vertex.position.y, first.vertices[i].position.y);
         }
+        Check(animated, "Fractional time must animate the water");
     }
-    Check(moved, "Water phases must animate the surface");
-    SameMesh(rc::BuildWater(1, 3), rc::BuildWater(4, 3));
+
+    Check(!water.Sample(4, 0) && !water.Sample(0, 24),
+          "Height queries outside the winding water surface must fail");
+
+    const double infinity = std::numeric_limits<double>::infinity();
+    const auto lastGood = mesh(water);
+    Check(!water.SetTime(infinity) && !water.Sample(infinity, 0),
+          "Nonfinite water inputs accepted");
+    Check(!water.Configure({{10, 10}, 257, 1}, {}), "Unbounded mesh grid accepted");
+    const std::array<le::WaterWave, 1> invalid{{{{0, 0}}}};
+    Check(!water.Configure({}, invalid), "Wave without direction accepted");
+    const std::array<le::WaterWave, 1> folded{{{{1, 0}, 1, 1, 1, 0, 1}}};
+    Check(!water.Configure({}, folded), "Self-intersecting displacement accepted");
+    SameMesh(lastGood, mesh(water));
+
+    le::WaterSurface swell;
+    const std::array<le::WaterWave, 1> surf{{{{1, 0}, .3, 4, 1, 0, 1}}};
+    Check(swell.Configure({{4, 4}, 4, 4}, surf), "Safe Gerstner steepness rejected");
+    const auto crest = swell.Sample(1, 0), trough = swell.Sample(-1, 0);
+    Check(crest && trough && Near(crest->height, .3f) && Near(trough->height, -.3f) &&
+              crest->jacobian < 1 && trough->jacobian > 1 && crest->foam > .9 &&
+              trough->foam == 0 && crest->velocity.x > 0 && trough->velocity.x < 0,
+          "Gerstner crest foam or buoyancy information is inconsistent");
+    const auto displaced = swell.Sample(.3, 0);
+    Check(displaced && Near(displaced->height, 0),
+          "Inverse XZ sampling ignored horizontal displacement");
+
+    const auto material = le::WaterSurface::MakeMaterial();
+    Check(material.water && material.metallic == 0, "Water must use a dielectric water material");
 }
 
 void Rain() {
@@ -164,20 +206,14 @@ void Lamps() {
 }
 
 void InvalidPhases() {
-    bool waterRejected = false, rainRejected = false;
-    try {
-        (void)rc::BuildWater(0, 0);
-    } catch (const std::invalid_argument&) {
-        waterRejected = true;
-    }
+    bool rainRejected = false;
     try {
         (void)rc::BuildRain(0, 0);
     } catch (const std::invalid_argument&) {
         rainRejected = true;
     }
-    Check(waterRejected && rainRejected, "A zero phase count must be rejected");
+    Check(rainRejected, "A zero rain phase count must be rejected");
     Validate(rc::BuildRain(std::numeric_limits<unsigned>::max()));
-    Validate(rc::BuildWater(std::numeric_limits<unsigned>::max()));
 }
 
 int RunGeometryTests(int, char**) {

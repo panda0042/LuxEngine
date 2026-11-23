@@ -6,9 +6,25 @@ STRUCT(FullscreenOutput)
     DATA(float2, uv, TEXCOORD0);
 };
 
-// Port of Shaders/Tone.frag.hlsl. The HDR image has the size of the swap chain, so the pixel is
-// read directly. Alpha 0 marks pixels no 3D geometry touched: they are discarded so the clear
-// colour and anything drawn earlier this frame stay visible.
+// ACES fitted SDR transform by Stephen Hill, from Baking Lab (MIT).
+// See docs/licenses/LICENSE-BakingLab.txt for the license.
+float3 AcesFitted(float3 linear)
+{
+    // Explicit row products give the same result on each FSL matrix convention.
+    float3 aces = float3(
+        dot(linear, float3(0.59719f, 0.35458f, 0.04823f)),
+        dot(linear, float3(0.07600f, 0.90834f, 0.01566f)),
+        dot(linear, float3(0.02840f, 0.13383f, 0.83777f)));
+    const float3 numerator = aces * (aces + 0.0245786f) - 0.000090537f;
+    const float3 denominator = aces * (0.983729f * aces + 0.4329510f) + 0.238081f;
+    aces = numerator / denominator;
+    return saturate(float3(
+        dot(aces, float3(1.60475f, -0.53108f, -0.07367f)),
+        dot(aces, float3(-0.10208f, 1.10813f, -0.00605f)),
+        dot(aces, float3(-0.00327f, -0.07276f, 1.07602f))));
+}
+
+// The HDR image matches the swap chain. Untouched pixels leave the previous pass visible.
 ROOT_SIGNATURE(DefaultRootSignature)
 float4 PS_MAIN(FullscreenOutput In)
 {
@@ -16,9 +32,11 @@ float4 PS_MAIN(FullscreenOutput In)
     float4 color = LoadTex2D(gHdrImage, NO_SAMPLER, int2(In.position.xy), 0);
     if (color.a <= 0.0f)
         discard;
-    color.rgb = max(color.rgb / max(color.a, 1e-6f) * gScene.camera.w, 0.0f);
+    color.rgb = clamp(color.rgb / max(color.a, 1e-6f) * gScene.camera.w, 0.0f, 65504.0f);
     if (gScene.options.z > 0.5f)
-        color.rgb = saturate((color.rgb * (2.51f * color.rgb + 0.03f)) / (color.rgb * (2.43f * color.rgb + 0.59f) + 0.14f));
+        color.rgb = AcesFitted(color.rgb);
+    else
+        color.rgb = saturate(color.rgb);
     color.rgb = lerp(12.92f * color.rgb, 1.055f * pow(color.rgb, float3(1.0f / 2.4f, 1.0f / 2.4f, 1.0f / 2.4f)) - 0.055f, step(0.0031308f, color.rgb));
     RETURN(color);
 }

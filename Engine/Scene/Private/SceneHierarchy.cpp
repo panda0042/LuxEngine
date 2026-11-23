@@ -142,6 +142,7 @@ bool Scene::SetSettings(const SceneSettings& value) {
     const bool timingChanged = settings_.fixedStep != value.fixedStep ||
                                settings_.physicsSubsteps != value.physicsSubsteps;
     settings_ = value;
+    settings_.render3D.mode = Render3DMode::Pbr;
     if (timingChanged)
         ResetPhysicsTiming();
     return true;

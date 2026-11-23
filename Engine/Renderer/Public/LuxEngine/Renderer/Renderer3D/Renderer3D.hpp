@@ -5,6 +5,7 @@
 #include <LuxEngine/Renderer/RHI/GpuDevice.hpp>
 #include <LuxEngine/Renderer/Renderer3D/Render3DSettings.hpp>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace LuxEngine {
@@ -14,9 +15,16 @@ struct Vertex3D {
     Vec3 position;
     Vec3 normal;
     Vec2 texCoords;
+    Vec4 color{1, 1, 1, 1};
 };
 
 enum class MaterialAlphaMode { Opaque, Mask, Blend };
+
+struct WaterMaterial3D {
+    // Beer–Lambert absorption coefficients in inverse world units.
+    Vec3 absorption{.36, .14, .065};
+    float indexOfRefraction = 1.333f;
+};
 
 struct Material3D {
     Vec4 albedoColor{1.0f, 1.0f, 1.0f, 1.0f};
@@ -33,6 +41,7 @@ struct Material3D {
     MaterialAlphaMode alphaMode = MaterialAlphaMode::Mask;
     float alphaCutoff = 0.001f;
     bool doubleSided = true;
+    std::optional<WaterMaterial3D> water;
 };
 
 struct PointLight {

@@ -45,12 +45,6 @@ ShowSceneSettingsDialog(LuxUI::Widget* parent, const LuxEngine::SceneSettings& s
         clear[index] = number(environment, labels[index], colors[index], 0, 1);
     auto* rendering = group(LUX_UI_TEXT("렌더링"));
     auto* exposure = number(rendering, LUX_UI_TEXT("노출 배율"), settings.exposure, .05, 16);
-    auto* mode = new LuxUI::ComboBox(&dialog);
-    mode->setObjectName(LUX_UI_TEXT("render3DMode"));
-    mode->addItem(LUX_UI_TEXT("Legacy"));
-    mode->addItem(LUX_UI_TEXT("PBR"));
-    mode->setCurrentIndex(static_cast<int>(settings.render3D.mode));
-    rendering->addRow(LUX_UI_TEXT("3D"), mode);
     const auto& r = settings.render3D;
     auto* sunGroup = group(LUX_UI_TEXT("방향광"));
     std::array<LuxUI::DoubleSpinBox*, 3> sunDirection, sunColor, ambientColor;
@@ -178,7 +172,6 @@ ShowSceneSettingsDialog(LuxUI::Widget* parent, const LuxEngine::SceneSettings& s
         value(clear[0], settings.clearColor.x), value(clear[1], settings.clearColor.y),
         value(clear[2], settings.clearColor.z), value(clear[3], settings.clearColor.w)};
     result.exposure = value(exposure, settings.exposure);
-    result.render3D.mode = static_cast<LuxEngine::Render3DMode>(mode->currentIndex());
     auto& render = result.render3D;
     render.sun.direction = {value(sunDirection[0], r.sun.direction.x),
                             value(sunDirection[1], r.sun.direction.y),

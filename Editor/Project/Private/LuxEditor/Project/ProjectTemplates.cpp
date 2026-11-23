@@ -988,10 +988,7 @@ protected:
             if (!renderSettings.environmentPath.empty())
                 renderSettings.environmentPath =
                     scene_->ResolveAssetPath(renderSettings.environmentPath);
-            if (renderSettings.mode == le::Render3DMode::Pbr)
-                le::Renderer3D::BeginScene(cameras.camera3D, renderSettings, settings.exposure);
-            else
-                le::Renderer3D::BeginScene(cameras.camera3D, le::DirectionalLight{});
+            le::Renderer3D::BeginScene(cameras.camera3D, renderSettings, settings.exposure);
             scene_->OnRender3D();
             le::Renderer3D::EndScene();
         }

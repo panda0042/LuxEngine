@@ -25,11 +25,11 @@ struct SceneDrawDesc {
     uint32 alphaMode = 1;
     float alphaCutoff = .001f;
     bool doubleSided = true;
-    bool legacy = false;
     uint64 normalTexture = 0, metallicTexture = 0, roughnessTexture = 0, occlusionTexture = 0;
     float normalScale = 1.f, occlusionStrength = 1.f;
     uint32 sampling = 0;
     bool shadowOnly = false;
+    Vec4 water{0, 0, 0, 0}; // RGB absorption and refractive index. W=0 disables water.
 };
 
 // HDR scene path (PBR, shadows, image-based lighting) owned by a backend.

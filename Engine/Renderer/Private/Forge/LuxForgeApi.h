@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 12u
+#define LUX_FORGE_API_VERSION 13u
 
 #if defined(_WIN32)
 #if defined(LUX_FORGE_BUILD)
@@ -131,11 +131,11 @@ typedef struct LuxForgeSceneDraw {
     uint32_t alphaMode;
     float alphaCutoff;
     int doubleSided;
-    int legacy;
     uint32_t normalTexture, metallicTexture, roughnessTexture, occlusionTexture;
     float normalScale, occlusionStrength;
     uint32_t sampling;
     uint32_t shadowOnly;
+    float water[4];
 } LuxForgeSceneDraw;
 
 // One HDR scene pass (port of the Vulkan backend's Scene3DRenderer). The vec4 fields and the

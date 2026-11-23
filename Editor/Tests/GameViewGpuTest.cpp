@@ -6,6 +6,7 @@
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
 #include <LuxUI/Widgets.hpp>
+#include <array>
 #include <iostream>
 #include <stdexcept>
 
@@ -112,7 +113,8 @@ void Primary3D(EngineSceneRenderer& renderer) {
     Scene scene;
     auto settings = scene.GetSettings();
     settings.clearColor = {.02f, .03f, .04f, 1};
-    settings.render3D.mode = Render3DMode::Legacy;
+    settings.render3D.imageBasedLighting = false;
+    settings.render3D.shadows = false;
     Check(scene.SetSettings(settings), "3D GPU fixture settings are invalid");
     auto inactive = scene.CreateEntity("Inactive camera");
     auto& inactiveSettings = inactive.AddComponent<CameraComponent>();
@@ -166,10 +168,42 @@ void Primary3D(EngineSceneRenderer& renderer) {
     Check(!Red(image, 320, 160), "GPU Game View returned a stale frame after the scene changed");
 }
 
-void DepthFallback(EngineSceneRenderer& renderer) {
+void MigratedScenePbr(EngineSceneRenderer& renderer) {
     Scene scene;
     auto settings = scene.GetSettings();
     settings.render3D.mode = Render3DMode::Legacy;
+    settings.render3D.shadows = false;
+    settings.render3D.imageBasedLighting = false;
+    settings.render3D.sun.intensity = 0;
+    settings.render3D.environmentColor = {.25, .25, .25};
+    settings.render3D.toneMapping = false;
+    settings.exposure = .5f;
+    Check(scene.SetSettings(settings), "old scene render settings can be applied");
+    auto cube = scene.CreateEntity("White test cube");
+    cube.AddComponent<MeshRendererComponent>();
+    auto eye = scene.CreateEntity("Camera");
+    eye.GetComponent<TransformComponent>().position.z = 6;
+    eye.AddComponent<CameraComponent>().isPerspective = true;
+
+    const auto game = Render(renderer, scene);
+    LuxUI::Image view;
+    const auto camera = ResolveGameViewCamera(scene, 640, 320).camera3D;
+    Check(renderer.Render3D(scene, 640, 320, {}, .65, -.48, 22, view, nullptr, &camera),
+          "migrated scene renders in the 3D viewport");
+    // .25 linear ambient * .5 exposure = .125 linear, encoded once to 99 in sRGB.
+    for (const auto* image : std::array<const LuxUI::Image*, 2>{&game, &view}) {
+        const auto pixel = image->pixelColor(320, 160);
+        Check(std::abs(pixel.red() - 99) <= 2 && std::abs(pixel.green() - 99) <= 2 &&
+                  std::abs(pixel.blue() - 99) <= 2,
+              "the migrated scene applies the same HDR exposure in both editor views");
+    }
+}
+
+void DepthFallback(EngineSceneRenderer& renderer) {
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.render3D.imageBasedLighting = false;
+    settings.render3D.shadows = false;
     Check(scene.SetSettings(settings), "depth fixture render settings");
     auto cube = scene.CreateEntity("Red cube");
     cube.AddComponent<MeshRendererComponent>().material.albedoColor = {1, 0, 0, 1};
@@ -189,7 +223,8 @@ void DistinctScenePoses(EngineSceneRenderer& renderer) {
     Scene first, second;
     for (auto* scene : {&first, &second}) {
         auto settings = scene->GetSettings();
-        settings.render3D.mode = Render3DMode::Legacy;
+        settings.render3D.imageBasedLighting = false;
+        settings.render3D.shadows = false;
         Check(scene->SetSettings(settings), "pose fixture render settings");
         auto entity = scene->CreateEntity("Animated triangle");
         auto& mesh = entity.AddComponent<MeshRendererComponent>();
@@ -343,6 +378,7 @@ int main(int argc, char** argv) {
         CheckSpriteAboveTilemap(Render(renderer, layeredScene));
         Primary2D(renderer);
         Primary3D(renderer);
+        MigratedScenePbr(renderer);
         DepthFallback(renderer);
         DistinctScenePoses(renderer);
         LargeSceneView(renderer);

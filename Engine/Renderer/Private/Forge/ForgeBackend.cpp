@@ -552,7 +552,6 @@ public:
         d.alphaMode = draw.alphaMode;
         d.alphaCutoff = draw.alphaCutoff;
         d.doubleSided = draw.doubleSided ? 1 : 0;
-        d.legacy = draw.legacy ? 1 : 0;
         d.normalTexture = static_cast<uint32_t>(draw.normalTexture);
         d.metallicTexture = static_cast<uint32_t>(draw.metallicTexture);
         d.roughnessTexture = static_cast<uint32_t>(draw.roughnessTexture);
@@ -561,6 +560,7 @@ public:
         d.occlusionStrength = draw.occlusionStrength;
         d.sampling = draw.sampling;
         d.shadowOnly = draw.shadowOnly ? 1 : 0;
+        Copy4(d.water, draw.water);
         draws_.push_back(d);
         models_.push_back(draw.model);
         return true;
@@ -630,6 +630,8 @@ public:
             scene.up[i] = view[i * 4 + 1] / projection[5];
             scene.forward[i] = -view[i * 4 + 2];
         }
+        scene.right[3] = static_cast<float>(projection[10]);
+        scene.up[3] = static_cast<float>(projection[14]);
         if (settings.shadows) {
             CopyMatrix(scene.shadowMatrix, SceneShadowProjection(camera, settings));
             scene.shadowOptions[0] = 1;
@@ -730,7 +732,7 @@ private:
         }
     }
 
-    // Same fallback as the Vulkan backend: the meshes with the plain lit pipeline.
+    // Use the indexed PBR pipeline if the scene targets cannot be rendered.
     bool Fallback(Vec3 origin, const Mat4& viewProjection, float exposure) {
         const Mat4 relative = Mat4::Translate(origin * -1);
         for (size_t index = 0; index < draws_.size(); ++index) {
@@ -741,7 +743,7 @@ private:
             const Vec4 albedo(d.albedo[0] * exposure, d.albedo[1] * exposure,
                               d.albedo[2] * exposure, d.albedo[3]);
             if (!backend_->DrawIndexed(d.vertexBuffer, d.indexBuffer, d.indexCount, viewProjection,
-                                       model, albedo, d.texture, 0, .5f, false))
+                                       model, albedo, d.texture, d.metallic, d.roughness, true))
                 break;
         }
         return false;

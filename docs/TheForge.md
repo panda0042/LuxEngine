@@ -34,7 +34,7 @@ cmake --build build --target LuxEditor LuxForgeBackendTests
 ctest --test-dir build -L forge --output-on-failure
 ```
 
-`LUX_ENABLE_FORGE`나 `LUX_RENDER_BACKEND`를 선택할 필요가 없다. 렌더러 파일이 없거나 엔진과 ABI가 맞지 않으면 초기화 오류를 반환한다. ABI 버전은 현재 `11`이며 엔진과 렌더러를 함께 다시 빌드해야 한다.
+`LUX_ENABLE_FORGE`나 `LUX_RENDER_BACKEND`를 선택할 필요가 없다. 렌더러 파일이 없거나 엔진과 ABI가 맞지 않으면 초기화 오류를 반환한다. ABI 버전은 현재 `13`이며 엔진과 렌더러를 함께 다시 빌드해야 한다.
 
 ## 프레임과 자원 수명
 
@@ -43,6 +43,12 @@ ctest --test-dir build -L forge --output-on-failure
 Vulkan에서도 `INIT_RS_DESC`와 `initRootSignature`를 호출해 기본 정적 샘플러 디스크립터를 생성한다. 이 초기화가 없으면 첫 파이프라인 바인딩에서 assertion이 발생했다.
 
 기준 리비전의 리소스 로더는 업로드용 전송 큐에서 셰이더 접근 배리어를 실행한다. Vulkan 검증 계층과 호환되도록 Linux 빌드에서만 생성한 리소스 로더 사본의 업로드 큐를 그래픽 큐로 바꿨다. 외부 소스 체크아웃은 수정하지 않는다. 이 호환 처리는 CMake에 주석과 적용 범위를 기록했다.
+
+## 3D 장면 합성
+
+에디터와 독립 Player, 생성 게임은 모두 동일한 PBR 씬 패스를 사용한다. 방향광 그림자, 불투명 장면 및 스카이박스, 수면 합성, 일반 반투명 재질, 노출 및 톤 매핑의 순서로 렌더링한다. 물이 화면에 없으면 수면 합성 패스가 생기지 않는다.
+
+환경 이미지는 2:1 Radiance HDR을 사용한다. 씬 설정에서 내장 하늘 또는 HDR 이미지를 선택하고 스카이박스 표시와 IBL 반사를 각각 제어할 수 있다. HDR 내부 버퍼의 RGB는 노출을 적용한 뒤 색 공간 변환을 포함한 ACES SDR 근사와 sRGB 인코딩을 거친다. 자세한 재질과 맵 형식은 [재질 문서](Materials.md)에 정리했다.
 
 ## 실행 파일과 SDK 배포
 

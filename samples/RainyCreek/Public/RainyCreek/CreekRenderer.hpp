@@ -1,6 +1,6 @@
 #pragma once
 
-#include <LuxEngine/Renderer/Renderer3D/Renderer3D.hpp>
+#include <LuxEngine/Renderer/Water/WaterSurface.hpp>
 #include <RainyCreek/Catalog.hpp>
 #include <RainyCreek/CreekState.hpp>
 #include <array>
@@ -15,7 +15,8 @@ public:
     ~CreekRenderer();
     void Initialize(LuxEngine::GpuDevice& device, Catalog catalog);
     void Shutdown();
-    void Draw(const CreekState& state, const LuxEngine::PerspectiveCamera& camera);
+    void Draw(LuxEngine::GpuDevice& device, const CreekState& state,
+              const LuxEngine::PerspectiveCamera& camera);
     LuxEngine::Renderer3D::Statistics Statistics() const;
     bool EnvironmentReady() const;
 
@@ -42,7 +43,7 @@ private:
     LuxEngine::Mesh3D terrain_;
     LuxEngine::Mesh3D lampPost_;
     LuxEngine::Mesh3D lampGlass_;
-    std::array<LuxEngine::Mesh3D, 12> water_;
+    LuxEngine::WaterSurface water_;
     std::array<LuxEngine::Mesh3D, 24> rain_;
     std::shared_ptr<LuxEngine::GpuTexture> ground_;
 };

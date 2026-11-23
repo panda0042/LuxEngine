@@ -238,17 +238,19 @@ add_custom_command(OUTPUT "${LUX_FORGE_SHADER_STAMP}"
         -i "${CMAKE_BINARY_DIR}/forge/shaders/intermediate" -I "${TF}/Graphics/FSL"
     COMMAND ${CMAKE_COMMAND} -E touch "${LUX_FORGE_SHADER_STAMP}"
     DEPENDS ${LUX_FORGE_SHADER_SOURCES} VERBATIM)
-add_custom_target(LuxForgeShaders DEPENDS "${LUX_FORGE_SHADER_STAMP}")
+# Stage updated shader binaries even when a shader-only edit does not relink LuxForge.
+add_custom_target(LuxForgeShaders
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_BINARY_DIR}/forge/shaders/bin/${LUX_FORGE_SHADER_TARGET}"
+        "$<TARGET_FILE_DIR:LuxForge>/${LUX_FORGE_SHADER_TARGET}"
+    DEPENDS "${LUX_FORGE_SHADER_STAMP}" VERBATIM)
 add_custom_target(LuxForgeGpuData
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:LuxForge>"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${LUX_FORGE_GPU_DATA}" "$<TARGET_FILE_DIR:LuxForge>/gpu.data"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/Engine/Renderer/Private/Forge/gpu.cfg" "$<TARGET_FILE_DIR:LuxForge>/gpu.cfg"
     DEPENDS "${LUX_FORGE_GPU_DATA}" VERBATIM)
 add_dependencies(LuxForge LuxForgeShaders LuxForgeGpuData)
-add_custom_command(TARGET LuxForge POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/forge/shaders/bin/${LUX_FORGE_SHADER_TARGET}"
-        "$<TARGET_FILE_DIR:LuxForge>/${LUX_FORGE_SHADER_TARGET}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/Engine/Renderer/Private/Forge/gpu.cfg" "$<TARGET_FILE_DIR:LuxForge>/gpu.cfg")
 install(TARGETS LuxForge RUNTIME DESTINATION bin LIBRARY DESTINATION bin)
 install(DIRECTORY "${CMAKE_BINARY_DIR}/forge/shaders/bin/${LUX_FORGE_SHADER_TARGET}" DESTINATION bin)
 install(FILES "${LUX_FORGE_GPU_DATA}" DESTINATION bin RENAME gpu.data)

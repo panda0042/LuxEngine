@@ -2255,9 +2255,9 @@ void Scene3D() {
           "orientation cube uploads");
     for (int path = 0; path < 3; ++path) {
         const auto mode = path == 2 ? Render3DMode::Pbr : Render3DMode::Legacy;
-        const char* label = path == 0   ? "legacy triangles"
-                            : path == 1 ? "legacy meshes"
-                                        : "HDR meshes";
+        const char* label = path == 0   ? "procedural cube"
+                            : path == 1 ? "migrated scene mesh"
+                                        : "PBR scene mesh";
         const bool captured = CaptureFrame(s, c, [&] {
             s.gpu.Clear(0, 0, 0, 1);
             Render3DSettings settings;
@@ -2293,9 +2293,7 @@ void Scene3D() {
         std::printf("  %s orientation: top=%d,%d,%d bottom=%d,%d,%d\n", label, top[0], top[1],
                     top[2], bottom[0], bottom[1], bottom[2]);
         Check(top[0] > 20 && top[0] > top[1] && bottom[1] > 20 && bottom[1] > bottom[0],
-              path == 0   ? "legacy triangles place positive world Y above negative world Y"
-              : path == 1 ? "legacy meshes place positive world Y above negative world Y"
-                          : "HDR meshes place positive world Y above negative world Y");
+              "PBR geometry places positive world Y above negative world Y");
     }
 
     // PBR materials (Engine_pbr).
@@ -2331,8 +2329,8 @@ void Scene3D() {
     Check(dielectric[0] > 5, "lit dielectric is visible");
     Check(dielectric != metal, "metallic changes the GPU output");
     Check(glossy[0] > dielectric[0] + 10, "roughness changes the specular highlight");
-    Check(material(0, .1f, false) == material(1, .9f, false),
-          "legacy mode ignores metallic and roughness");
+    Check(material(1, .65f, false) == metal,
+          "legacy compatibility input uses PBR metallic and roughness");
 
     // Untouched pixels keep the clear colour; a 2D overlay after the scene keeps its colour.
     Check(CaptureFrame(s, c,
@@ -2759,6 +2757,191 @@ void MaterialTextures() {
     Check(context.GetLastAssetError().empty(), "material texture loading has no hidden errors");
 }
 
+void SceneSubmission() {
+    std::printf("[scene_submission]\n");
+    GpuDeviceConfig config;
+    config.vsync = false;
+    Session session(192, 192, config, true);
+    if (!session.ok)
+        return Check(false, "session for repeated scene submission");
+
+    const std::array<Vertex3D, 4> quad{{{{-.5f, -.5f, 0}, {0, 0, 1}, {0, 0}},
+                                        {{.5f, -.5f, 0}, {0, 0, 1}, {1, 0}},
+                                        {{.5f, .5f, 0}, {0, 0, 1}, {1, 1}},
+                                        {{-.5f, .5f, 0}, {0, 0, 1}, {0, 1}}}};
+    const std::array<uint32, 6> indices{0, 1, 2, 0, 2, 3};
+    Mesh3D mesh;
+    const std::array<uint8, 4> red{255, 0, 0, 255}, green{0, 255, 0, 255};
+    GpuTexture redMap, greenMap;
+    if (!mesh.Upload(&session.gpu, quad, indices) ||
+        !redMap.Initialize(&session.gpu, 1, 1, red.data()) ||
+        !greenMap.Initialize(&session.gpu, 1, 1, green.data()))
+        return Check(false, "repeated scene mesh and textures upload");
+
+    Renderer3D::Context context(&session.gpu);
+    Render3DSettings settings;
+    settings.imageBasedLighting = false;
+    settings.shadowResolution = 1024;
+    settings.sun.direction = {0, 0, -1};
+    settings.sun.intensity = 0;
+    PerspectiveCamera camera(ToRadians(60), 1, .1f, 100);
+    camera.SetPosition({0, 0, 8});
+
+    constexpr uint32 drawCount = 128;
+    const auto render = [&](bool grouped, GpuFrameCapture& capture) {
+        return CaptureFrame(session, capture, [&] {
+            if (!session.gpu.Clear(0, 0, 0, 1))
+                return false;
+            context.BeginScene(camera, settings, 1);
+            for (uint32 i = 0; i < drawCount; ++i) {
+                const uint32 index = grouped ? (i % 64) * 2 + i / 64 : i;
+                const auto position = Vec3{(static_cast<int>(index % 16) - 7.5) * .4,
+                                           (static_cast<int>(index / 16) - 3.5) * .4, 0};
+                context.DrawMesh(mesh, Mat4::Translate(position) * Mat4::Scale({.32, .32, .32}),
+                                 Material3D{}, index % 2 == 0 ? &redMap : &greenMap);
+            }
+            context.EndScene();
+            return context.GetLastAssetError().empty();
+        });
+    };
+
+    GpuFrameCapture interleaved, grouped;
+    if (!render(false, interleaved))
+        return Check(false, "interleaved material submission renders");
+    const auto before = session.gpu.GetFrameStats();
+    if (!render(true, grouped))
+        return Check(false, "grouped material submission renders");
+    const auto after = session.gpu.GetFrameStats();
+    uint32 redPixels = 0, greenPixels = 0;
+    for (size_t i = 0; i < grouped.rgba.size(); i += 4) {
+        redPixels += grouped.rgba[i] > 64 && grouped.rgba[i + 1] == 0;
+        greenPixels += grouped.rgba[i + 1] > 64 && grouped.rgba[i] == 0;
+    }
+    std::printf("  %u indexed scene draws across two passes, pipeline binds=%u, "
+                "descriptor binds interleaved=%u grouped=%u\n",
+                2 * drawCount, after.pipelineBinds, before.descriptorBinds, after.descriptorBinds);
+    Check(grouped.rgba == interleaved.rgba && redPixels > 100 && greenPixels > 100,
+          "reusing material sets retains geometry and both base-color textures");
+    Check(before.drawCalls == 2 * drawCount + 1 && after.drawCalls == before.drawCalls,
+          "reusing state retains every shadow and HDR submission");
+    Check(before.pipelineBinds == 3 && after.pipelineBinds == 3,
+          "the shadow, HDR and tone passes each bind one pipeline");
+    Check(before.descriptorBinds == 4 * drawCount + 4 && after.descriptorBinds == 2 * drawCount + 8,
+          "a material run only binds its shared texture descriptors once per pass");
+    Check(session.gpu.GetCounters().validationErrors == 0,
+          "reusing draw state creates no GPU validation errors");
+}
+
+void WaterComposite() {
+    std::printf("[water_composite]\n");
+    GpuDeviceConfig config;
+    config.vsync = false;
+    Session session(192, 192, config, true);
+    if (!session.ok)
+        return Check(false, "session for water compositing");
+
+    const std::array<Vertex3D, 4> quad{{{{-.5, -.5, 0}, {0, 0, 1}, {0, 0}},
+                                        {{.5, -.5, 0}, {0, 0, 1}, {1, 0}},
+                                        {{.5, .5, 0}, {0, 0, 1}, {1, 1}},
+                                        {{-.5, .5, 0}, {0, 0, 1}, {0, 1}}}};
+    const std::array<uint32, 6> indices{0, 1, 2, 0, 2, 3};
+    Mesh3D mesh, crest, sloped;
+    auto crestVertices = quad;
+    auto slopedVertices = quad;
+    for (auto& vertex : crestVertices)
+        vertex.color.w = 0;
+    for (auto& vertex : slopedVertices)
+        vertex.normal = {.8, 0, .6};
+    if (!mesh.Upload(&session.gpu, quad, indices) ||
+        !crest.Upload(&session.gpu, crestVertices, indices) ||
+        !sloped.Upload(&session.gpu, slopedVertices, indices))
+        return Check(false, "water fixture meshes upload");
+
+    Renderer3D::Context context(&session.gpu);
+    Render3DSettings settings;
+    settings.imageBasedLighting = false;
+    settings.shadows = false;
+    settings.toneMapping = false;
+    settings.environmentColor = {.5, .5, .5};
+    settings.sun.intensity = 0;
+    PerspectiveCamera camera(ToRadians(60), 1, .1f, 100);
+    camera.SetPosition({0, 0, 3});
+
+    const auto draw = [&](const Mesh3D* surface, Vec3 absorption, double floorDepth,
+                          Vec4 floorColor, bool foreground, bool stripes) {
+        GpuFrameCapture result;
+        if (!CaptureFrame(session, result, [&] {
+                if (!session.gpu.Clear(0, 0, 0, 1))
+                    return false;
+                context.BeginScene(camera, settings, 1);
+                Material3D floor;
+                floor.albedoColor = floorColor;
+                if (stripes) {
+                    floor.albedoColor = {1, 0, 0, 1};
+                    context.DrawMesh(mesh,
+                                     Mat4::Translate({-3, 0, -floorDepth}) * Mat4::Scale({6, 6, 1}),
+                                     floor);
+                    floor.albedoColor = {0, 1, 0, 1};
+                    context.DrawMesh(
+                        mesh, Mat4::Translate({3, 0, -floorDepth}) * Mat4::Scale({6, 6, 1}), floor);
+                } else {
+                    context.DrawMesh(
+                        mesh, Mat4::Translate({0, 0, -floorDepth}) * Mat4::Scale({6, 6, 1}), floor);
+                }
+                if (foreground) {
+                    Material3D marker;
+                    marker.albedoColor = {1, 0, 0, 1};
+                    context.DrawMesh(mesh, Mat4::Translate({0, 0, .5}) * Mat4::Scale({.5, .5, 1}),
+                                     marker);
+                }
+                if (surface) {
+                    Material3D water;
+                    water.albedoColor = {0, 0, 0, 1};
+                    water.roughness = .06f;
+                    water.water = WaterMaterial3D{absorption, 1.333f};
+                    context.DrawMesh(*surface, Mat4::Scale({2, 2, 1}), water);
+                }
+                context.EndScene();
+                return context.GetLastAssetError().empty();
+            })) {
+            std::printf("  water frame failed: %s / %s\n", context.GetLastAssetError().c_str(),
+                        session.gpu.GetLastError().c_str());
+            Check(false, "water frame captures");
+            return GpuFrameCapture{};
+        }
+        return result;
+    };
+    const auto read = [](const GpuFrameCapture& frame, float x = .5f) {
+        return frame.rgba.empty() ? std::array<int, 4>{} : At(frame, x, .5f);
+    };
+    const auto clearWater = read(draw(&mesh, {}, 1.5, {1, 1, 1, 1}, false, false));
+    const auto absorbed = read(draw(&mesh, {1.2, 0, 0}, 1.5, {1, 1, 1, 1}, false, false));
+    const auto deep = read(draw(&mesh, {}, 1.5, {0, 0, 0, 1}, false, false));
+    const auto shore = read(draw(&mesh, {}, .07, {0, 0, 0, 1}, false, false));
+    const auto crestFoam = read(draw(&crest, {}, 1.5, {0, 0, 0, 1}, false, false));
+    const auto marker = read(draw(nullptr, {}, 1.5, {1, 1, 1, 1}, true, false));
+    const auto markerOverWater = read(draw(&mesh, {1.2, 0, 0}, 1.5, {1, 1, 1, 1}, true, false));
+    const auto unbent = draw(&mesh, {}, 1.5, {}, false, true);
+    const auto refracted = draw(&sloped, {}, 1.5, {}, false, true);
+    const auto baseSide = read(unbent, .505f);
+    const auto bentSide = read(refracted, .505f);
+    std::printf("  water center clear=%d,%d,%d absorbed=%d,%d,%d deep=%d shore=%d crest=%d\n",
+                clearWater[0], clearWater[1], clearWater[2], absorbed[0], absorbed[1], absorbed[2],
+                deep[0], shore[0], crestFoam[0]);
+    std::printf("  water boundary unbent=%d,%d refracted=%d,%d\n", baseSide[0], baseSide[1],
+                bentSide[0], bentSide[1]);
+    Check(absorbed[0] + 60 < clearWater[0] && std::abs(absorbed[1] - clearWater[1]) < 4,
+          "water uses scene depth and per-channel Beer-Lambert absorption");
+    Check(shore[0] > deep[0] + 45 && crestFoam[0] > deep[0] + 45,
+          "shore and crest foam brighten water independently");
+    Check(markerOverWater == marker && marker[0] > 150 && marker[1] == 0,
+          "opaque geometry in front of water retains its color and depth");
+    Check(baseSide[1] > baseSide[0] + 40 && bentSide[0] > bentSide[1] + 30,
+          "slope refracts the opaque scene across a color boundary");
+    Check(session.gpu.GetCounters().validationErrors == 0,
+          "the opaque color and depth snapshots introduce no GPU validation errors");
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0); // keep output even if the process crashes
     // Optional: section names to run (basics misuse resize lifecycle frames drawing volume
@@ -2814,6 +2997,8 @@ int main(int argc, char** argv) {
     run("drawing", Drawing);
     run("meshes", Meshes);
     run("scene3d", Scene3D);
+    run("scene_submission", SceneSubmission);
+    run("water_composite", WaterComposite);
     run("materials", MaterialModes);
     run("material_textures", MaterialTextures);
     run("volume", Volume);

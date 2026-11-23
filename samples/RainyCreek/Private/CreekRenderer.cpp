@@ -87,19 +87,18 @@ void CreekRenderer::Initialize(le::GpuDevice& device, Catalog catalog) {
     Upload(terrain_, device, BuildTerrain());
     Upload(lampPost_, device, BuildLampPost());
     Upload(lampGlass_, device, BuildLampGlass());
-    // TODO(Mesh3D): 버퍼를 재생성하지 않는 정점 갱신 API가 필요합니다.
-    // 지금은 작은 주기 메시를 한 번 업로드하고 고정 시간에 따라 선택합니다.
-    for (unsigned i = 0; i < water_.size(); ++i)
-        Upload(water_[i], device, BuildWater(i, static_cast<unsigned>(water_.size())));
+    water_ = BuildWater();
+    if (!water_.SyncGpu(device))
+        throw std::runtime_error("Rainy Creek 수면을 업로드하지 못했습니다.");
     for (unsigned i = 0; i < rain_.size(); ++i)
         Upload(rain_[i], device, BuildRain(i, static_cast<unsigned>(rain_.size())));
     le::AssetManager::Clear();
 }
 
-void CreekRenderer::Draw(const CreekState& state, const le::PerspectiveCamera& camera) {
+void CreekRenderer::Draw(le::GpuDevice& device, const CreekState& state,
+                         const le::PerspectiveCamera& camera) {
     const auto& options = state.GetSettings();
     le::Render3DSettings settings;
-    settings.mode = le::Render3DMode::Pbr;
     settings.showSkybox = true;
     settings.environmentPath =
         ToUtf8(options.lighting == Lighting::Day ? catalog_.day : catalog_.dusk);
@@ -129,6 +128,8 @@ void CreekRenderer::Draw(const CreekState& state, const le::PerspectiveCamera& c
                     options.lamps ? 8.f : 0.f,
                     9.f};
     }
+    if (options.water && (!water_.SetTime(state.Time()) || !water_.SyncGpu(device)))
+        throw std::runtime_error("Rainy Creek 수면 정점을 갱신하지 못했습니다.");
     context_.BeginScene(camera, settings, options.exposure, lamps);
     le::Material3D ground;
     ground.roughness = .78f;
@@ -167,17 +168,8 @@ void CreekRenderer::Draw(const CreekState& state, const le::PerspectiveCamera& c
         context_.DrawMesh(lampPost_, transform, iron);
         context_.DrawMesh(lampGlass_, transform, glass);
     }
-    if (options.water) {
-        le::Material3D water;
-        water.albedoColor = {.035f, .095f, .115f, 1};
-        water.metallic = .72f;
-        water.roughness = .085f;
-        // TODO(Renderer3D): 깊이를 공유하는 투명 패스와 굴절/반사 렌더 타깃이 필요합니다.
-        // 현재는 IBL 하이라이트가 있는 불투명 저거칠기 수면입니다. SSR/굴절은 지원하지 않습니다.
-        const auto phase =
-            static_cast<size_t>(std::fmod(state.Time() * 12, static_cast<double>(water_.size())));
-        context_.DrawMesh(water_[phase], le::Mat4::Identity(), water);
-    }
+    if (options.water)
+        context_.DrawMesh(water_.GetMesh(), le::Mat4::Identity(), le::WaterSurface::MakeMaterial());
     if (options.rain) {
         le::Material3D rain;
         rain.albedoColor = {.32f, .42f, .51f, 1};
@@ -204,8 +196,7 @@ void CreekRenderer::Shutdown() {
     terrain_.Release();
     lampPost_.Release();
     lampGlass_.Release();
-    for (auto& mesh : water_)
-        mesh.Release();
+    water_.ReleaseGpu();
     for (auto& mesh : rain_)
         mesh.Release();
     ground_.reset();
