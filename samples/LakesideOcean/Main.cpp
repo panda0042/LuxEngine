@@ -63,12 +63,12 @@ void MakeTerrain(GpuDevice& device, Mesh3D& mesh) {
             const double noise = .5 + .5 * Relief(x * 1.7, z * 1.7);
             const double grass = std::clamp((y - .15) * 1.1 + noise * .27, 0., 1.);
             const double rock = std::clamp((.9 - normal.y) * 5, 0., 1.);
-            const Vec3 sand{.31, .255, .174}, moss{.045, .073, .026}, stone{.175, .149, .123};
+            const Vec3 sand{.89, .91, .85}, moss{.30, .49, .22}, stone{.66, .67, .63};
             const auto ground = (sand * (1 - grass) + moss * grass) * (1 - rock) + stone * rock;
             const auto color = ground * (.72 + .48 * noise);
             vertices.push_back({{x, y, z},
                                 normal,
-                                {x / 8, z / 8},
+                                {x / 1.8, z / 1.8},
                                 {float(color.x), float(color.y), float(color.z), 1}});
             if (column + 1 < Width && row + 1 < Depth) {
                 const auto first = row * Width + column;
@@ -192,7 +192,7 @@ std::string AssetPath(const char* group, const char* filename) {
 class LakesideDemo final : public Application {
 public:
     explicit LakesideDemo(bool smoke)
-        : Application({"LuxEngine · Lakeside Sunrise", smoke ? 640u : 1440u, smoke ? 360u : 810u}),
+        : Application({"LuxEngine · Lakeside at Noon", smoke ? 640u : 1440u, smoke ? 360u : 810u}),
           smoke_(smoke) {}
 
 private:
@@ -236,16 +236,21 @@ private:
             buoy.AddComponent<BoxCollider3DComponent>().size = {BuoyRadius * 2, .3, BuoyRadius * 2};
         }
         settings_.showSkybox = true;
-        settings_.sun = {{-.24, -.096, .966}, {1, .64, .35}, 4.3f};
-        settings_.environmentPath = AssetPath("LakesideOcean", "lakeside_physical_dawn.hdr");
+        settings_.sun = {{-.451, -.618, .644}, {1, .98, .94}, 3.2f};
+        settings_.environmentPath = AssetPath("LakesideOcean", "lakeside_physical_noon.hdr");
         settings_.environmentIntensity = 1;
-        settings_.environmentColor = {.17, .22, .30};
+        settings_.environmentColor = {.23, .29, .38};
         settings_.shadowRange = 110;
         settings_.shadowNormalBias = .05f;
         settings_.virtualShadows = true;
-        settings_.waterReflection = {AssetPath("LakesideSunrise", "lakeside_sunrise_water.hdr"),
-                                     -112, 4};
-        settings_.fog = {{.78, .83, .92}, .0065f, 155, .095f, .1, .60f, true};
+        settings_.waterReflection = {AssetPath("RadkowLake", "radkow_lake_water.hdr"), -91, 4, 256};
+        shore_.alphaMode = MaterialAlphaMode::Opaque;
+        shore_.roughness = 1;
+        shore_.normalScale = .65f;
+        shore_.baseColorTexture = AssetPath("RockyGravel", "albedo.jpg");
+        shore_.normalTexture = AssetPath("RockyGravel", "normal.png");
+        shore_.roughnessTexture = AssetPath("RockyGravel", "roughness.png");
+        settings_.fog = {{.76, .85, .96}, .0025f, 155, .095f, .1, .35f, true};
         settings_.rayTracing.shadows = true;
         settings_.rayTracing.maxDistance = 145;
         settings_.rayTracing.maxBounces = 2;
@@ -266,7 +271,7 @@ private:
                 paused_ = !paused_;
                 break;
             case LuxKey::F:
-                settings_.fog.density = settings_.fog.density > 0 ? 0.f : .0065f;
+                settings_.fog.density = settings_.fog.density > 0 ? 0.f : .0025f;
                 break;
             case LuxKey::R: {
                 auto& ray = settings_.rayTracing;
@@ -322,7 +327,7 @@ private:
         Material3D earth;
         earth.alphaMode = MaterialAlphaMode::Opaque;
         earth.roughness = .83f;
-        renderer_.DrawMesh(terrain_, Mat4::Identity(), earth);
+        renderer_.DrawMesh(terrain_, Mat4::Identity(), shore_);
         for (int i = 0; i < 35; ++i) {
             const double z = 2.5 - i * 2.8;
             const double x = Shore(z) + 1.3 * std::sin(2.4 * i);
@@ -375,8 +380,10 @@ private:
             if (!renderedWaves_ || stats.volumetricFogPasses != 1 ||
                 GetGpuDevice().GetCounters().validationErrors)
                 throw std::runtime_error("Lakeside frame did not render the expected passes");
+            if (!renderer_.GetLastAssetError().empty())
+                throw std::runtime_error("Lakeside asset error: " + renderer_.GetLastAssetError());
             Close();
-        } else if (std::chrono::steady_clock::now() - start_ > std::chrono::seconds(12))
+        } else if (std::chrono::steady_clock::now() - start_ > std::chrono::seconds(20))
             throw std::runtime_error("Lakeside HDRI did not become ready: " +
                                      renderer_.GetLastAssetError());
     }
@@ -397,6 +404,7 @@ private:
     double time_ = 0;
     std::chrono::steady_clock::time_point start_;
     Render3DSettings settings_;
+    Material3D shore_;
     Renderer3D::Context renderer_;
     Scene scene_;
     OceanSpectrum ocean_;

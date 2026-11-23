@@ -50,6 +50,14 @@ Vulkan에서도 `INIT_RS_DESC`와 `initRootSignature`를 호출해 기본 정적
 
 환경 이미지는 2:1 Radiance HDR을 사용한다. 씬 설정에서 환경 이미지 경로를 비우면 내장 대기 하늘을 사용한다. 내장 하늘은 구형 대기의 Rayleigh 및 Mie 단일 산란, 오존 흡수, 지표 반사를 계산해 스카이박스와 확산·정반사 IBL에 공급한다. 스카이박스 표시와 IBL은 각각 제어할 수 있다. 기본 대기의 태양 방향은 씬 기본 방향광과 일치하며, 씬 방향광 편집은 직접광에 적용된다. C++에서 `BakeAtmospherePanorama`를 호출하면 태양 방향, 관측 고도, 에어로졸 밀도, 지표 반사율을 설정해 선형 RGB 파노라마를 생성할 수 있다.
 
+런타임에서 너비 8192픽셀과 인코딩 파일 128 MiB까지의 `.hdr`를 로드할 수 있다. OpenEXR 원본은 Python의 OpenImageIO와 NumPy를 설치한 뒤 `tools/PrepareHdrEnvironment.py`로 가져온다. 도구는 최대 24,576×12,288 원본을 스캔라인 또는 타일 단위로 읽고 선형 RGB를 평균해 8K 이하의 게임용 Radiance HDR을 생성한다.
+
+```sh
+python3 tools/PrepareHdrEnvironment.py lakeside_sunrise_24k.exr lakeside_8k.hdr --width 8192 --exposure -6
+```
+
+`--exposure`는 변환 시 적용하는 EV다. 위 예제의 −6 EV를 되돌리려면 해당 환경의 강도에 64를 곱한다. `Render3DSettings::waterReflection.faceSize`로 수면 반사 큐브맵 면 크기를 128·256·512픽셀 중 선택한다.
+
 HDR 내부 버퍼의 RGB는 노출을 적용한 뒤 색 공간 변환을 포함한 ACES SDR 근사와 sRGB 인코딩을 거친다. 자세한 재질과 맵 형식은 [재질 문서](Materials.md)에 정리했다.
 
 `Mesh3D::UploadOcean`으로 만든 수면은 같은 그래픽 큐에서 행·열 역 FFT와 정점 생성 패스를 실행한다. 정점 버퍼를 수면 패스가 직접 읽으며, 여러 타일이 같은 버퍼를 공유할 수 있다. 사용 예시는 [FFT 바다 예제](../samples/OceanSpectrum/README.md)에 있다.

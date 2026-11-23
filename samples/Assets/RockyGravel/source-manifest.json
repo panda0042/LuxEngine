@@ -1,0 +1,49 @@
+{
+  "name": "RockyGravel",
+  "source": "https://polyhaven.com/a/rocky_gravel",
+  "license": "CC0-1.0",
+  "credits": [
+    "Dimitrios Savva (photography)",
+    "Dario Barresi (processing)"
+  ],
+  "files": [
+    {
+      "path": "License.txt",
+      "bytes": 295,
+      "sha256": "1754da102afb4df5acdb98c3acab88566887a354e0e83210c317d8420483fb14"
+    },
+    {
+      "path": "albedo.jpg",
+      "bytes": 10609182,
+      "sha256": "4b46d12ae4acacd5216cc47f5550f1f54c46c8b047ab6e8022872c9f183a5b27",
+      "conversion": "sRGB color; JPEG quality 93, no chroma subsampling",
+      "original": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/4k/rocky_gravel/rocky_gravel_diff_4k.jpg",
+        "bytes": 18032715,
+        "md5": "ac3f62f2f2afe040ff9fbbfc5e4c78e2"
+      }
+    },
+    {
+      "path": "normal.png",
+      "bytes": 10608116,
+      "sha256": "21571fa1d71e8beccd77701b2b8bba6c37e01eaf2a89e82360923f5fbb02af37",
+      "conversion": "Linear OpenGL tangent normal; reduced to 8-bit RGB",
+      "original": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/2k/rocky_gravel/rocky_gravel_nor_gl_2k.png",
+        "bytes": 24288258,
+        "md5": "0c85f3078617dc6e4cff7bcdc2a37886"
+      }
+    },
+    {
+      "path": "roughness.png",
+      "bytes": 2104132,
+      "sha256": "ea6baf66e8e2bb4784ff3dce0c232c17a805ad99fc94d69182aa0a8d971e14ad",
+      "conversion": "Linear roughness; R channel reduced to 8-bit",
+      "original": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/2k/rocky_gravel/rocky_gravel_rough_2k.png",
+        "bytes": 9724016,
+        "md5": "e69e0b0c98c58bc8998c1ec2a4eb5464"
+      }
+    }
+  ]
+}

@@ -330,10 +330,12 @@ bool Scene::SerializeToString(std::string& output) {
         if (settings_.render3D.virtualShadows)
             render["virtual_shadows"] = true;
         const auto& water = settings_.render3D.waterReflection;
-        if (!water.environmentPath.empty() || water.rotation != 0 || water.intensity != 1)
+        if (!water.environmentPath.empty() || water.rotation != 0 || water.intensity != 1 ||
+            water.faceSize != WaterReflectionSettings{}.faceSize)
             render["water_reflection"] = {{"environment", water.environmentPath},
                                           {"rotation", water.rotation},
-                                          {"intensity", water.intensity}};
+                                          {"intensity", water.intensity},
+                                          {"face_size", water.faceSize}};
         const auto& cascades = settings_.render3D.radianceCascades;
         if (cascades.strength != 0 || cascades.spacing != RadianceCascadeSettings{}.spacing)
             render["radiance_cascades"] = {{"strength", cascades.strength},
@@ -575,6 +577,8 @@ bool Scene::DeserializeJson(const std::string& data) {
             ReadJsonValue(water.at("environment"), reflection.environmentPath);
             ReadJsonValue(water.at("rotation"), reflection.rotation);
             ReadJsonValue(water.at("intensity"), reflection.intensity);
+            if (water.contains("face_size"))
+                ReadJsonValue(water.at("face_size"), reflection.faceSize);
         }
         if (render.contains("radiance_cascades")) {
             const auto& cascades = render.at("radiance_cascades");

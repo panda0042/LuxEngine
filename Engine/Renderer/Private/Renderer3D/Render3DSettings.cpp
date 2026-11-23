@@ -59,6 +59,8 @@ bool ValidateRender3DSettings(const Render3DSettings& s) {
            s.waterReflection.environmentPath.find('\0') == std::string::npos &&
            bounded(s.waterReflection.rotation, -36000, 36000) &&
            bounded(s.waterReflection.intensity, 0, 10000) &&
+           (s.waterReflection.faceSize == 128 || s.waterReflection.faceSize == 256 ||
+            s.waterReflection.faceSize == 512) &&
            bounded(s.radianceCascades.strength, 0, 1) &&
            bounded(s.radianceCascades.spacing, .5, 64);
 }
@@ -78,8 +80,8 @@ bool IsDefaultRender3DSettings(const Render3DSettings& s) {
             v.fog.color.z, v.fog.density, v.fog.maxDistance, v.fog.heightFalloff, v.fog.baseHeight,
             v.fog.anisotropy, v.fog.rayTracedShadows, v.rayTracing.restirDirect,
             v.rayTracing.restirIndirect, v.virtualShadows, v.waterReflection.environmentPath,
-            v.waterReflection.rotation, v.waterReflection.intensity, v.radianceCascades.strength,
-            v.radianceCascades.spacing);
+            v.waterReflection.rotation, v.waterReflection.intensity, v.waterReflection.faceSize,
+            v.radianceCascades.strength, v.radianceCascades.spacing);
     };
     return fields(s) == fields(d);
 }
