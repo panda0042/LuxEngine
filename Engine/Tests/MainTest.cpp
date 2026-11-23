@@ -2186,38 +2186,38 @@ void MaterialAssetReloading(Graphics& graphics) {
             camera.SetPosition({0, 0, 5});
             DirectionalLight sun;
             sun.direction = {0, 0, -1};
-            sun.intensity = .35f;
+            sun.intensity = 0;
             Renderer3D::BeginScene(camera, sun);
             scene.OnRender3D();
             Renderer3D::EndScene();
         });
     };
     auto frame = draw();
-    Check(IsColor(Pixel(frame, .5f, .5f), 92, 92, 92, 4) && context.GetLastAssetError().empty(),
+    Check(IsColor(Pixel(frame, .5f, .5f), 50, 50, 50, 4) && context.GetLastAssetError().empty(),
           "sRGB base color is decoded before lighting and encoded for the display");
     const auto oldTime = std::filesystem::last_write_time(imagePath);
     writeImage(255, 0, 0);
     std::filesystem::last_write_time(imagePath, oldTime);
-    Check(IsColor(Pixel(draw(), .5f, .5f), 92, 92, 92, 4),
+    Check(IsColor(Pixel(draw(), .5f, .5f), 50, 50, 50, 4),
           "external edits remain stable until explicit reload");
     std::string error;
     Check(AssetManager::ReloadTexture(imagePath, error), "texture CPU reload succeeds");
-    Check(IsColor(Pixel(draw(), .5f, .5f), 188, 0, 0, 4),
+    Check(IsColor(Pixel(draw(), .5f, .5f), 108, 0, 0, 4),
           "explicit texture reload updates pixels even with an unchanged timestamp and size");
     const auto imageRevision = AssetManager::GetTextureRevision(imagePath);
     files.Text("reload-color.BmP", "broken image");
     Check(!AssetManager::ReloadTexture(imagePath, error) && !error.empty() &&
               AssetManager::GetTextureRevision(imagePath) == imageRevision,
           "corrupt image reload does not publish a new revision");
-    Check(IsColor(Pixel(draw(), .5f, .5f), 188, 0, 0, 4) && !context.GetLastAssetError().empty(),
+    Check(IsColor(Pixel(draw(), .5f, .5f), 108, 0, 0, 4) && !context.GetLastAssetError().empty(),
           "corrupt image reload retains the previous GPU texture and reports the error");
     std::filesystem::remove(imagePath);
     Check(!AssetManager::ReloadTexture(imagePath, error) &&
-              IsColor(Pixel(draw(), .5f, .5f), 188, 0, 0, 4),
+              IsColor(Pixel(draw(), .5f, .5f), 108, 0, 0, 4),
           "deleted image sources retain the previous GPU texture");
     writeImage(0, 0, 255);
     Check(AssetManager::ReloadTexture(imagePath, error) &&
-              IsColor(Pixel(draw(), .5f, .5f), 0, 0, 188, 4) && context.GetLastAssetError().empty(),
+              IsColor(Pixel(draw(), .5f, .5f), 0, 0, 108, 4) && context.GetLastAssetError().empty(),
           "restoring an image clears the error and publishes its replacement");
     const auto middleFrame = graphics.Capture([&] {
         graphics.gpu.Clear(0, 0, 0, 1);
@@ -2225,7 +2225,7 @@ void MaterialAssetReloading(Graphics& graphics) {
         camera.SetPosition({0, 0, 5});
         DirectionalLight sun;
         sun.direction = {0, 0, -1};
-        sun.intensity = .35f;
+        sun.intensity = 0;
         Renderer3D::BeginScene(camera, sun);
         Material3D material;
         material.baseColorTexture = imagePath;
@@ -2238,8 +2238,8 @@ void MaterialAssetReloading(Graphics& graphics) {
             modelPath, Mat4::Translate({1.2f, 0, 0}) * Mat4::Scale({.7f, .7f, .7f}), material);
         Renderer3D::EndScene();
     });
-    Check(IsColor(Pixel(middleFrame, .35f, .5f), 0, 0, 188, 4) &&
-              IsColor(Pixel(middleFrame, .65f, .5f), 0, 188, 0, 4),
+    Check(IsColor(Pixel(middleFrame, .35f, .5f), 0, 0, 108, 4) &&
+              IsColor(Pixel(middleFrame, .65f, .5f), 0, 108, 0, 4),
           "mid-frame texture replacement preserves descriptors referenced by earlier draws");
     writeImage(0, 0, 255);
     Check(AssetManager::ReloadTexture(imagePath, error) && Pixel(draw(), .5f, .5f)[2] > 100,
@@ -2248,13 +2248,13 @@ void MaterialAssetReloading(Graphics& graphics) {
     writeImage(0, 255, 0);
     Check(AssetManager::ReloadTexture(imagePath, error), "GPU failure texture candidate validates");
     Vk::InjectFault(Vk::Fault::ImageAllocation);
-    Check(IsColor(Pixel(draw(), .5f, .5f), 0, 0, 188, 4) && !context.GetLastAssetError().empty(),
+    Check(IsColor(Pixel(draw(), .5f, .5f), 0, 0, 108, 4) && !context.GetLastAssetError().empty(),
           "failed GPU texture uploads retain the old image without invalidating the device");
     Vk::ClearFaults();
-    Check(IsColor(Pixel(draw(), .5f, .5f), 0, 0, 188, 4),
+    Check(IsColor(Pixel(draw(), .5f, .5f), 0, 0, 108, 4),
           "failed GPU uploads are not retried every frame");
     Check(AssetManager::ReloadTexture(imagePath, error) &&
-              IsColor(Pixel(draw(), .5f, .5f), 0, 188, 0, 4),
+              IsColor(Pixel(draw(), .5f, .5f), 0, 108, 0, 4),
           "a new reload retries a failed upload");
 #endif
     writeImage(0, 255, 0);
@@ -2262,7 +2262,7 @@ void MaterialAssetReloading(Graphics& graphics) {
           "the mesh reload fixture has a valid green material");
     writeImage(255, 255, 0);
     AssetManager::Clear();
-    Check(IsColor(Pixel(draw(), .5f, .5f), 188, 188, 0, 4),
+    Check(IsColor(Pixel(draw(), .5f, .5f), 108, 108, 0, 4),
           "global cache clearing invalidates already resident mesh and texture generations");
     writeImage(0, 255, 0);
     Check(AssetManager::ReloadTexture(imagePath, error) && Pixel(draw(), .5f, .5f)[1] > 100,
@@ -2338,7 +2338,7 @@ void MaterialAssetReloading(Graphics& graphics) {
         camera.SetPosition({0, 0, 5});
         DirectionalLight sun;
         sun.direction = {0, 0, -1};
-        sun.intensity = .35f;
+        sun.intensity = 0;
         Renderer3D::BeginScene(camera, sun);
         Renderer3D::DrawMeshAsset(modelPath, Mat4::Identity(), cutout);
         Material3D blue;
@@ -2465,7 +2465,7 @@ void RenderOutput(Graphics& graphics) {
         Renderer3D::EndScene();
     });
     const auto center = Pixel(capture, 0.5f, 0.5f);
-    Check(center[0] > 200 && center[1] > 200 && center[2] > 200 &&
+    Check(center[0] > 170 && center[1] > 170 && center[2] > 170 &&
               IsColor(Pixel(capture, 0.05f, 0.05f), 0, 0, 0),
           "perspective cube faces the camera and is lit");
 
@@ -2499,8 +2499,10 @@ void RenderOutput(Graphics& graphics) {
     };
     const int expectedAmbient = displayByte(.15f);
     const float falloff = 1.f - 1.5f / lightRadius;
+    // With V, N and L aligned and roughness .5, GGX has D = 16/pi and V = 1/4.
+    constexpr float alignedBrdf = (.96f + .04f * 4) / 3.14159265f;
     Check(IsColor(ambient, expectedAmbient, expectedAmbient, expectedAmbient, 2) &&
-              IsColor(front, displayByte(.15f + falloff * falloff), expectedAmbient,
+              IsColor(front, displayByte(.15f + alignedBrdf * falloff * falloff), expectedAmbient,
                       expectedAmbient, 2),
           "point light falloff and ambient are encoded to display sRGB once");
     Check(IsColor(behind, ambient[0], ambient[1], ambient[2], 2) &&
@@ -2597,7 +2599,7 @@ void RenderOutput(Graphics& graphics) {
     warm.position = {0, 0, -3};
     const auto gpuBehind = Pixel(drawCube(true, Mat4{}, dark, std::span(&warm, 1)), 0.5f, 0.5f);
     Check(IsColor(gpuFront, cpuFront[0], cpuFront[1], cpuFront[2], 2) &&
-              gpuFront[0] > gpuFront[1] + 100 &&
+              gpuFront[0] > gpuFront[1] + 40 &&
               IsColor(gpuBehind, ambient[0], ambient[1], ambient[2], 2),
           "GPU mesh point lighting matches the CPU path at the face center");
 
@@ -2640,11 +2642,11 @@ void RenderOutput(Graphics& graphics) {
     };
     DirectionalLight facing;
     facing.direction = {0, 0, -1};
-    facing.intensity = .85f;
+    facing.intensity = 0;
     const auto uvFrame = drawAttributed(Mat4::Identity(), &checker, facing);
-    Check(IsColor(Pixel(uvFrame, .44f, .44f), 255, 0, 0, 3) &&
-              IsColor(Pixel(uvFrame, .56f, .44f), 0, 255, 0, 3) &&
-              IsColor(Pixel(uvFrame, .44f, .56f), 0, 0, 255, 3),
+    Check(IsColor(Pixel(uvFrame, .44f, .44f), expectedAmbient, 0, 0, 2) &&
+              IsColor(Pixel(uvFrame, .56f, .44f), 0, expectedAmbient, 0, 2) &&
+              IsColor(Pixel(uvFrame, .44f, .56f), 0, 0, expectedAmbient, 2),
           "indexed 3D vertex UVs reach the shader and sample separate texture quadrants");
     for (auto& vertex : attributed)
         vertex.normal = Vec3{1, 0, 1}.Normalized();
@@ -2652,9 +2654,16 @@ void RenderOutput(Graphics& graphics) {
     facing.direction = {-1, 0, 0};
     facing.intensity = 1;
     const auto normalFrame = drawAttributed(Mat4::Scale({2, 1, .5f}), nullptr, facing);
-    // inverse-transpose((2,1,.5)) * normalize(1,0,1) points along (.5,0,2).
-    const int normalByte = displayByte(.15 + 1.0 / std::sqrt(17.0));
-    Check(IsColor(Pixel(normalFrame, .5f, .5f), normalByte, normalByte, normalByte, 2),
+    // Compare to the same geometry with the expected inverse-transpose normal baked.
+    for (auto& vertex : attributed) {
+        vertex.position.x *= 2;
+        vertex.normal = Vec3{.5, 0, 2}.Normalized();
+    }
+    Check(attributedMesh.Upload(&graphics.gpu, attributed, quadIndices),
+          "reference normal uploads");
+    const auto expectedNormal = Pixel(drawAttributed(Mat4{}, nullptr, facing), .5f, .5f);
+    Check(IsColor(Pixel(normalFrame, .5f, .5f), expectedNormal[0], expectedNormal[1],
+                  expectedNormal[2], 2),
           "authored vertex normals use inverse transpose under nonuniform scale");
     Files assetFiles;
     assetFiles.Text("scene-mesh.obj", "v -1 -1 0\nv 1 -1 0\nv 0 1 0\nvn 0 0 1\nf 1//1 2//1 3//1\n");
@@ -2671,7 +2680,7 @@ void RenderOutput(Graphics& graphics) {
         Renderer3D::EndScene();
         Check(Renderer3D::GetStats().drawCalls == 1, "scene mesh paths submit resident geometry");
     });
-    Check(Pixel(assetFrame, .5f, .5f)[0] > 240 && Pixel(assetFrame, .38f, .38f)[0] == 0,
+    Check(Pixel(assetFrame, .5f, .5f)[0] > 170 && Pixel(assetFrame, .38f, .38f)[0] == 0,
           "scene rendering uses the OBJ triangle silhouette rather than a default cube");
     attributedMesh.Release();
     checker.Release();
@@ -2788,7 +2797,7 @@ void Gpu() {
                       << stats.pushConstantUpdates << ", submissions " << stats.submissions << '\n';
         // Two 2D draws, one HDR mesh draw and one tone-composite draw are recorded. Forge
         // uses uniform-buffer descriptor sets rather than the previous Vulkan push constants.
-        Check(stats.drawCalls == 4 && stats.pipelineBinds == 4 && stats.descriptorBinds == 9 &&
+        Check(stats.drawCalls == 4 && stats.pipelineBinds == 3 && stats.descriptorBinds == 9 &&
                   stats.uniformBinds == 6 && stats.pushConstantUpdates == 0 &&
                   stats.submissions >= 1,
               "frame statistics count recorded GPU commands");
@@ -3848,11 +3857,11 @@ void Pbr() {
     const std::array<uint32, 6> indices{0, 1, 2, 0, 2, 3};
     Mesh3D plane;
     Check(plane.Upload(&graphics.gpu, vertices, indices), "PBR test plane uploads");
-    auto render = [&](float metallic, float roughness, bool modern) {
+    auto render = [&](float metallic, float roughness, Render3DMode mode = Render3DMode::Pbr) {
         return graphics.Capture([&] {
             graphics.gpu.Clear(0, 0, 0, 1);
             Render3DSettings r;
-            r.mode = modern ? Render3DMode::Pbr : Render3DMode::Legacy;
+            r.mode = mode;
             r.sun.direction = {0, 0, -1};
             r.shadows = false;
             r.imageBasedLighting = false;
@@ -3869,17 +3878,17 @@ void Pbr() {
         const size_t offset = (static_cast<size_t>(f.height / 2) * f.width + f.width / 2) * 4;
         return std::array<int, 3>{f.rgba[offset], f.rgba[offset + 1], f.rgba[offset + 2]};
     };
-    const auto dielectric = pixel(render(0, .65f, true));
-    const auto metal = pixel(render(1, .65f, true));
-    const auto glossy = pixel(render(0, .2f, true));
+    const auto dielectric = pixel(render(0, .65f));
+    const auto metal = pixel(render(1, .65f));
+    const auto glossy = pixel(render(0, .2f));
     std::cout << "PBR dielectric=" << dielectric[0] << ',' << dielectric[1] << " metal=" << metal[0]
               << ',' << metal[1] << " glossy=" << glossy[0] << '\n';
     Check(dielectric != metal, "metallicity changes actual GPU output");
     Check(glossy[0] > dielectric[0] + 10, "roughness changes specular highlight");
-    Check(pixel(render(0, .1f, false)) == pixel(render(1, .9f, false)),
-          "legacy metallic and roughness preserve old appearance");
-    render(1, 0, true);
-    render(0, 1, true);
+    Check(pixel(render(1, .65f, Render3DMode::Legacy)) == metal,
+          "the source-compatible Legacy value selects the same PBR shading");
+    render(1, 0);
+    render(0, 1);
     const auto mixed = graphics.Capture([&] {
         graphics.gpu.Clear(0, 0, 0, 1);
         Render3DSettings r;
@@ -3988,6 +3997,16 @@ void HdrEnvironment() {
 #endif
     settings.showSkybox = true;
     Check(Pixel(frame(), 0, 0)[3] == 255, "ready environment draws skybox into background");
+    auto brightHdr = hdr;
+    const unsigned char bright[8] = {128, 32, 8, 145, 128, 32, 8, 145};
+    brightHdr.replace(brightHdr.size() - 8, 8, reinterpret_cast<const char*>(bright), 8);
+    files.Binary("bright.hdr", brightHdr.data(), brightHdr.size());
+    settings.environmentPath = files.Path("bright.hdr");
+    settings.environmentIntensity = 10000;
+    wait();
+    const auto brightSky = Pixel(frame(), 0, 0);
+    Check(brightSky[0] > 220 && brightSky[1] > 220 && brightSky[2] > 220 && brightSky[3] == 255,
+          "bright HDR sky remains finite through FP16 and fitted ACES");
     settings.showSkybox = false;
     settings.imageBasedLighting = false;
     settings.environmentIntensity = 1;
@@ -3995,7 +4014,7 @@ void HdrEnvironment() {
     material.metallic = 0;
     material.albedoColor = {1, 1, 1, 1};
     const auto gray = Pixel(frame(), .5f, .5f);
-    Check(std::abs(gray[0] - 165) <= 3, "linear gray receives ACES and one sRGB conversion");
+    Check(std::abs(gray[0] - 114) <= 3, "linear gray receives ACES and one sRGB conversion");
     const auto clear = Pixel(frame(), 0, 0);
     Check(clear[3] == 0, "HDR post process preserves transparent editor background");
     settings.toneMapping = false;

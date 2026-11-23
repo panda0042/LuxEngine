@@ -165,37 +165,24 @@ CpuMesh BuildTerrain() {
     return mesh;
 }
 
-CpuMesh BuildWater(unsigned phase, unsigned phaseCount) {
-    const float angle = PhaseAngle(phase, phaseCount);
-    CpuMesh mesh;
-    constexpr unsigned columns = 8, rows = 176;
-    mesh.vertices.reserve((columns + 1) * (rows + 1));
-    mesh.indices.reserve(columns * rows * 6);
-    // TODO(Renderer3D): A depth-tested transparent pass and reflection/refraction targets are
-    // needed for transmissive water. The current public API displays an opaque rippled surface.
-    for (unsigned row = 0; row <= rows; ++row) {
-        const float z = -HalfLength + static_cast<float>(row) * (HalfLength * 2.0f / rows);
-        for (unsigned column = 0; column <= columns; ++column) {
-            const float u = static_cast<float>(column) / columns;
-            const float x = StreamCenter(z) + (u * 2.0f - 1.0f) * StreamHalfWidth;
-            const float waveA = x * 1.3f + z * 2.1f + angle;
-            const float waveB = x * 3.4f - z * 1.4f - angle * 2.0f;
-            const float y = WaterHeight() + .007f * std::sin(waveA) + .0035f * std::sin(waveB);
-            const float dx = .0091f * std::cos(waveA) + .0119f * std::cos(waveB);
-            const float dz = .0147f * std::cos(waveA) - .0049f * std::cos(waveB);
-            mesh.vertices.push_back(
-                {{x, y, z}, Normal(-dx, 1.0f, -dz), {u, static_cast<float>(row) / rows}});
-        }
+le::WaterSurface BuildWater() {
+    constexpr le::uint32 columns = 8, rows = 176;
+    constexpr double Tau = 2 * std::numbers::pi;
+    std::array<double, rows + 1> centers{};
+    for (le::uint32 row = 0; row <= rows; ++row) {
+        const float z = -HalfLength + static_cast<float>(row) * (HalfLength * 2 / rows);
+        centers[row] = StreamCenter(z);
     }
-    for (unsigned row = 0; row < rows; ++row) {
-        for (unsigned column = 0; column < columns; ++column) {
-            const auto first = row * (columns + 1) + column;
-            for (const auto index : {first, first + columns + 1, first + columns + 2, first,
-                                     first + columns + 2, first + 1})
-                mesh.indices.push_back(index);
-        }
-    }
-    return mesh;
+    const double k1 = std::hypot(1.3, 2.1), k2 = std::hypot(3.4, -1.4);
+    const std::array<le::WaterWave, 2> waves{{
+        {{1.3, 2.1}, .012, Tau / k1, -Tau / k1},
+        {{3.4, -1.4}, .006, Tau / k2, 2 * Tau / k2},
+    }};
+    le::WaterSurface surface;
+    if (!surface.Configure({{2 * StreamHalfWidth, 2 * HalfLength}, columns, rows, WaterHeight()},
+                           waves, centers))
+        throw std::runtime_error("Rainy Creek 수면을 구성하지 못했습니다.");
+    return surface;
 }
 
 CpuMesh BuildRain(unsigned phase, unsigned phaseCount) {

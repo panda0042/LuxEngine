@@ -507,10 +507,7 @@ void ScenePlayer::OnRender(float) {
         if (!renderSettings.environmentPath.empty())
             renderSettings.environmentPath =
                 scene_->ResolveAssetPath(renderSettings.environmentPath);
-        if (renderSettings.mode == Render3DMode::Pbr)
-            Renderer3D::BeginScene(camera3D_, renderSettings, scene_->GetSettings().exposure);
-        else
-            Renderer3D::BeginScene(camera3D_, renderSettings.sun);
+        Renderer3D::BeginScene(camera3D_, renderSettings, scene_->GetSettings().exposure);
         scene_->OnRender3D();
         Renderer3D::EndScene();
     }

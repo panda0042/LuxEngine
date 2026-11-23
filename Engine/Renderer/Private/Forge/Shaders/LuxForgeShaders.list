@@ -62,6 +62,10 @@
 #include "LuxSky.frag.fsl"
 #end
 
+#frag luxopaquecopy.frag
+#include "LuxOpaqueCopy.frag.fsl"
+#end
+
 #frag luxtone.frag
 #include "LuxTone.frag.fsl"
 #end

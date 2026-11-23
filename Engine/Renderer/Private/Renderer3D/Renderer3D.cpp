@@ -18,7 +18,6 @@
 
 namespace LuxEngine {
 namespace {
-constexpr size_t MaxSubmitVertices = 3 * 16384;
 constexpr size_t MaxSceneSubmissions = 65536;
 constexpr size_t MaxShadowOnlySubmissions = 16384;
 constexpr size_t MaxPointLights = 16;
@@ -63,13 +62,6 @@ constexpr std::array<uint32, 36> CubeIndices{{0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7
                                               0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
                                               0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2}};
 
-Vec3 TransformPoint(const Mat4& m, const Vec3& v) {
-    const auto& e = m.elements;
-    return {e[0] * v.x + e[4] * v.y + e[8] * v.z + e[12],
-            e[1] * v.x + e[5] * v.y + e[9] * v.z + e[13],
-            e[2] * v.x + e[6] * v.y + e[10] * v.z + e[14]};
-}
-
 bool SameOwner(const std::weak_ptr<Rhi::RenderBackend>& a,
                const std::weak_ptr<Rhi::RenderBackend>& b) {
     return !a.owner_before(b) && !b.owner_before(a);
@@ -88,12 +80,8 @@ struct Renderer3D::Context::Impl {
     GpuDevice* device = nullptr;
     std::weak_ptr<Rhi::RenderBackend> deviceOwner;
     Mat4 viewProjection;
-    DirectionalLight light;
-    std::vector<PointLight> pointLights;
-    std::vector<RenderVertex> vertices;
     Renderer3D::Statistics stats;
     bool active = false;
-    bool pbr = false;
     Vec3 camera;
     Render3DSettings settings;
     float exposure = 1;
@@ -226,11 +214,13 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
         if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
             !std::isfinite(position.z) || !std::isfinite(normal.x) || !std::isfinite(normal.y) ||
             !std::isfinite(normal.z) || !std::isfinite(vertex.texCoords.x) ||
-            !std::isfinite(vertex.texCoords.y))
+            !std::isfinite(vertex.texCoords.y) || !std::isfinite(vertex.color.x) ||
+            !std::isfinite(vertex.color.y) || !std::isfinite(vertex.color.z) ||
+            !std::isfinite(vertex.color.w))
             return false;
         const auto relative = position - origin;
         ExtendBounds(minimum, maximum, relative);
-        data.push_back({relative, {1, 1, 1, 1}, vertex.texCoords, normal});
+        data.push_back({relative, vertex.color, vertex.texCoords, normal});
     }
     const auto vertexBytes = static_cast<uint32>(data.size() * sizeof(RenderVertex));
     const auto indexBytes = static_cast<uint32>(indices.size_bytes());
@@ -271,11 +261,13 @@ bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
         const auto& n = vertex.normal;
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
             !std::isfinite(n.x) || !std::isfinite(n.y) || !std::isfinite(n.z) ||
-            !std::isfinite(vertex.texCoords.x) || !std::isfinite(vertex.texCoords.y))
+            !std::isfinite(vertex.texCoords.x) || !std::isfinite(vertex.texCoords.y) ||
+            !std::isfinite(vertex.color.x) || !std::isfinite(vertex.color.y) ||
+            !std::isfinite(vertex.color.z) || !std::isfinite(vertex.color.w))
             return false;
         const auto relative = p - origin;
         ExtendBounds(minimum, maximum, relative);
-        data.push_back({relative, {1, 1, 1, 1}, vertex.texCoords, n});
+        data.push_back({relative, vertex.color, vertex.texCoords, n});
     }
     const bool updated =
         vertices_.SetData(data.data(), static_cast<uint32>(data.size() * sizeof(RenderVertex)));
@@ -307,21 +299,17 @@ void Renderer3D::Context::Init(GpuDevice* gpu) {
         gpu ? std::weak_ptr<Rhi::RenderBackend>(gpu->backend_)
             : std::weak_ptr<Rhi::RenderBackend>{};
     if (impl_->device == gpu && SameOwner(impl_->deviceOwner, nextOwner) && !impl_->active) {
-        impl_->vertices.clear();
-        impl_->pointLights.clear();
         impl_->stats = {};
         return;
     }
     Shutdown();
     impl_->device = gpu;
     impl_->deviceOwner = nextOwner;
-    impl_->vertices.reserve(3600);
 }
 
 void Renderer3D::Context::Shutdown() {
     if (!impl_)
         return;
-    impl_->vertices.clear();
     if (impl_->modern)
         impl_->modern->ClearDraws();
     impl_->modern.reset();
@@ -330,17 +318,11 @@ void Renderer3D::Context::Shutdown() {
     impl_->meshes.clear();
     impl_->textures.clear();
     impl_->warnings.clear();
-    impl_->pbr = false;
     impl_->settings = {};
-    impl_->settings.mode = Render3DMode::Legacy;
-    impl_->settings.shadows = false;
-    impl_->settings.imageBasedLighting = false;
-    impl_->settings.toneMapping = false;
     impl_->exposure = 1.0f;
     impl_->lastError.clear();
     impl_->textureBytes = 0;
     impl_->meshBytes = 0;
-    impl_->pointLights.clear();
     impl_->device = nullptr;
     impl_->deviceOwner.reset();
     impl_->active = false;
@@ -370,127 +352,81 @@ void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera, const Dire
 
 void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera, const DirectionalLight& sun,
                                      std::span<const PointLight> points) {
+    Render3DSettings settings;
+    settings.sun = sun;
+    settings.shadows = false;
+    settings.imageBasedLighting = false;
+    settings.toneMapping = false;
+    BeginScene(camera, settings, 1, points);
+}
+
+void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera,
+                                     const Render3DSettings& settings, float exposure,
+                                     std::span<const PointLight> points) {
     if (!impl_)
         impl_ = std::make_unique<Impl>();
     if (impl_->active)
         throw std::logic_error("3D scene already active");
-    impl_->pbr = false;
-    impl_->settings = {};
-    impl_->settings.mode = Render3DMode::Legacy;
-    impl_->settings.shadows = false;
-    impl_->settings.imageBasedLighting = false;
-    impl_->settings.toneMapping = false;
-    impl_->exposure = 1.0f;
+    if (!ValidateRender3DSettings(settings) || !std::isfinite(exposure) || exposure < 0 ||
+        exposure > 16)
+        throw std::invalid_argument("Invalid 3D rendering settings");
+    impl_->settings = settings;
+    impl_->settings.mode = Render3DMode::Pbr;
+    impl_->exposure = exposure;
     impl_->camera = camera.GetPosition();
     impl_->sceneCamera = camera;
+    impl_->viewProjection = camera.GetProjectionMatrix() * camera.GetViewMatrix() *
+                            Mat4::Translate(camera.GetPosition());
     impl_->shadowProjection.reset();
+    if (settings.shadows)
+        impl_->shadowProjection = SceneShadowProjection(camera, settings);
     if (impl_->modern)
         impl_->modern->ClearDraws();
     impl_->lastError.clear();
-    impl_->viewProjection = camera.GetProjectionMatrix() * camera.GetViewMatrix() *
-                            Mat4::Translate(camera.GetPosition());
-    const float sunIntensity = std::isfinite(sun.intensity) ? std::max(0.0f, sun.intensity) : 0.0f;
-    const Vec3 sunDir = (std::isfinite(sun.direction.x) && std::isfinite(sun.direction.y) &&
-                         std::isfinite(sun.direction.z))
-                            ? sun.direction
-                            : Vec3{0.0f, -1.0f, 0.0f};
-    const Vec3 sunColor =
-        (std::isfinite(sun.color.x) && std::isfinite(sun.color.y) && std::isfinite(sun.color.z))
-            ? sun.color
-            : Vec3{1.0f, 1.0f, 1.0f};
-    impl_->light = {sunDir, sunColor, sunIntensity};
+
     if (points.size() > MaxPointLights)
         Log::Warn("Renderer3D uses the first " + std::to_string(MaxPointLights) + " of " +
                   std::to_string(points.size()) + " point lights");
-    impl_->pointLights.assign(points.begin(),
-                              points.begin() + std::min(points.size(), MaxPointLights));
-    if (auto lockedState = impl_->LockValidState()) {
+    if (impl_->LockValidState()) {
+        const auto finite = [](Vec3 v) {
+            return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+        };
         std::array<GpuPointLight, MaxPointLights> gpuPoints{};
-        for (size_t index = 0; index < impl_->pointLights.size(); ++index) {
-            const auto& pt = impl_->pointLights[index];
-            const float r = std::isfinite(pt.radius) ? std::max(0.0f, pt.radius) : 0.0f;
-            const float inten = std::isfinite(pt.intensity) ? std::max(0.0f, pt.intensity) : 0.0f;
-            const Vec3 pos = (std::isfinite(pt.position.x) && std::isfinite(pt.position.y) &&
-                              std::isfinite(pt.position.z))
-                                 ? pt.position
-                                 : Vec3{0.0f, 0.0f, 0.0f};
-            const Vec3 col = (std::isfinite(pt.color.x) && std::isfinite(pt.color.y) &&
-                              std::isfinite(pt.color.z))
-                                 ? pt.color
-                                 : Vec3{1.0f, 1.0f, 1.0f};
-            gpuPoints[index] = {pos, r, col, inten};
+        const auto count = std::min(points.size(), MaxPointLights);
+        for (size_t i = 0; i < count; ++i) {
+            const auto& p = points[i];
+            gpuPoints[i] = {finite(p.position) ? p.position : Vec3{},
+                            std::isfinite(p.radius) ? std::max(0.f, p.radius) : 0.f,
+                            finite(p.color) ? p.color : Vec3{},
+                            std::isfinite(p.intensity) ? std::max(0.f, p.intensity) : 0.f};
         }
-        impl_->device->SetLighting(
-            {impl_->light.direction, impl_->light.color, impl_->light.intensity,
-             std::span(gpuPoints.data(), impl_->pointLights.size()), camera.GetPosition(), false});
+        impl_->device->SetLighting({settings.sun.direction, settings.sun.color,
+                                    settings.sun.intensity, std::span(gpuPoints.data(), count),
+                                    camera.GetPosition(), true});
     }
-    impl_->vertices.clear();
     impl_->stats = {};
     impl_->frameMeshes.clear();
     impl_->frameTextures.clear();
     impl_->active = true;
 }
 
-void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera,
-                                     const Render3DSettings& settings, float exposure,
-                                     std::span<const PointLight> points) {
-    if (!ValidateRender3DSettings(settings) || !std::isfinite(exposure) || exposure < 0 ||
-        exposure > 16)
-        throw std::invalid_argument("Invalid 3D rendering settings");
-    BeginScene(camera, settings.sun, points);
-    impl_->settings = settings;
-    impl_->exposure = exposure;
-    impl_->pbr = settings.mode == Render3DMode::Pbr;
-    if (impl_->pbr && settings.shadows)
-        impl_->shadowProjection = SceneShadowProjection(camera, settings);
-    if (impl_->pbr && impl_->LockValidState()) {
-        std::array<GpuPointLight, MaxPointLights> gpuPoints{};
-        for (size_t i = 0; i < impl_->pointLights.size(); ++i) {
-            const auto& p = impl_->pointLights[i];
-            const auto finite = [](Vec3 v) {
-                return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
-            };
-            gpuPoints[i] = {finite(p.position) ? p.position : Vec3{},
-                            std::isfinite(p.radius) ? std::max(0.f, p.radius) : 0.f,
-                            finite(p.color) ? p.color : Vec3{},
-                            std::isfinite(p.intensity) ? std::max(0.f, p.intensity) : 0.f};
-        }
-        impl_->device->SetLighting(
-            {impl_->light.direction, impl_->light.color, impl_->light.intensity,
-             std::span(gpuPoints.data(), impl_->pointLights.size()), camera.GetPosition(), true});
-    }
-}
-
 void Renderer3D::Context::EndScene() {
     if (!impl_ || !impl_->active)
         return;
     impl_->active = false;
-    if (impl_->pbr || (impl_->modern && impl_->modern->DrawCount())) {
-        if (auto state = impl_->LockValidState()) {
-            if (!impl_->modern)
-                impl_->modern = state->CreateScene3DRenderer();
-            if (impl_->modern) {
-                std::string error;
-                impl_->modern->Render(impl_->sceneCamera, impl_->settings, impl_->exposure, error);
-                impl_->Report("render3D", error);
-            }
-        }
-        if (impl_->modern)
-            impl_->modern->ClearDraws();
-    }
-    if (auto lockedState = impl_->LockValidState()) {
-        const std::span<const RenderVertex> all(impl_->vertices);
-        for (size_t first = 0; first < all.size(); first += MaxSubmitVertices) {
-            const auto chunk = all.subspan(first, std::min(MaxSubmitVertices, all.size() - first));
-            if (!impl_->device->DrawTriangles(chunk, impl_->viewProjection, nullptr, true)) {
-                Log::Warn("Renderer3D dropped " + std::to_string((all.size() - first) / 3) +
-                          " of " + std::to_string(all.size() / 3) + " triangles this frame");
-                break;
-            }
-            ++impl_->stats.drawCalls;
+    if ((!impl_->modern || !impl_->modern->DrawCount()) && !impl_->settings.showSkybox)
+        return;
+    if (auto state = impl_->LockValidState()) {
+        if (!impl_->modern)
+            impl_->modern = state->CreateScene3DRenderer();
+        if (impl_->modern) {
+            std::string error;
+            impl_->modern->Render(impl_->sceneCamera, impl_->settings, impl_->exposure, error);
+            impl_->Report("render3D", error);
         }
     }
-    impl_->vertices.clear();
+    if (impl_->modern)
+        impl_->modern->ClearDraws();
 }
 
 void Renderer3D::Context::AbortScene() {
@@ -499,8 +435,6 @@ void Renderer3D::Context::AbortScene() {
     impl_->active = false;
     impl_->frameMeshes.clear();
     impl_->frameTextures.clear();
-    impl_->vertices.clear();
-    impl_->pointLights.clear();
 }
 
 void Renderer3D::Context::DrawMesh(std::span<const Vec3> positions, std::span<const uint32> indices,
@@ -540,7 +474,8 @@ void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
     const auto relativeModel = Mat4::Translate(impl_->camera * -1) * model;
     const bool shadowOnly =
         OutsideClipVolume(impl_->viewProjection * relativeModel, mesh.minimum_, mesh.maximum_);
-    if (shadowOnly && (!impl_->shadowProjection || material.alphaMode == MaterialAlphaMode::Blend ||
+    if (shadowOnly && (!impl_->shadowProjection || material.water ||
+                       material.alphaMode == MaterialAlphaMode::Blend ||
                        OutsideClipVolume(*impl_->shadowProjection * relativeModel, mesh.minimum_,
                                          mesh.maximum_))) {
         ++impl_->stats.meshCount;
@@ -569,6 +504,21 @@ void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
     const uint32 sampling =
         (material.textureSampling.addressMode == TextureAddressMode::Repeat ? 1u : 0u) |
         (material.textureSampling.anisotropic ? 2u : 0u);
+    Vec4 water{0, 0, 0, 0};
+    if (material.water) {
+        const auto airToWater = material.water->indexOfRefraction;
+        const auto absorption = material.water->absorption;
+        if (!std::isfinite(airToWater) || airToWater <= 1 || airToWater > 2.5 ||
+            !std::isfinite(absorption.x) || !std::isfinite(absorption.y) ||
+            !std::isfinite(absorption.z) ||
+            std::min({absorption.x, absorption.y, absorption.z}) < 0 ||
+            std::max({absorption.x, absorption.y, absorption.z}) > 100) {
+            impl_->Report("water", "Invalid water material absorption or refractive index");
+            return;
+        }
+        water = {static_cast<float>(absorption.x), static_cast<float>(absorption.y),
+                 static_cast<float>(absorption.z), airToWater};
+    }
     if (!impl_->modern->AddDraw({mesh.vertices_.handle_,
                                  mesh.indices_.handle_,
                                  texture ? texture->handle_ : 0,
@@ -580,7 +530,6 @@ void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
                                  static_cast<uint32>(material.alphaMode),
                                  material.alphaCutoff,
                                  material.doubleSided,
-                                 !impl_->pbr,
                                  normal,
                                  metallic,
                                  roughness,
@@ -588,7 +537,8 @@ void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
                                  material.normalScale,
                                  material.occlusionStrength,
                                  sampling,
-                                 shadowOnly}))
+                                 shadowOnly,
+                                 water}))
         return;
     ++impl_->stats.meshCount;
     ++impl_->stats.drawCalls;

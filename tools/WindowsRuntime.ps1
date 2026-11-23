@@ -23,6 +23,7 @@ function Get-LuxWindowsRuntimeFiles {
         "DIRECT3D12/luxshadow.frag",
         "DIRECT3D12/luxfullscreen.vert",
         "DIRECT3D12/luxsky.frag",
+        "DIRECT3D12/luxopaquecopy.frag",
         "DIRECT3D12/luxtone.frag"
     )
     foreach ($file in @(

@@ -186,7 +186,8 @@ void CreekApplication::OnRender(float) {
     GetGpuDevice().Clear(.015f, .025f, .045f, 1);
     const auto width = GetWindow().GetWidth();
     const auto height = GetWindow().GetHeight();
-    renderer_.Draw(state_, orbit_.Camera(static_cast<float>(width) / std::max(1u, height)));
+    renderer_.Draw(GetGpuDevice(), state_,
+                   orbit_.Camera(static_cast<float>(width) / std::max(1u, height)));
     if (renderer_.Statistics().meshCount < 160)
         throw std::runtime_error("Rainy Creek의 일부 장면 메시가 누락되었습니다.");
     captureReady_ = capture && renderer_.EnvironmentReady();

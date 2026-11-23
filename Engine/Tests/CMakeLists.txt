@@ -172,7 +172,7 @@ target_link_libraries(LuxForgeBackendTests PRIVATE LuxEngine::Engine)
 target_include_directories(LuxForgeBackendTests PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Renderer/Private")
 lux_set_target_warnings(LuxForgeBackendTests)
 lux_copy_runtime(LuxForgeBackendTests)
-foreach(suite diagnostics basics misuse ownership resize lifecycle frames drawing meshes scene3d materials material_textures)
+foreach(suite diagnostics basics misuse ownership resize lifecycle frames drawing meshes scene3d materials material_textures scene_submission water_composite)
     add_test(NAME Forge_${suite} COMMAND LuxForgeBackendTests ${suite})
     set_tests_properties(Forge_${suite} PROPERTIES LABELS "gpu;forge" TIMEOUT 180 SKIP_RETURN_CODE 77
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:LuxForgeBackendTests>" ENVIRONMENT "SDL_AUDIO_DRIVER=dummy")
@@ -263,3 +263,10 @@ set_tests_properties(Engine_world64_render PROPERTIES LABELS "gpu;world64" TIMEO
     ENVIRONMENT "SDL_AUDIO_DRIVER=dummy" WORKING_DIRECTORY "$<TARGET_FILE_DIR:LuxWorld64RenderTests>")
 
 target_compile_definitions(LuxWorld64RenderTests PRIVATE LUX_FBX_ANIMATED_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/Fixtures/AnimatedTriangle.fbx")
+
+add_executable(LuxOceanSpectrumTests OceanSpectrumTest.cpp)
+target_link_libraries(LuxOceanSpectrumTests PRIVATE LuxEngine::Engine)
+lux_set_target_warnings(LuxOceanSpectrumTests)
+lux_copy_runtime(LuxOceanSpectrumTests)
+add_test(NAME Engine_ocean_spectrum COMMAND LuxOceanSpectrumTests)
+set_tests_properties(Engine_ocean_spectrum PROPERTIES LABELS "headless;physics;renderer" TIMEOUT 20)

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <LuxEngine/Renderer/Renderer3D/Renderer3D.hpp>
+#include <LuxEngine/Renderer/Water/WaterSurface.hpp>
 #include <vector>
 
 namespace RainyCreek {
@@ -15,7 +15,7 @@ float TerrainHeight(float x, float z);
 float WaterHeight();
 
 CpuMesh BuildTerrain();
-CpuMesh BuildWater(unsigned phase, unsigned phaseCount = 12);
+LuxEngine::WaterSurface BuildWater();
 CpuMesh BuildRain(unsigned phase, unsigned phaseCount = 24);
 CpuMesh BuildLampPost();
 CpuMesh BuildLampGlass();

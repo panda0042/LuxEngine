@@ -1,0 +1,24 @@
+#include "LuxSceneResources.h"
+
+STRUCT(FullscreenOutput)
+{
+    DATA(float4, position, SV_Position);
+    DATA(float2, uv, TEXCOORD0);
+};
+
+STRUCT(OpaqueCopyOutput)
+{
+    DATA(float4, color, SV_Target0);
+    DATA(float, depth, SV_Depth);
+};
+
+ROOT_SIGNATURE(DefaultRootSignature)
+OpaqueCopyOutput PS_MAIN(FullscreenOutput In)
+{
+    INIT_MAIN;
+    const int2 pixel = int2(In.position.xy);
+    OpaqueCopyOutput Out;
+    Out.color = LoadTex2D(gHdrImage, NO_SAMPLER, pixel, 0);
+    Out.depth = LoadTex2D(gOpaqueDepth, NO_SAMPLER, pixel, 0).r;
+    RETURN(Out);
+}

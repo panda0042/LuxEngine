@@ -32,7 +32,7 @@ YAML 대신 JSON을 선택했다. 숫자·문자열·불리언·배열의 자료
 - 지원 컴포넌트는 태그, 변환, 스프라이트, 메시/텍스처 참조, 카메라, 2D/3D 리지드바디·박스 충돌체, 타일맵, 애니메이션, 계층, 씬 참조, 인스턴스 출처다.
 - 엔티티 ID를 유지하고 ID 순서로 저장한다. 같은 작성 상태는 같은 JSON으로 저장된다.
 - 지원하지 않는 컴포넌트는 조용히 버리지 않고 읽기·저장을 실패시킨다.
-- Rigidbody type은 0=Static, 1=Dynamic, 2=Kinematic, 씬 참조 mode는 0=Nested, 1=Inherited, 2=Additive, render3d mode는 0=Legacy, 1=Pbr이다.
+- Rigidbody type은 0=Static, 1=Dynamic, 2=Kinematic, 씬 참조 mode는 0=Nested, 1=Inherited, 2=Additive, render3d mode는 1=Pbr로 저장한다. 이전 파일의 0은 읽을 때 PBR로 변환한다.
 - 애니메이션 재생 시각 같은 일시적인 런타임 상태는 저장하지 않는다. 씬 참조의 baseline/suspended는 기존 오버라이드 복원용 직렬화 스냅샷 문자열이다.
 - 씬 파일 최대 크기는 64 MiB, 엔티티는 100,000개, JSON 중첩은 64단계다. 키프레임은 클립당 4,096개, 타일맵은 256×256까지다.
 - 읽기에 실패하면 기존 씬과 엔티티 핸들을 유지한다. 파일 저장은 기존 임시 파일·원자적 교체 경로를 사용한다.

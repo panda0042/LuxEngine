@@ -518,8 +518,6 @@ void Scene::OnRender3D() {
         if (Finite(meshComp.material.albedoColor) && Finite(meshComp.material.metallic) &&
             Finite(meshComp.material.roughness)) {
             auto material = meshComp.material;
-            if (settings_.render3D.mode == Render3DMode::Legacy)
-                material.albedoColor = Exposed(material.albedoColor, settings_.exposure);
             for (auto* path :
                  {&material.baseColorTexture, &material.normalTexture, &material.metallicTexture,
                   &material.roughnessTexture, &material.occlusionTexture})

@@ -169,7 +169,6 @@ void PopulateTemplate(LuxEngine::Scene& scene, ProjectTemplate value) {
     switch (value) {
     case ProjectTemplate::Pbr3D: {
         auto settings = scene.GetSettings();
-        settings.render3D.mode = LuxEngine::Render3DMode::Pbr;
         settings.render3D.showSkybox = true;
         scene.SetSettings(settings);
         for (int i = 0; i < 4; ++i) {

@@ -13,7 +13,9 @@ float4 PS_MAIN(FullscreenOutput In)
     INIT_MAIN;
     const float2 p = In.uv * 2.0f - 1.0f;
     const float3 direction = normalize(gScene.forward.xyz + p.x * gScene.right.xyz + p.y * gScene.up.xyz);
-    const float3 sky =
+    float3 sky =
         SampleLvlTexCube(gSkyEnv, gSamplerTrilinearClamp, RotateEnvironment(direction), 0.0f).rgb * gScene.environment.w;
+    // Keep chromaticity while fitting bright sources into the scene's FP16 attachment.
+    sky /= max(1.0f, max(sky.r, max(sky.g, sky.b)) / 65504.0f);
     RETURN(float4(sky, 1.0f));
 }

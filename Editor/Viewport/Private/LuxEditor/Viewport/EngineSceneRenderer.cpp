@@ -451,8 +451,7 @@ bool EngineSceneRenderer::Render3D(LuxEngine::Scene& scene, int pixelWidth, int 
 
     if (skyboxBackground) {
         *skyboxBackground = {};
-        if (scene.GetSettings().render3D.mode == LuxEngine::Render3DMode::Pbr &&
-            scene.GetSettings().render3D.showSkybox)
+        if (scene.GetSettings().render3D.showSkybox)
             if (!Render3DPass(scene, pixelWidth, pixelHeight, focus, yaw, pitch, distance,
                               *skyboxBackground, true, true, cameraOverride))
                 return false;
@@ -500,11 +499,8 @@ bool EngineSceneRenderer::RenderGame(LuxEngine::Scene& scene, int pixelWidth, in
             auto settings = scene.GetSettings().render3D;
             if (!settings.environmentPath.empty())
                 settings.environmentPath = scene.ResolveAssetPath(settings.environmentPath);
-            if (settings.mode == LuxEngine::Render3DMode::Pbr) {
-                LuxEngine::Renderer3D::BeginScene(camera.camera3D, settings,
-                                                  scene.GetSettings().exposure);
-            } else
-                LuxEngine::Renderer3D::BeginScene(camera.camera3D, settings.sun);
+            LuxEngine::Renderer3D::BeginScene(camera.camera3D, settings,
+                                              scene.GetSettings().exposure);
             scene.OnRender3D();
             LuxEngine::Renderer3D::EndScene();
         }
@@ -583,28 +579,15 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
             renderSettings.shadows = false;
         if (!renderSettings.environmentPath.empty())
             renderSettings.environmentPath = scene.ResolveAssetPath(renderSettings.environmentPath);
-        if (renderSettings.mode == LuxEngine::Render3DMode::Pbr)
-            LuxEngine::Renderer3D::BeginScene(camera, renderSettings, scene.GetSettings().exposure);
-        else
-            LuxEngine::Renderer3D::BeginScene(camera, renderSettings.sun);
+        LuxEngine::Renderer3D::BeginScene(camera, renderSettings, scene.GetSettings().exposure);
         for (LuxEngine::Entity entity : scene.GetEntities()) {
             if (backgroundOnly)
                 break;
             if (!entity.HasComponent<LuxEngine::TransformComponent>())
                 continue;
             const auto world = scene.GetWorldMatrix(entity.GetId());
-            const auto expose = [&](LuxEngine::Vec4 color) {
-                if (scene.GetSettings().render3D.mode == LuxEngine::Render3DMode::Pbr)
-                    return color;
-                color.x *= scene.GetSettings().exposure;
-                color.y *= scene.GetSettings().exposure;
-                color.z *= scene.GetSettings().exposure;
-                return color;
-            };
             if (const auto* mesh = entity.TryGetComponent<LuxEngine::MeshRendererComponent>()) {
                 auto material = mesh->material;
-                if (scene.GetSettings().render3D.mode == LuxEngine::Render3DMode::Legacy)
-                    material.albedoColor = expose(material.albedoColor);
                 for (auto* resource : {&material.baseColorTexture, &material.normalTexture,
                                        &material.metallicTexture, &material.roughnessTexture,
                                        &material.occlusionTexture})
@@ -638,7 +621,7 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
             } else if (const auto* sprite =
                            entity.TryGetComponent<LuxEngine::SpriteRendererComponent>()) {
                 LuxEngine::Material3D material;
-                material.albedoColor = expose(sprite->color);
+                material.albedoColor = sprite->color;
                 LuxEngine::Renderer3D::DrawMesh(world * LuxEngine::Mat4::Scale({1, 1, .02f}),
                                                 material);
             } else if (const auto* map = entity.TryGetComponent<LuxEngine::TilemapComponent>()) {
@@ -654,7 +637,7 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
                         if (tile == 0 || tile >= colors.size())
                             continue;
                         LuxEngine::Material3D material;
-                        material.albedoColor = expose(colors[tile]);
+                        material.albedoColor = colors[tile];
                         const auto model =
                             world *
                             LuxEngine::Mat4::Translate(

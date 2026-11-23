@@ -12,6 +12,69 @@ STRUCT(MeshOutput)
 
 #include "LuxBrdf.h"
 
+float WaterDepth(float z)
+{
+    // Perspective z = -A + B / distance, with distance measured along the view axis.
+    return gScene.up.w / min(z + gScene.right.w, -1e-7f);
+}
+
+float OpaqueDepthAt(float2 uv)
+{
+    const int2 maximum = int2(gScene.frameSize.xy) - int2(1, 1);
+    return LoadTex2D(gOpaqueDepth, NO_SAMPLER, clamp(int2(uv * gScene.frameSize.xy), int2(0, 0), maximum), 0).r;
+}
+
+float3 WaterSurface(MeshOutput In, float3 normal, float3 tint, float roughness)
+{
+    const float3 v = SafeDirection(gLights.camera.xyz - In.world, normal);
+    const float3 n = dot(normal, v) >= 0.0f ? normal : -normal;
+    const float2 uv = In.position.xy * gScene.frameSize.zw;
+    const float pointDepth = WaterDepth(In.position.z);
+    // Convert a depth difference along the view axis to a distance along this pixel ray.
+    const float rayScale = rcp(max(dot(-v, gScene.forward.xyz), 0.1f));
+    const float sceneDepth = OpaqueDepthAt(uv);
+    const float thickness = clamp((WaterDepth(sceneDepth) - pointDepth) * rayScale, 0.0f, 32.0f);
+    const float ior = gDraw.water.w;
+    const float3 bend = refract(-v, n, rcp(ior)) + v;
+    const float2 screenBend = float2(dot(bend, normalize(gScene.right.xyz)),
+                                   -dot(bend, normalize(gScene.up.xyz)));
+    float2 sampleUV = saturate(uv + screenBend * min(0.05f, thickness * 0.025f));
+    float sampleDepth = OpaqueDepthAt(sampleUV);
+    // Reject displaced samples from geometry in front of this water point.
+    if (WaterDepth(sampleDepth) < pointDepth)
+    {
+        sampleUV = uv;
+        sampleDepth = sceneDepth;
+    }
+    const float refractedDepth = clamp((WaterDepth(sampleDepth) - pointDepth) * rayScale, 0.0f, 32.0f);
+    const float3 transmittance = exp(-gDraw.water.xyz * refractedDepth);
+    const float4 opaque = SampleLvlTex2D(gHdrImage, gSamplerTrilinearClamp, sampleUV, 0.0f);
+    const float3 environment = gScene.environment.rgb * gScene.environment.w;
+    const float3 reflected = gScene.options.y > 0.5f
+        ? SampleLvlTexCube(gSpecularEnv, gSamplerTrilinearClamp, RotateEnvironment(reflect(-v, n)),
+                           roughness * 7.0f).rgb * gScene.environment.w
+        : environment;
+    float f0 = (ior - 1.0f) / (ior + 1.0f);
+    f0 *= f0;
+    const float fresnel = f0 + (1.0f - f0) * pow(1.0f - saturate(dot(n, v)), 5.0f);
+    const float3 sun = gLights.colorIntensity.rgb * max(gLights.colorIntensity.w, 0.0f);
+    const float sunVisibility = DirectionalShadow(In.world, n);
+    const float backlight = pow(saturate(dot(v, gLights.direction.xyz)), 3.0f);
+    // Approximate forward scatter in the shallow layer and around crests.
+    const float crest = saturate(1.0f - In.color.a);
+    const float scattering = backlight * (exp(-0.5f * refractedDepth) + crest) * 0.12f;
+    const float3 inscatter = tint * (environment + sun * scattering * sunVisibility);
+    const float3 behind = opaque.rgb + (1.0f - opaque.a) * environment;
+    const float3 transmitted = behind * transmittance + inscatter * (1.0f - transmittance);
+    const float3 glint = Brdf(float3(0, 0, 0), 0.0f, roughness, n, v,
+                              -gLights.direction.xyz) * sun * sunVisibility;
+    const float shore = sceneDepth < 0.999999f ? 1.0f - smoothstep(0.02f, 0.18f, thickness) : 0.0f;
+    const float foam = saturate(shore * 0.75f + crest);
+    const float3 foamLight = (environment + sun * sunVisibility *
+                             saturate(dot(n, -gLights.direction.xyz)) * 0.25f) * float3(0.88f, 0.94f, 1.0f);
+    return lerp(lerp(transmitted, reflected, fresnel) + glint, foamLight, foam);
+}
+
 // Port of Shaders/Modern.frag.hlsl (Basic.frag.hlsl with lit = true and MODERN_3D): writes linear
 // HDR colour; LuxTone.frag.fsl applies exposure, tone mapping and sRGB encoding.
 ROOT_SIGNATURE(DefaultRootSignature)
@@ -55,46 +118,30 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
     if (authoredNormal && gDraw.materialOptions.w > 0.5f && !frontFacing)
         normal = -normal;
     const uint pointCount = min(gLights.count.x, 16u);
-    if (In.options.w > 0.5f)
+    if (gDraw.water.w > 1.0f)
     {
-        const float3 v = SafeDirection(gLights.camera.xyz - In.world, normal);
-        const float metal = saturate(In.options.y * ((maps & 2u) != 0u ? SampleMaterial(gMetallicTexture, In.uv).r : 1.0f));
-        const float rough = clamp(In.options.z * ((maps & 4u) != 0u ? SampleMaterial(gRoughnessTexture, In.uv).r : 1.0f), 0.045f, 1.0f);
-        float3 result = Brdf(color.rgb, metal, rough, normal, v, -gLights.direction.xyz) *
-                        gLights.colorIntensity.rgb * max(gLights.colorIntensity.w, 0.0f);
-        result *= DirectionalShadow(In.world, normal);
-        for (uint i = 0; i < pointCount; ++i)
-        {
-            const float4 source = gLights.pointPositionRadius[i];
-            const float4 sourceColor = gLights.pointColorIntensity[i];
-            const float3 delta = source.xyz - In.world;
-            const float distance = length(delta);
-            const float falloff = saturate(1.0f - distance / max(source.w, 1e-5f));
-            result += Brdf(color.rgb, metal, rough, normal, v, SafeDirection(delta, normal)) * sourceColor.rgb *
-                      max(sourceColor.w, 0.0f) * falloff * falloff;
-        }
-        const float occlusion = (maps & 8u) != 0u ? lerp(1.0f, SampleMaterial(gOcclusionTexture, In.uv).r, gDraw.materialOptions.y) : 1.0f;
-        result += EnvironmentLighting(color.rgb, metal, rough, normal, v) * occlusion;
-        color.rgb = result;
+        const float roughness = clamp(In.options.z, 0.045f, 1.0f);
+        RETURN(float4(clamp(WaterSurface(In, normal, color.rgb, roughness), 0.0f, 65504.0f), 1.0f));
     }
-    else
+    const float3 v = SafeDirection(gLights.camera.xyz - In.world, normal);
+    const float metal = saturate(In.options.y * ((maps & 2u) != 0u ? SampleMaterial(gMetallicTexture, In.uv).r : 1.0f));
+    const float rough = clamp(In.options.z * ((maps & 4u) != 0u ? SampleMaterial(gRoughnessTexture, In.uv).r : 1.0f), 0.045f, 1.0f);
+    float3 result = Brdf(color.rgb, metal, rough, normal, v, -gLights.direction.xyz) *
+                    gLights.colorIntensity.rgb * max(gLights.colorIntensity.w, 0.0f);
+    result *= DirectionalShadow(In.world, normal);
+    for (uint i = 0; i < pointCount; ++i)
     {
-        float3 light = gLights.colorIntensity.rgb *
-                       (max(0.0f, dot(normal, -gLights.direction.xyz)) * max(0.0f, gLights.colorIntensity.w));
-        for (uint i = 0; i < pointCount; ++i)
-        {
-            const float4 source = gLights.pointPositionRadius[i];
-            const float4 sourceColor = gLights.pointColorIntensity[i];
-            const float3 toLight = source.xyz - In.world;
-            const float distance = length(toLight);
-            if (source.w <= 0.0f || distance >= source.w)
-                continue;
-            const float facing = distance > 0.00001f ? max(0.0f, dot(normal, toLight / distance)) : 1.0f;
-            const float falloff = 1.0f - distance / source.w;
-            light += sourceColor.rgb * (facing * falloff * falloff * max(0.0f, sourceColor.w));
-        }
-        color.rgb *= 0.15f + light;
+        const float4 source = gLights.pointPositionRadius[i];
+        const float4 sourceColor = gLights.pointColorIntensity[i];
+        const float3 delta = source.xyz - In.world;
+        const float distance = length(delta);
+        const float falloff = saturate(1.0f - distance / max(source.w, 1e-5f));
+        result += Brdf(color.rgb, metal, rough, normal, v, SafeDirection(delta, normal)) * sourceColor.rgb *
+                  max(sourceColor.w, 0.0f) * falloff * falloff;
     }
+    const float occlusion = (maps & 8u) != 0u ? lerp(1.0f, SampleMaterial(gOcclusionTexture, In.uv).r, gDraw.materialOptions.y) : 1.0f;
+    result += EnvironmentLighting(color.rgb, metal, rough, normal, v) * occlusion;
+    color.rgb = result;
     color.rgb = clamp(color.rgb, 0.0f, 65504.0f);
     RETURN(color);
 }
