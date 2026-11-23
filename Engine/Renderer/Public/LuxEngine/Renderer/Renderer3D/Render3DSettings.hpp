@@ -46,6 +46,7 @@ struct WaterReflectionSettings {
     std::string environmentPath;
     float rotation = 0; // Degrees about the vertical axis.
     float intensity = 1;
+    uint32 faceSize = 128; // Pixels per reflection cube face, either 128, 256 or 512.
 };
 
 struct RadianceCascadeSettings {

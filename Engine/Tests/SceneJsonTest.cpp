@@ -64,7 +64,7 @@ void Test() {
     settings.render3D.fog.baseHeight = 1000000000.25;
     settings.render3D.fog.rayTracedShadows = true;
     settings.render3D.virtualShadows = true;
-    settings.render3D.waterReflection = {"Assets/lakeside.hdr", -112, 4};
+    settings.render3D.waterReflection = {"Assets/lakeside.hdr", -112, 4, 256};
     settings.render3D.radianceCascades = {.5f, 4};
     Check(scene.SetSettings(settings), "render settings setup");
     std::string text;
@@ -108,7 +108,7 @@ void Test() {
               render.fog.rayTracedShadows && render.virtualShadows &&
               render.rayTracing.restirIndirect && render.waterReflection.rotation == -112 &&
               render.waterReflection.environmentPath == "Assets/lakeside.hdr" &&
-              render.radianceCascades.strength == .5f,
+              render.waterReflection.faceSize == 256 && render.radianceCascades.strength == .5f,
           "ray tracing and volume settings survive a save and reload");
     std::string second;
     Check(restored.SerializeToString(second) && second == text, "deterministic lossless roundtrip");

@@ -217,6 +217,7 @@ SceneSettings InheritedSettings(const SceneSettings& current, const SceneSetting
     inherit(water.rotation, oldRender.waterReflection.rotation, newRender.waterReflection.rotation);
     inherit(water.intensity, oldRender.waterReflection.intensity,
             newRender.waterReflection.intensity);
+    inherit(water.faceSize, oldRender.waterReflection.faceSize, newRender.waterReflection.faceSize);
     inherit(render.radianceCascades.strength, oldRender.radianceCascades.strength,
             newRender.radianceCascades.strength);
     inherit(render.radianceCascades.spacing, oldRender.radianceCascades.spacing,

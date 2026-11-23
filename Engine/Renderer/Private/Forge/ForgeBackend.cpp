@@ -550,6 +550,7 @@ struct SceneEnvironment {
     std::shared_ptr<EnvironmentJob> job;
     std::string requestedPath, activePath, error;
     uint64 requestedRevision = UINT64_MAX, activeRevision = UINT64_MAX;
+    uint32 requestedFaceSize = 0;
     bool attempted = false;
     double preparationMs = 0;
 };
@@ -657,11 +658,11 @@ public:
             return Fallback(origin, viewProjection, exposure);
         }
         PollEnvironment(*lib, environment_, settings.environmentPath,
-                        settings.imageBasedLighting || settings.showSkybox, false);
+                        settings.imageBasedLighting || settings.showSkybox);
         const bool active = environment_.Matches(settings.environmentPath);
         const auto& water = settings.waterReflection;
         if (!water.environmentPath.empty())
-            PollEnvironment(*lib, waterEnvironment_, water.environmentPath, true, true);
+            PollEnvironment(*lib, waterEnvironment_, water.environmentPath, true, water.faceSize);
 
         LuxForgeScene scene = {};
         CopyMatrix(scene.viewProjection, viewProjection);
@@ -761,9 +762,9 @@ private:
     }
 
     void PollEnvironment(ForgeLibrary& lib, SceneEnvironment& state, const std::string& path,
-                         bool enabled, bool reflectionOnly) {
+                         bool enabled, uint32 faceSize = 0) {
         const auto revision = EnvironmentData::Revision(path);
-        const auto label = reflectionOnly ? "Water reflection environment" : "Environment";
+        const auto label = faceSize ? "Water reflection environment" : "Environment";
         if (state.job) {
             std::shared_ptr<EnvironmentData> prepared;
             bool done;
@@ -775,7 +776,8 @@ private:
             }
             if (done) {
                 state.job.reset();
-                if (enabled && state.requestedPath == path && state.requestedRevision == revision) {
+                if (enabled && state.requestedPath == path && state.requestedRevision == revision &&
+                    state.requestedFaceSize == faceSize) {
                     if (!prepared)
                         state.error = std::string(label) + " preparation failed";
                     else if (!prepared->error.empty())
@@ -795,19 +797,21 @@ private:
             }
         }
         if (!enabled || state.job ||
-            (state.attempted && state.requestedPath == path && state.requestedRevision == revision))
+            (state.attempted && state.requestedPath == path &&
+             state.requestedRevision == revision && state.requestedFaceSize == faceSize))
             return;
         state.requestedPath = path;
         state.requestedRevision = revision;
+        state.requestedFaceSize = faceSize;
         state.attempted = true;
         state.error.clear();
         try {
             auto job = std::make_shared<EnvironmentJob>();
-            std::thread([job, path, reflectionOnly] {
+            std::thread([job, path, faceSize] {
                 std::shared_ptr<EnvironmentData> prepared;
                 try {
-                    prepared = reflectionOnly ? EnvironmentData::PrepareReflection(path)
-                                              : EnvironmentData::Prepare(path);
+                    prepared = faceSize ? EnvironmentData::PrepareReflection(path, faceSize)
+                                        : EnvironmentData::Prepare(path);
                 } catch (...) {
                 }
                 std::lock_guard lock(job->mutex);
