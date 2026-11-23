@@ -258,6 +258,24 @@ std::span<const OceanSample> OceanSpectrum::Grid() const {
     return state_ ? std::span<const OceanSample>(state_->surface) : std::span<const OceanSample>{};
 }
 
+bool OceanSpectrum::BuildGpuSeed(OceanSpectrumSettings& settings, std::vector<float>& modes,
+                                 Vec3& displacementBound) const {
+    if (!state_)
+        return false;
+    settings = state_->settings;
+    modes.reserve(state_->modes.size() * 8);
+    for (const auto& mode : state_->modes) {
+        modes.insert(modes.end(),
+                     {static_cast<float>(mode.seed.real()), static_cast<float>(mode.seed.imag()),
+                      static_cast<float>(mode.choppyDirection.x),
+                      static_cast<float>(mode.choppyDirection.y),
+                      static_cast<float>(state_->angularFrequencies[mode.frequency]), 0, 0, 0});
+        displacementBound.y += 2 * std::abs(mode.seed);
+    }
+    displacementBound.x = displacementBound.z = displacementBound.y * settings.choppiness;
+    return true;
+}
+
 std::optional<OceanSample> OceanSpectrum::Sample(Vec2 localXZ) const {
     if (!state_ || !std::isfinite(localXZ.x) || !std::isfinite(localXZ.y))
         return std::nullopt;

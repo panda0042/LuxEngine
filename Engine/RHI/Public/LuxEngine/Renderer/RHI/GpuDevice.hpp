@@ -82,6 +82,7 @@ struct GpuFrameStats {
     uint32 pushConstantUpdates = 0;
     uint32 uniformBinds = 0;
     uint32 submissions = 0;
+    uint32 computeDispatches = 0;
     uint64 vertexBytes = 0;
     uint64 uploadBytes = 0;
     double cpuWaitMs = 0.0;
@@ -175,6 +176,7 @@ public:
 private:
     friend class GpuBuffer;
     friend class GpuTexture;
+    friend class Mesh3D;
     friend class Renderer2D;
     friend class Renderer3D;
     bool SetLighting(const GpuLighting& lighting);

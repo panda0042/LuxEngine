@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <vector>
 
 namespace LuxEngine {
 
@@ -49,6 +50,9 @@ public:
     std::optional<OceanSample> SampleAtSurface(Vec2 localXZ) const;
 
 private:
+    friend class Mesh3D;
+    bool BuildGpuSeed(OceanSpectrumSettings& settings, std::vector<float>& modes,
+                      Vec3& displacementBound) const;
     struct State;
     std::unique_ptr<State> state_;
 };

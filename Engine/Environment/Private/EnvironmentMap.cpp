@@ -1,3 +1,4 @@
+#include <LuxEngine/Environment/Atmosphere.hpp>
 #include <LuxEngine/Environment/EnvironmentMap.hpp>
 #include <algorithm>
 #include <array>
@@ -206,15 +207,10 @@ bool Decode(const std::string& path, int& width, int& height, HdrPixels& pixels,
 struct Source {
     int width = 0, height = 0;
     HdrPixels pixels{nullptr, &stbi_image_free};
+    AtmospherePanorama atmosphere{};
 
     Vec3 Sample(Vec3 d) const {
-        if (!pixels) {
-            const float sky = std::max<double>(0.f, d.y);
-            static const Vec3 sun = Vec3{-.5f, 1, .5f}.Normalized();
-            const float highlight = 6 * std::pow(std::max<double>(0.f, d.Dot(sun)), 64.f);
-            return Vec3{.18f + .45f * sky, .2f + .6f * sky, .25f + .9f * sky} +
-                   Vec3{1, .85f, .65f} * highlight;
-        }
+        const auto* rgb = pixels ? pixels.get() : atmosphere.pixels.data();
         const float u = (std::atan2(d.z, d.x) / (2 * Pi) + .5f) * width - .5f;
         const float v = (std::acos(std::clamp<double>(d.y, -1.f, 1.f)) / Pi) * height - .5f;
         const int x = static_cast<int>(std::floor(u)), y = static_cast<int>(std::floor(v));
@@ -222,7 +218,7 @@ struct Source {
             const size_t i = (static_cast<size_t>(std::clamp(py, 0, height - 1)) * width +
                               (px % width + width) % width) *
                              3;
-            const float* sample = pixels.get() + i;
+            const float* sample = rgb + i;
             return Vec3{sample[0], sample[1], sample[2]};
         };
         const float fx = u - std::floor(u), fy = v - std::floor(v);
@@ -270,7 +266,11 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& pat
     auto data = std::make_shared<EnvironmentData>();
     try {
         Source source;
-        if (!path.empty() && !Decode(path, source.width, source.height, source.pixels, data->error))
+        if (path.empty()) {
+            source.atmosphere = BakeAtmospherePanorama();
+            source.width = static_cast<int>(source.atmosphere.width);
+            source.height = static_cast<int>(source.atmosphere.height);
+        } else if (!Decode(path, source.width, source.height, source.pixels, data->error))
             return data;
         const uint32 skySize =
             std::clamp(std::bit_floor(static_cast<uint32>(source.width)) / 4, 256u, 1024u);

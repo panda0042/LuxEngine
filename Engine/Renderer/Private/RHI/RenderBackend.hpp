@@ -81,6 +81,10 @@ public:
     virtual bool ReadFrameCapture(GpuFrameCapture& capture) = 0;
 
     virtual bool CreateBuffer(BufferType type, uint32 sizeBytes, uint64& handle) = 0;
+    virtual bool CreateOceanBuffer(uint32 resolution, std::span<const float> modes,
+                                   float patchLength, float foamThreshold, float foamSoftness,
+                                   uint64& handle) = 0;
+    virtual bool UpdateOceanBuffer(uint64 handle, float timeSeconds) = 0;
     virtual bool UpdateBuffer(uint64 handle, const void* data, uint32 sizeBytes,
                               uint32 offsetBytes) = 0;
     virtual void DestroyBuffer(uint64 handle) = 0;

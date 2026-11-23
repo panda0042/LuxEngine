@@ -4,11 +4,9 @@
 #include <LuxEngine/Renderer/Water/WaterSurface.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
-#include <array>
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
-#include <vector>
 
 namespace {
 
@@ -33,18 +31,9 @@ private:
         if (!ocean_.Initialize(spectrum))
             throw std::runtime_error("could not initialize ocean spectrum");
 
-        vertices_.resize((Resolution + 1) * (Resolution + 1));
-        std::vector<uint32> indices;
-        indices.reserve(Resolution * Resolution * 6);
-        for (uint32 z = 0; z < Resolution; ++z)
-            for (uint32 x = 0; x < Resolution; ++x) {
-                const uint32 top = z * (Resolution + 1) + x;
-                const uint32 bottom = top + Resolution + 1;
-                indices.insert(indices.end(), {top, bottom, top + 1, top + 1, bottom, bottom + 1});
-            }
-        RefreshMesh();
-        if (!mesh_.Upload(&GetGpuDevice(), vertices_, indices))
-            throw std::runtime_error("could not upload ocean mesh");
+        if (!mesh_.UploadOcean(&GetGpuDevice(), ocean_))
+            throw std::runtime_error("could not create GPU ocean: " +
+                                     GetGpuDevice().GetLastError());
 
         for (auto point : {Vec2{-5, -2}, Vec2{2, 0}, Vec2{7, 4}, Vec2{0, 7}}) {
             auto entity = scene_.CreateEntity("Buoy");
@@ -62,7 +51,7 @@ private:
             return;
         }
         time_ += dt;
-        if (!ocean_.Update(time_))
+        if (!ocean_.Update(static_cast<float>(time_)))
             throw std::runtime_error("ocean update failed");
         const OceanBuoyancySettings buoyancy{.radius = BuoyRadius, .drag = 5};
         for (auto entity : scene_.GetEntities()) {
@@ -77,32 +66,12 @@ private:
                 throw std::runtime_error("ocean buoyancy impulse was rejected");
         }
         scene_.OnUpdate(dt);
-        meshDirty_ = true;
-    }
-
-    void RefreshMesh() {
-        const auto samples = ocean_.Grid();
-        for (uint32 z = 0; z <= Resolution; ++z)
-            for (uint32 x = 0; x <= Resolution; ++x) {
-                const auto& sample = samples[(z % Resolution) * Resolution + x % Resolution];
-                const double u = static_cast<double>(x) / Resolution;
-                const double v = static_cast<double>(z) / Resolution;
-                const Vec3 base{u * PatchLength - HalfPatch, 0, v * PatchLength - HalfPatch};
-                vertices_[z * (Resolution + 1) + x] = {
-                    base + sample.displacement,
-                    sample.normal,
-                    {u, v},
-                    {1, 1, 1, static_cast<float>(1 - sample.foam)}};
-            }
     }
 
     void OnRender(float) override {
-        if (meshDirty_) {
-            RefreshMesh();
-            if (!mesh_.UpdateVertices(vertices_))
-                throw std::runtime_error("could not stream displaced ocean vertices");
-            meshDirty_ = false;
-        }
+        if (!mesh_.UpdateOcean(static_cast<float>(time_)))
+            throw std::runtime_error("could not dispatch GPU ocean: " +
+                                     GetGpuDevice().GetLastError());
         uint32 width = 0, height = 0;
         GetWindow().GetFramebufferSize(width, height);
         const double aspect = height ? static_cast<double>(width) / height : 16. / 9;
@@ -136,8 +105,16 @@ private:
     }
 
     void OnFramePresented() override {
-        if (smoke_ && ++frames_ == 60)
-            Close();
+        if (smoke_) {
+            const auto dispatches = GetGpuDevice().GetFrameStats().computeDispatches;
+            if (dispatches == 3)
+                ++simulatedFrames_;
+            if (++frames_ == 12) {
+                if (simulatedFrames_ < 2)
+                    throw std::runtime_error("GPU ocean did not advance");
+                Close();
+            }
+        }
     }
 
     void OnShutdown() override {
@@ -145,19 +122,18 @@ private:
     }
 
     bool smoke_;
-    bool meshDirty_ = false;
     int frames_ = 0;
+    int simulatedFrames_ = 0;
     double time_ = 0;
     OceanSpectrum ocean_;
     Scene scene_;
     Mesh3D mesh_;
-    std::vector<Vertex3D> vertices_;
 };
 
 int Run(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
         std::cout << "SampleOceanSpectrum [--smoke-test]\n"
-                     "CPU inverse FFT ocean rendered with Forge water optics. Escape quits.\n";
+                     "GPU inverse FFT ocean with Jacobian foam and Jolt buoys. Escape quits.\n";
         return 0;
     }
     const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke-test";

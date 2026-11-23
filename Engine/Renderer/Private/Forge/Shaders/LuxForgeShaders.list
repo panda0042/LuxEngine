@@ -69,3 +69,11 @@
 #frag luxtone.frag
 #include "LuxTone.frag.fsl"
 #end
+
+#comp luxoceanfft.comp
+#include "LuxOceanFFT.comp.fsl"
+#end
+
+#comp luxoceanassemble.comp
+#include "LuxOceanAssemble.comp.fsl"
+#end

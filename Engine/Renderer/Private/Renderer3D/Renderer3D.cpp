@@ -5,6 +5,7 @@
 #include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/Core/Log.hpp>
 #include <LuxEngine/Renderer/Renderer3D/Renderer3D.hpp>
+#include <LuxEngine/Renderer/Water/OceanSpectrum.hpp>
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -254,6 +255,7 @@ void Mesh3D::Release() {
     vertices_.Release();
     indices_.Release();
     indexCount_ = 0;
+    ocean_ = false;
 }
 
 bool Mesh3D::IsValid() const {
@@ -261,7 +263,7 @@ bool Mesh3D::IsValid() const {
 }
 
 bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
-    if (!IsValid() ||
+    if (ocean_ || !IsValid() ||
         vertices.size_bytes() / sizeof(Vertex3D) != vertices_.GetSize() / sizeof(RenderVertex))
         return false;
     const Vec3 origin = vertices.front().position;
@@ -288,6 +290,53 @@ bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
         maximum_ = maximum;
     }
     return updated;
+}
+
+bool Mesh3D::UploadOcean(GpuDevice* gpu, const OceanSpectrum& spectrum) {
+    if (!gpu || !gpu->IsReady())
+        return false;
+    OceanSpectrumSettings settings;
+    std::vector<float> modes;
+    Vec3 extent;
+    if (!spectrum.BuildGpuSeed(settings, modes, extent))
+        return false;
+
+    const uint32 n = settings.resolution;
+    const uint32 stride = n + 1;
+    std::vector<uint32> indices;
+    indices.reserve(n * n * 6);
+    for (uint32 z = 0; z < n; ++z)
+        for (uint32 x = 0; x < n; ++x) {
+            const uint32 top = z * stride + x;
+            const uint32 bottom = top + stride;
+            indices.insert(indices.end(), {top, bottom, top + 1, top + 1, bottom, bottom + 1});
+        }
+
+    Mesh3D mesh;
+    const auto indexBytes = static_cast<uint32>(indices.size() * sizeof(uint32));
+    if (!mesh.indices_.Initialize(gpu, BufferType::Index, indexBytes) ||
+        !mesh.indices_.SetData(indices.data(), indexBytes))
+        return false;
+    if (!gpu->backend_->CreateOceanBuffer(n, modes, static_cast<float>(settings.patchLength),
+                                          static_cast<float>(settings.foamThreshold),
+                                          static_cast<float>(settings.foamSoftness),
+                                          mesh.vertices_.handle_))
+        return false;
+    mesh.vertices_.owner_ = gpu->backend_;
+    mesh.vertices_.sizeBytes_ = stride * stride * sizeof(RenderVertex);
+    mesh.indexCount_ = static_cast<uint32>(indices.size());
+    mesh.ocean_ = true;
+    const double halfPatch = settings.patchLength * .5;
+    extent = extent * 1.001 + Vec3{halfPatch + .001, .001, halfPatch + .001};
+    mesh.minimum_ = extent * -1;
+    mesh.maximum_ = extent;
+    *this = std::move(mesh);
+    return true;
+}
+
+bool Mesh3D::UpdateOcean(float timeSeconds) {
+    const auto owner = vertices_.owner_.lock();
+    return ocean_ && owner && owner->UpdateOceanBuffer(vertices_.handle_, timeSeconds);
 }
 
 Renderer3D::Context::Context() : impl_(std::make_unique<Impl>()) {}

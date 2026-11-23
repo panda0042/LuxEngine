@@ -1,0 +1,53 @@
+#include "LuxOceanAssemble.srt.h"
+
+float3 ReadDisplacement(uint2 point, uint n) {
+    const uint2 wrapped = point & (n - 1u);
+    const uint index = wrapped.y * n + wrapped.x;
+    const float2 heightAndX = gInput[index];
+    return float3(heightAndX.y, heightAndX.x, gInput[index + n * n].x);
+}
+
+ROOT_SIGNATURE(ComputeRootSignature)
+NUM_THREADS(8, 8, 1)
+void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
+{
+    INIT_MAIN;
+    const uint n = gOcean.shape.x;
+    const uint2 point = threadId.xy;
+    if (point.x > n || point.y > n) {
+        RETURN();
+    }
+
+    const float inverseStep = 0.5f / gOcean.params.x;
+    const uint2 xStep = uint2(1u, 0u);
+    const uint2 zStep = uint2(0u, 1u);
+    const float3 west = ReadDisplacement(point - xStep, n);
+    const float3 east = ReadDisplacement(point + xStep, n);
+    const float3 north = ReadDisplacement(point - zStep, n);
+    const float3 south = ReadDisplacement(point + zStep, n);
+    const float3 dx = (east - west) * inverseStep;
+    const float3 dz = (south - north) * inverseStep;
+    const float jacobian = (1.0f + dx.x) * (1.0f + dz.z) - dz.x * dx.z;
+    const float foam = saturate((gOcean.params.z - jacobian) / gOcean.params.w);
+    const float3 normal = cross(dz + float3(0.0f, 0.0f, 1.0f), dx + float3(1.0f, 0.0f, 0.0f));
+    const float3 up = float3(0.0f, 1.0f, 0.0f);
+    const float3 upward = dot(normal, normal) > 1e-20f
+                              ? normalize(normal) * (normal.y < 0.0f ? -1.0f : 1.0f)
+                              : up;
+
+    const float2 uv = float2(point) / float(n);
+    const float2 localXZ = (uv - 0.5f) * gOcean.params.y;
+    const float3 position = float3(localXZ.x, gOcean.params2.y, localXZ.y) +
+                            ReadDisplacement(point, n);
+    // LuxForgeVertex: position xyz, color rgba, uv xy, normal xyz, UV bounds xyzw.
+    const uint address = (point.y * (n + 1u) + point.x) * 64u;
+    const uint4 positionAndRed = asuint(float4(position, 1.0f));
+    const uint4 colorAndU = asuint(float4(1.0f, 1.0f, 1.0f - foam, uv.x));
+    const uint4 vAndNormal = asuint(float4(uv.y, upward));
+    const uint4 bounds = asuint(float4(0.0f, 0.0f, 1.0f, 1.0f));
+    StoreByte4(gOutput, address, positionAndRed);
+    StoreByte4(gOutput, address + 16u, colorAndU);
+    StoreByte4(gOutput, address + 32u, vAndNormal);
+    StoreByte4(gOutput, address + 48u, bounds);
+    RETURN();
+}

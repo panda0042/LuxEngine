@@ -5,6 +5,7 @@ lux_engine_module(Renderer
         Private/Forge/ForgeBackend.hpp
         Private/Forge/LuxForgeApi.h
         Private/RHI/RenderBackend.hpp
+        Public/LuxEngine/Renderer/Lighting/TriangleRayScene.hpp
         Public/LuxEngine/Renderer/Renderer2D/Renderer2D.hpp
         Public/LuxEngine/Renderer/Renderer3D/Render3DSettings.hpp
         Public/LuxEngine/Renderer/Renderer3D/Renderer3D.hpp
@@ -17,6 +18,7 @@ lux_engine_module(Renderer
         Private/RHI/Buffer.cpp
         Private/RHI/GpuDevice.cpp
         Private/RHI/Texture.cpp
+        Private/Lighting/TriangleRayScene.cpp
         Private/Renderer2D/Renderer2D.cpp
         Private/Renderer3D/Render3DSettings.cpp
         Private/Renderer3D/Renderer3D.cpp

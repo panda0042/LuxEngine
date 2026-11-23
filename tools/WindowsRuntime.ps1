@@ -24,7 +24,9 @@ function Get-LuxWindowsRuntimeFiles {
         "DIRECT3D12/luxfullscreen.vert",
         "DIRECT3D12/luxsky.frag",
         "DIRECT3D12/luxopaquecopy.frag",
-        "DIRECT3D12/luxtone.frag"
+        "DIRECT3D12/luxtone.frag",
+        "DIRECT3D12/luxoceanfft.comp",
+        "DIRECT3D12/luxoceanassemble.comp"
     )
     foreach ($file in @(
         "shape-cube.fbx", "shape-cube-half.fbx", "shape-cube-rounded.fbx",

@@ -1,0 +1,68 @@
+#include "LuxOcean.srt.h"
+
+GroupShared(float2, fftLine[256]);
+
+float2 ComplexMultiply(float2 a, float2 b) {
+    return float2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+float2 EvolveMode(uint x, uint z, uint n, uint plane) {
+    const uint mask = n - 1u;
+    const uint index = 4u * (z * n + x);
+    const uint mirror = 4u * (((n - z) & mask) * n + ((n - x) & mask));
+    const float angle = gInput[index + 2u].x * gOcean.params2.x;
+    const float2 phase = float2(cos(angle), sin(angle));
+    const float2 forward = ComplexMultiply(gInput[index], phase);
+    const float2 backward = ComplexMultiply(gInput[mirror], phase) * float2(1.0f, -1.0f);
+    const float2 height = forward + backward;
+    const float2 chop = gInput[index + 1u];
+    // Pack two Hermitian spectra as H + i Dx so the inverse transform puts
+    // height and horizontal displacement X in the real and imaginary parts.
+    return plane == 0u ? (1.0f - chop.x) * height
+                       : chop.y * float2(-height.y, height.x);
+}
+
+ROOT_SIGNATURE(ComputeRootSignature)
+NUM_THREADS(64, 1, 1)
+void CS_MAIN(SV_GroupID(uint3) group, SV_GroupThreadID(uint3) threadId)
+{
+    INIT_MAIN;
+    const uint n = gOcean.shape.x;
+    const uint baseIndex = group.y * n * n;
+    const uint row = group.x;
+    for (uint i = threadId.x; i < n; i += 64u) {
+        uint reversed = 0u;
+        uint value = i;
+        for (uint bit = 1u; bit < n; bit <<= 1u) {
+            reversed = (reversed << 1u) | (value & 1u);
+            value >>= 1u;
+        }
+        fftLine[reversed] = gOcean.shape.y != 0u ? EvolveMode(i, row, n, group.y)
+                                               : gInput[baseIndex + row * n + i];
+    }
+    GroupMemoryBarrier();
+
+    // One lane owns both outputs of a butterfly. Each stage completes before
+    // any lane reads values written by another butterfly in the next stage.
+    for (uint span = 2u; span <= n; span <<= 1u) {
+        const uint halfSpan = span >> 1u;
+        for (uint i = threadId.x; i < (n >> 1u); i += 64u) {
+            const uint offset = i & (halfSpan - 1u);
+            const uint first = (i - offset) * 2u + offset;
+            const uint second = first + halfSpan;
+            const float angle = 6.283185307179586f * float(offset) / float(span);
+            const float2 root = float2(cos(angle), sin(angle));
+            const float2 a = fftLine[first];
+            const float2 b = ComplexMultiply(fftLine[second], root);
+            fftLine[first] = a + b;
+            fftLine[second] = a - b;
+        }
+        GroupMemoryBarrier();
+    }
+
+    // Transpose each pass. The second pass transforms columns and restores
+    // the row-major order consumed by the vertex assembly pass.
+    for (uint i = threadId.x; i < n; i += 64u)
+        gOutput[baseIndex + i * n + row] = fftLine[i];
+    RETURN();
+}
