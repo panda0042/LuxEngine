@@ -34,7 +34,7 @@ cmake --build build --target LuxEditor LuxForgeBackendTests
 ctest --test-dir build -L forge --output-on-failure
 ```
 
-`LUX_ENABLE_FORGE`나 `LUX_RENDER_BACKEND`를 선택할 필요가 없다. 렌더러 파일이 없거나 엔진과 ABI가 맞지 않으면 초기화 오류를 반환한다. ABI 버전은 현재 `13`이며 엔진과 렌더러를 함께 다시 빌드해야 한다.
+`LUX_ENABLE_FORGE`나 `LUX_RENDER_BACKEND`를 선택할 필요가 없다. 렌더러 파일이 없거나 엔진과 ABI가 맞지 않으면 초기화 오류를 반환한다. ABI 버전은 현재 `16`이며 엔진과 렌더러를 함께 다시 빌드해야 한다.
 
 ## 프레임과 자원 수명
 
@@ -48,7 +48,11 @@ Vulkan에서도 `INIT_RS_DESC`와 `initRootSignature`를 호출해 기본 정적
 
 에디터와 독립 Player, 생성 게임은 모두 동일한 PBR 씬 패스를 사용한다. 방향광 그림자, 불투명 장면 및 스카이박스, 수면 합성, 일반 반투명 재질, 노출 및 톤 매핑의 순서로 렌더링한다. 물이 화면에 없으면 수면 합성 패스가 생기지 않는다.
 
-환경 이미지는 2:1 Radiance HDR을 사용한다. 씬 설정에서 내장 하늘 또는 HDR 이미지를 선택하고 스카이박스 표시와 IBL 반사를 각각 제어할 수 있다. HDR 내부 버퍼의 RGB는 노출을 적용한 뒤 색 공간 변환을 포함한 ACES SDR 근사와 sRGB 인코딩을 거친다. 자세한 재질과 맵 형식은 [재질 문서](Materials.md)에 정리했다.
+환경 이미지는 2:1 Radiance HDR을 사용한다. 씬 설정에서 환경 이미지 경로를 비우면 내장 대기 하늘을 사용한다. 내장 하늘은 구형 대기의 Rayleigh 및 Mie 단일 산란, 오존 흡수, 지표 반사를 계산해 스카이박스와 확산·정반사 IBL에 공급한다. 스카이박스 표시와 IBL은 각각 제어할 수 있다. 기본 대기의 태양 방향은 씬 기본 방향광과 일치하며, 씬 방향광 편집은 직접광에 적용된다. C++에서 `BakeAtmospherePanorama`를 호출하면 태양 방향, 관측 고도, 에어로졸 밀도, 지표 반사율을 설정해 선형 RGB 파노라마를 생성할 수 있다.
+
+HDR 내부 버퍼의 RGB는 노출을 적용한 뒤 색 공간 변환을 포함한 ACES SDR 근사와 sRGB 인코딩을 거친다. 자세한 재질과 맵 형식은 [재질 문서](Materials.md)에 정리했다.
+
+`Mesh3D::UploadOcean`으로 만든 수면은 같은 그래픽 큐에서 행·열 역 FFT와 정점 생성 패스를 실행한다. 정점 버퍼를 수면 패스가 직접 읽으며, 여러 타일이 같은 버퍼를 공유할 수 있다. 사용 예시는 [FFT 바다 예제](../samples/OceanSpectrum/README.md)에 있다.
 
 ## 실행 파일과 SDK 배포
 

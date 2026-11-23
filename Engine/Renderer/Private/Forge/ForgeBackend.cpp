@@ -215,6 +215,7 @@ void ForgeBackend::UpdateFrameStats() {
     frameStats_.pipelineBinds = stats.pipelineBinds;
     frameStats_.descriptorBinds = stats.descriptorBinds;
     frameStats_.uniformBinds = stats.uniformBinds;
+    frameStats_.computeDispatches = stats.computeDispatches;
     frameStats_.vertexBytes = stats.vertexBytes;
 }
 
@@ -450,6 +451,30 @@ bool ForgeBackend::CreateBuffer(BufferType type, uint32 sizeBytes, uint64& handl
     handle = id;
     buffers_.insert(handle);
     return true;
+}
+
+bool ForgeBackend::CreateOceanBuffer(uint32 resolution, std::span<const float> modes,
+                                     float patchLength, float foamThreshold, float foamSoftness,
+                                     uint64& handle) {
+    if (!Usable() || modes.size() != static_cast<size_t>(resolution) * resolution * 8)
+        return false;
+    const auto id = lib_->api->createOceanBuffer(lib_->device, resolution, modes.data(),
+                                                 patchLength, foamThreshold, foamSoftness);
+    if (!id)
+        return ForgeFailure();
+    handle = id;
+    buffers_.insert(handle);
+    return true;
+}
+
+bool ForgeBackend::UpdateOceanBuffer(uint64 handle, float timeSeconds) {
+    if (!Usable())
+        return false;
+    if (!frameOpen_ || !buffers_.count(handle))
+        return Reject("Updating an ocean requires a live mesh and an open frame");
+    return lib_->api->updateOceanBuffer(lib_->device, static_cast<uint32_t>(handle), timeSeconds) !=
+               0 ||
+           ForgeFailure();
 }
 
 bool ForgeBackend::UpdateBuffer(uint64 handle, const void* data, uint32 sizeBytes,

@@ -35,6 +35,8 @@
 #include "Graphics/FSL/fsl_srt.h"
 #include "Graphics/FSL/defaults.h"
 #include "Shaders/Lux2D.srt.h"
+#include "Shaders/LuxOcean.srt.h"
+#include "Shaders/LuxOceanAssemble.srt.h"
 #include "Shaders/LuxScene.srt.h"
 #include "Utilities/Interfaces/IMemory.h"
 // clang-format on
@@ -131,12 +133,28 @@ struct LuxForgeDevice {
         uint64_t bytes = 0;
     };
 
+    struct OceanBuffers {
+        Buffer* seed = nullptr;
+        Buffer* rows = nullptr;
+        Buffer* columns = nullptr;
+        Buffer* constants = nullptr;
+        DescriptorSet* fft = nullptr;
+        DescriptorSet* assemble = nullptr;
+        uint32_t resolution = 0;
+        float patchLength = 0;
+        float foamThreshold = 0;
+        float foamSoftness = 0;
+        uint64_t lastDispatchFrame = 0;
+        float lastTime = 0;
+    };
+
     struct BufferSlot {
         Buffer* buffer = nullptr;
         uint32_t size = 0;
         int type = 0;
         uint64_t lastUsedFrame = 0; // frame number (1-based) of the last frame drawing with it
         bool pendingDelete = false;
+        OceanBuffers* ocean = nullptr;
     };
 
     struct PendingBuffer {
@@ -158,6 +176,10 @@ struct LuxForgeDevice {
     Buffer* lightBuffers[8] = {};
     uint32_t lightBlocksUsed = 0; // in the current frame
     uint32_t currentLight = 0;
+    Shader* oceanFftShader = nullptr;
+    Shader* oceanAssembleShader = nullptr;
+    Pipeline* oceanFftPipeline = nullptr;
+    Pipeline* oceanAssemblePipeline = nullptr;
     std::vector<BufferSlot> buffers = std::vector<BufferSlot>(1); // id 0 unused
     std::vector<uint32_t> freeBufferIds;
     std::vector<PendingBuffer> pendingBuffers;
@@ -496,7 +518,23 @@ void ReleaseTexture(LuxForgeDevice* device, uint32_t id) {
     device->freeTextureIds.push_back(id);
 }
 
-// Frees textures whose last possible use is a frame the GPU has finished.
+void ReleaseBuffer(LuxForgeDevice* device, LuxForgeDevice::BufferSlot& slot) {
+    if (auto* ocean = slot.ocean) {
+        if (ocean->fft)
+            removeDescriptorSet(device->renderer, ocean->fft);
+        if (ocean->assemble)
+            removeDescriptorSet(device->renderer, ocean->assemble);
+        for (auto* buffer : {ocean->seed, ocean->rows, ocean->columns, ocean->constants})
+            if (buffer)
+                removeResource(buffer);
+        delete ocean;
+    }
+    if (slot.buffer)
+        removeResource(slot.buffer);
+    slot = {};
+}
+
+// Frees resources whose last possible use is a frame the GPU has finished.
 void CollectGarbage(LuxForgeDevice* device, bool everything) {
     auto& pending = device->pendingTextures;
     size_t kept = 0;
@@ -511,10 +549,7 @@ void CollectGarbage(LuxForgeDevice* device, bool everything) {
     kept = 0;
     for (size_t i = 0; i < buffers.size(); ++i) {
         if (everything || buffers[i].frame <= device->completedFrames) {
-            auto& slot = device->buffers[buffers[i].id];
-            if (slot.buffer)
-                removeResource(slot.buffer);
-            slot = {};
+            ReleaseBuffer(device, device->buffers[buffers[i].id]);
             device->freeBufferIds.push_back(buffers[i].id);
         } else {
             buffers[kept++] = buffers[i];
@@ -837,12 +872,17 @@ void Shutdown2D(LuxForgeDevice* device) {
             removeResource(frame.uniforms);
         frame = {};
     }
-    for (size_t id = 1; id < device->buffers.size(); ++id)
-        if (device->buffers[id].buffer)
-            removeResource(device->buffers[id].buffer);
+    for (auto& slot : device->buffers)
+        ReleaseBuffer(device, slot);
     device->buffers.assign(1, {});
     device->freeBufferIds.clear();
     device->pendingBuffers.clear();
+    for (auto* pipeline : {device->oceanFftPipeline, device->oceanAssemblePipeline})
+        if (pipeline)
+            removePipeline(device->renderer, pipeline);
+    for (auto* shader : {device->oceanFftShader, device->oceanAssembleShader})
+        if (shader)
+            removeShader(device->renderer, shader);
     for (Buffer*& lights : device->lightBuffers)
         if (lights) {
             removeResource(lights);
@@ -1138,6 +1178,7 @@ int BeginFrame(LuxForgeDevice* device) {
     device->frameStats.pipelineBinds = 0;
     device->frameStats.descriptorBinds = 0;
     device->frameStats.uniformBinds = 0;
+    device->frameStats.computeDispatches = 0;
     device->frameStats.vertexBytes = 0;
 
     uint32_t index = UINT32_MAX;
@@ -1472,8 +1513,13 @@ void Stats(const LuxForgeDevice* device, LuxForgeStats* stats) {
         }
     };
     buffer(device->captureBuffer);
-    for (const auto& slot : device->buffers)
+    for (const auto& slot : device->buffers) {
         buffer(slot.buffer, !slot.pendingDelete);
+        if (const auto* ocean = slot.ocean)
+            for (const auto* resource :
+                 {ocean->seed, ocean->rows, ocean->columns, ocean->constants})
+                buffer(resource, !slot.pendingDelete);
+    }
     for (const auto& frame : device->frames) {
         buffer(frame.uniforms);
         buffer(frame.vertices);
@@ -1496,6 +1542,17 @@ void Stats(const LuxForgeDevice* device, LuxForgeStats* stats) {
 bool IsLiveBuffer(const LuxForgeDevice* device, uint32_t id) {
     return device && id > 0 && id < device->buffers.size() && device->buffers[id].buffer &&
            !device->buffers[id].pendingDelete;
+}
+
+uint32_t TrackBuffer(LuxForgeDevice* device, const LuxForgeDevice::BufferSlot& slot) {
+    if (device->freeBufferIds.empty()) {
+        device->buffers.push_back(slot);
+        return static_cast<uint32_t>(device->buffers.size() - 1);
+    }
+    const uint32_t id = device->freeBufferIds.back();
+    device->freeBufferIds.pop_back();
+    device->buffers[id] = slot;
+    return id;
 }
 
 uint32_t CreateBuffer(LuxForgeDevice* device, int type, uint32_t sizeBytes) {
@@ -1536,20 +1593,218 @@ uint32_t CreateBuffer(LuxForgeDevice* device, int type, uint32_t sizeBytes) {
         device->lastError = "Buffer allocation failed";
         return 0;
     }
-    uint32_t id;
-    if (!device->freeBufferIds.empty()) {
-        id = device->freeBufferIds.back();
-        device->freeBufferIds.pop_back();
-    } else {
-        id = static_cast<uint32_t>(device->buffers.size());
-        device->buffers.emplace_back();
+    return TrackBuffer(device, {buffer, sizeBytes, type});
+}
+
+constexpr uint32_t kOceanUniformStride = 256;
+constexpr uint32_t kOceanPasses = 3;
+constexpr ResourceState kOceanRead = RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+constexpr ResourceState kOceanWrite = RESOURCE_STATE_UNORDERED_ACCESS;
+constexpr ResourceState kOceanVertex = RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+
+struct OceanConstants {
+    uint32_t shape[4];
+    float params[4];
+    float params2[4];
+};
+
+static_assert(sizeof(OceanConstants) == 48);
+static_assert(sizeof(LuxForgeVertex) == 64);
+
+bool InitOceanPipelines(LuxForgeDevice* device) {
+    const auto init = [device](const char* filename, Shader*& shader, Pipeline*& pipeline,
+                               PipelineDesc& desc) {
+        if (pipeline)
+            return true;
+        if (!shader) {
+            ShaderLoadDesc load = {};
+            load.mComp.pFileName = filename;
+            addShader(device->renderer, &load, &shader);
+        }
+        if (!shader)
+            return false;
+        desc.mType = PIPELINE_TYPE_COMPUTE;
+        desc.mComputeDesc.pShaderProgram = shader;
+        addPipeline(device->renderer, &desc, &pipeline);
+        return pipeline != nullptr;
+    };
+    PipelineDesc fft = {}, assemble = {};
+    PIPELINE_LAYOUT_DESC(fft, SRT_LAYOUT_DESC(LuxOceanSrt, Persistent), NULL, NULL, NULL);
+    PIPELINE_LAYOUT_DESC(assemble, SRT_LAYOUT_DESC(LuxOceanAssembleSrt, Persistent), NULL, NULL,
+                         NULL);
+    return init("luxoceanfft.comp", device->oceanFftShader, device->oceanFftPipeline, fft) &&
+           init("luxoceanassemble.comp", device->oceanAssembleShader, device->oceanAssemblePipeline,
+                assemble);
+}
+
+uint32_t CreateOceanBuffer(LuxForgeDevice* device, uint32_t n, const float* modes,
+                           float patchLength, float foamThreshold, float foamSoftness) {
+    if (!device || !device->renderer)
+        return 0;
+    if (!modes || n < 8 || n > 256 || (n & (n - 1)) != 0 || !std::isfinite(patchLength) ||
+        patchLength <= 0 || !std::isfinite(foamThreshold) || !std::isfinite(foamSoftness) ||
+        foamSoftness <= 0)
+        return Fail(device, "Invalid ocean spectrum settings");
+    if (!InitOceanPipelines(device))
+        return Fail(device, "Ocean compute pipelines could not be created");
+
+    LuxForgeDevice::BufferSlot slot = {};
+    slot.ocean = new LuxForgeDevice::OceanBuffers;
+    slot.type = LUX_FORGE_BUFFER_VERTEX;
+    slot.size = (n + 1) * (n + 1) * sizeof(LuxForgeVertex);
+    auto& ocean = *slot.ocean;
+    ocean.resolution = n;
+    ocean.patchLength = patchLength;
+    ocean.foamThreshold = foamThreshold;
+    ocean.foamSoftness = foamSoftness;
+
+    SyncToken seedUpload = {};
+    const auto addBuffer = [&seedUpload](Buffer*& buffer, DescriptorType usage, ResourceState state,
+                                         uint32_t count, uint32_t stride, const char* name,
+                                         const void* initial = nullptr) {
+        BufferLoadDesc load = {};
+        load.ppBuffer = &buffer;
+        load.pData = initial;
+        load.mDesc.mSize = static_cast<uint64_t>(count) * stride;
+        load.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
+        load.mDesc.mDescriptors = usage;
+        load.mDesc.mStartState = state;
+        load.mDesc.mElementCount = count;
+        load.mDesc.mStructStride = stride;
+        load.mDesc.pName = name;
+        addResource(&load, initial ? &seedUpload : nullptr);
+    };
+    constexpr auto scratchUsage =
+        static_cast<DescriptorType>(DESCRIPTOR_TYPE_BUFFER | DESCRIPTOR_TYPE_RW_BUFFER);
+    constexpr auto vertexUsage =
+        static_cast<DescriptorType>(DESCRIPTOR_TYPE_VERTEX_BUFFER | DESCRIPTOR_TYPE_RW_BUFFER_RAW);
+    addBuffer(ocean.seed, DESCRIPTOR_TYPE_BUFFER, kOceanRead, n * n * 4, 8, "LuxOcean seeds",
+              modes);
+    addBuffer(ocean.rows, scratchUsage, kOceanRead, n * n * 2, 8, "LuxOcean rows");
+    addBuffer(ocean.columns, scratchUsage, kOceanRead, n * n * 2, 8, "LuxOcean columns");
+    addBuffer(slot.buffer, vertexUsage, kOceanVertex, slot.size / 4, 4, "LuxOcean vertices");
+    BufferLoadDesc constants = {};
+    constants.ppBuffer = &ocean.constants;
+    constants.mDesc.mSize = device->framesInFlight * kOceanPasses * kOceanUniformStride;
+    constants.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_CPU_TO_GPU;
+    constants.mDesc.mDescriptors = UniformBufferDescriptor;
+    constants.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
+    constants.mDesc.mStartState = kOceanVertex;
+    constants.mDesc.pName = "LuxOcean uniforms";
+    addResource(&constants, nullptr);
+
+    waitForAllResourceLoads();
+    FlushResourceUpdateDesc flush = {};
+    flushResourceUpdates(&flush);
+    if (flush.pOutFence)
+        waitForFences(device->renderer, 1, &flush.pOutFence);
+    if (!ocean.seed || !ocean.rows || !ocean.columns || !slot.buffer || !ocean.constants ||
+        !ocean.constants->pCpuMappedAddress) {
+        ReleaseBuffer(device, slot);
+        return Fail(device, "Ocean compute buffers could not be allocated");
     }
+
+    const DescriptorSetDesc fft =
+        SRT_SET_DESC(LuxOceanSrt, Persistent, device->framesInFlight * 2, 0);
+    const DescriptorSetDesc assemble =
+        SRT_SET_DESC(LuxOceanAssembleSrt, Persistent, device->framesInFlight, 0);
+    addDescriptorSet(device->renderer, &fft, &ocean.fft);
+    addDescriptorSet(device->renderer, &assemble, &ocean.assemble);
+    if (!ocean.fft || !ocean.assemble) {
+        ReleaseBuffer(device, slot);
+        return Fail(device, "Ocean compute descriptor sets could not be allocated");
+    }
+
+    const auto bind = [&](DescriptorSet* set, uint32_t entry, uint32_t uniformIndex, Buffer* input,
+                          Buffer* output, uint32_t uniformBinding, uint32_t inputBinding,
+                          uint32_t outputBinding) {
+        DescriptorDataRange range = {uniformIndex * kOceanUniformStride, sizeof(OceanConstants), 0};
+        DescriptorData data[3] = {};
+        data[0].mIndex = uniformBinding;
+        data[0].ppBuffers = &ocean.constants;
+        data[0].pRanges = &range;
+        data[1].mIndex = inputBinding;
+        data[1].ppBuffers = &input;
+        data[2].mIndex = outputBinding;
+        data[2].ppBuffers = &output;
+        updateDescriptorSet(device->renderer, entry, set, 3, data);
+    };
+    for (uint32_t frame = 0; frame < device->framesInFlight; ++frame) {
+        const auto first = frame * kOceanPasses;
+        bind(ocean.fft, frame * 2, first, ocean.seed, ocean.rows,
+             SRT_RES_IDX(LuxOceanSrt, Persistent, gOcean),
+             SRT_RES_IDX(LuxOceanSrt, Persistent, gInput),
+             SRT_RES_IDX(LuxOceanSrt, Persistent, gOutput));
+        bind(ocean.fft, frame * 2 + 1, first + 1, ocean.rows, ocean.columns,
+             SRT_RES_IDX(LuxOceanSrt, Persistent, gOcean),
+             SRT_RES_IDX(LuxOceanSrt, Persistent, gInput),
+             SRT_RES_IDX(LuxOceanSrt, Persistent, gOutput));
+        bind(ocean.assemble, frame, first + 2, ocean.columns, slot.buffer,
+             SRT_RES_IDX(LuxOceanAssembleSrt, Persistent, gOcean),
+             SRT_RES_IDX(LuxOceanAssembleSrt, Persistent, gInput),
+             SRT_RES_IDX(LuxOceanAssembleSrt, Persistent, gOutput));
+    }
+    return TrackBuffer(device, slot);
+}
+
+int UpdateOceanBuffer(LuxForgeDevice* device, uint32_t id, float time) {
+    if (!IsLiveBuffer(device, id) || !device->frameOpen || !device->buffers[id].ocean ||
+        !std::isfinite(time))
+        return device ? Fail(device, "Ocean update needs a live mesh, open frame and finite time")
+                      : 0;
     auto& slot = device->buffers[id];
-    slot = {};
-    slot.buffer = buffer;
-    slot.size = sizeBytes;
-    slot.type = type;
-    return id;
+    auto& ocean = *slot.ocean;
+    const uint64_t frame = device->frameNumber + 1;
+    if (ocean.lastDispatchFrame && ocean.lastTime == time)
+        return 1;
+    if (ocean.lastDispatchFrame == frame || slot.lastUsedFrame == frame)
+        return Fail(device, "Ocean compute must run once per frame before drawing the mesh");
+
+    const uint32_t n = ocean.resolution;
+    const uint32_t frameSlot = device->frameSlot;
+    auto* uniforms = static_cast<uint8_t*>(ocean.constants->pCpuMappedAddress) +
+                     frameSlot * kOceanPasses * kOceanUniformStride;
+    OceanConstants params = {
+        {n, 1, 0, 0},
+        {ocean.patchLength / n, ocean.patchLength, ocean.foamThreshold, ocean.foamSoftness},
+        {time, 0, 0, 0}};
+    for (uint32_t pass = 0; pass < kOceanPasses; ++pass) {
+        std::memcpy(uniforms + pass * kOceanUniformStride, &params, sizeof(params));
+        params.shape[1] = 0;
+    }
+
+    EndPass(device);
+    Cmd* cmd = device->element.pCmds[0];
+    const auto transition = [cmd](Buffer* buffer, ResourceState before, ResourceState after) {
+        BufferBarrier barrier = {buffer, before, after};
+        cmdResourceBarrier(cmd, 1, &barrier, 0, nullptr, 0, nullptr);
+    };
+    const auto bind = [device, cmd](DescriptorSet* set, uint32_t index) {
+        cmdBindDescriptorSet(cmd, index, set);
+        ++device->frameStats.descriptorBinds;
+        ++device->frameStats.uniformBinds;
+    };
+    // The graphics queue orders all consumers of these buffers, including earlier frames.
+    transition(ocean.rows, kOceanRead, kOceanWrite);
+    cmdBindPipeline(cmd, device->oceanFftPipeline);
+    bind(ocean.fft, frameSlot * 2);
+    cmdDispatch(cmd, n, 2, 1);
+    transition(ocean.rows, kOceanWrite, kOceanRead);
+    transition(ocean.columns, kOceanRead, kOceanWrite);
+    bind(ocean.fft, frameSlot * 2 + 1);
+    cmdDispatch(cmd, n, 2, 1);
+    transition(ocean.columns, kOceanWrite, kOceanRead);
+    transition(slot.buffer, kOceanVertex, kOceanWrite);
+    cmdBindPipeline(cmd, device->oceanAssemblePipeline);
+    bind(ocean.assemble, frameSlot);
+    const uint32_t groups = (n + 8) / 8;
+    cmdDispatch(cmd, groups, groups, 1);
+    transition(slot.buffer, kOceanWrite, kOceanVertex);
+    device->frameStats.pipelineBinds += 2;
+    device->frameStats.computeDispatches += kOceanPasses;
+    ocean.lastDispatchFrame = frame;
+    ocean.lastTime = time;
+    return 1;
 }
 
 int UpdateBuffer(LuxForgeDevice* device, uint32_t id, const void* data, uint32_t sizeBytes,
@@ -1557,6 +1812,8 @@ int UpdateBuffer(LuxForgeDevice* device, uint32_t id, const void* data, uint32_t
     if (!IsLiveBuffer(device, id))
         return device ? Fail(device, "UpdateBuffer on an unknown buffer") : 0;
     auto& slot = device->buffers[id];
+    if (slot.ocean)
+        return Fail(device, "Ocean vertices are generated by compute");
     if (!data || sizeBytes == 0 || static_cast<uint64_t>(offsetBytes) + sizeBytes > slot.size)
         return Fail(device, "UpdateBuffer range is outside the buffer");
     // Frames still reading the buffer must finish before the copy changes it.
@@ -1647,6 +1904,9 @@ int DrawIndexed(LuxForgeDevice* device, uint32_t vertexBuffer, uint32_t indexBuf
         device->buffers[vertexBuffer].type != LUX_FORGE_BUFFER_VERTEX ||
         device->buffers[indexBuffer].type != LUX_FORGE_BUFFER_INDEX)
         return Fail(device, "DrawIndexed needs a live vertex buffer and index buffer");
+    const auto* ocean = device->buffers[vertexBuffer].ocean;
+    if (ocean && !ocean->lastDispatchFrame)
+        return Fail(device, "Ocean vertices have not been generated");
     if (indexCount == 0 || indexCount % 3 != 0 ||
         static_cast<uint64_t>(indexCount) * 4 > device->buffers[indexBuffer].size ||
         !viewProjection || !model || !albedo)
@@ -2259,7 +2519,8 @@ bool SceneDrawUsable(const LuxForgeDevice* device, const LuxForgeSceneDraw& draw
             return false;
     const auto buffer = [device](uint32_t id, int type) -> const LuxForgeDevice::BufferSlot* {
         if (id == 0 || id >= device->buffers.size() || !device->buffers[id].buffer ||
-            device->buffers[id].type != type)
+            device->buffers[id].type != type ||
+            (device->buffers[id].ocean && !device->buffers[id].ocean->lastDispatchFrame))
             return nullptr;
         return &device->buffers[id];
     };
@@ -2731,7 +2992,9 @@ const LuxForgeApi g_Api = {LUX_FORGE_API_VERSION,
                            DrawIndexed,
                            CreateEnvironment,
                            DestroyEnvironment,
-                           RenderScene};
+                           RenderScene,
+                           CreateOceanBuffer,
+                           UpdateOceanBuffer};
 } // namespace
 
 extern "C" LUX_FORGE_EXPORT const LuxForgeApi* LuxForgeGetApi(void) {

@@ -1,6 +1,8 @@
 // GpuDevice running on The Forge backend (LUX_RENDER_BACKEND=forge): frame loop, clear,
 // capture, resize and vsync. Exit code 77 = skipped (no display), 0 = pass.
 #include <LuxEngine/LuxEngine.hpp>
+#include <LuxEngine/Renderer/Water/OceanSpectrum.hpp>
+#include <LuxEngine/Renderer/Water/WaterSurface.hpp>
 // Mesh tests drive the render backend directly (SetLighting/DrawIndexed are reserved for
 // Renderer3D on GpuDevice).
 #include "GpuTestEnvironment.hpp"
@@ -3013,6 +3015,109 @@ void WaterComposite() {
           "the opaque color and depth snapshots introduce no GPU validation errors");
 }
 
+void OceanFft() {
+    Session session(144, 144, {}, true);
+    if (!session.ok)
+        return Check(false, "session for GPU ocean");
+
+    OceanSpectrumSettings spectrumSettings;
+    constexpr uint32 n = 16, stride = n + 1;
+    spectrumSettings.resolution = n;
+    spectrumSettings.patchLength = 20;
+    spectrumSettings.spectrumAmplitude = .025;
+    spectrumSettings.choppiness = 1.6;
+    spectrumSettings.foamThreshold = .97;
+    OceanSpectrum spectrum;
+    Mesh3D gpuMesh, cpuMesh;
+    if (!spectrum.Initialize(spectrumSettings) || !gpuMesh.UploadOcean(&session.gpu, spectrum))
+        return Check(false, "GPU ocean spectrum upload");
+    Check(!gpuMesh.UpdateOcean(0), "GPU ocean requires an open frame");
+
+    std::vector<uint32> indices;
+    for (uint32 z = 0; z < n; ++z)
+        for (uint32 x = 0; x < n; ++x) {
+            const uint32 a = z * stride + x, b = a + stride;
+            indices.insert(indices.end(), {a, b, a + 1, a + 1, b, b + 1});
+        }
+    std::array<Vertex3D, stride * stride> vertices;
+    const auto sampleCpu = [&](float time) {
+        if (!spectrum.Update(time))
+            return false;
+        const auto grid = spectrum.Grid();
+        for (uint32 z = 0; z <= n; ++z)
+            for (uint32 x = 0; x <= n; ++x) {
+                const auto& sample = grid[(z % n) * n + (x % n)];
+                const double u = static_cast<double>(x) / n;
+                const double v = static_cast<double>(z) / n;
+                const Vec3 base{(u - .5) * spectrumSettings.patchLength, 0,
+                                (v - .5) * spectrumSettings.patchLength};
+                vertices[z * stride + x] = {base + sample.displacement,
+                                            sample.normal,
+                                            {u, v},
+                                            {1, 1, 1, static_cast<float>(1 - sample.foam)}};
+            }
+        return cpuMesh.Upload(&session.gpu, vertices, indices);
+    };
+
+    Renderer3D::Context context(&session.gpu);
+    Render3DSettings settings;
+    settings.imageBasedLighting = false;
+    settings.shadows = false;
+    settings.environmentColor = {.35, .35, .35};
+    settings.sun.direction = {-.5, -1, -.25};
+    PerspectiveCamera camera(ToRadians(55), 1, .1, 80);
+    camera.SetPosition({8, 10, 13});
+    camera.SetTarget({0, 0, 0});
+    const auto material = WaterSurface::MakeMaterial();
+    const auto capture = [&](GpuFrameCapture& frame, Mesh3D& mesh, float time, bool compute) {
+        return CaptureFrame(session, frame, [&] {
+            if ((compute && !mesh.UpdateOcean(time)) || !session.gpu.Clear(.04f, .05f, .07f, 1))
+                return false;
+            context.BeginScene(camera, settings, 1);
+            Material3D bottom;
+            bottom.albedoColor = {.1f, .18f, .28f, 1};
+            context.DrawCube({0, -3, 0}, {30, 1, 30}, bottom);
+            context.DrawMesh(mesh, Mat4::Identity(), material);
+            context.EndScene();
+            return context.GetStats().meshCount == 2;
+        });
+    };
+
+    const auto differentPixels = [](const GpuFrameCapture& a, const GpuFrameCapture& b) {
+        size_t different = 0;
+        for (size_t pixel = 0; pixel < a.rgba.size(); pixel += 4)
+            if (std::abs(a.rgba[pixel] - b.rgba[pixel]) > 3 ||
+                std::abs(a.rgba[pixel + 1] - b.rgba[pixel + 1]) > 3 ||
+                std::abs(a.rgba[pixel + 2] - b.rgba[pixel + 2]) > 3)
+                ++different;
+        return different;
+    };
+    GpuFrameCapture previousGpu;
+    for (float time : {.375f, 1.75f}) {
+        GpuFrameCapture cpu, gpu;
+        if (!sampleCpu(time) || !capture(cpu, cpuMesh, time, false) ||
+            !capture(gpu, gpuMesh, time, true) || cpu.rgba.size() != gpu.rgba.size() ||
+            cpu.rgba.empty() ||
+            (!previousGpu.rgba.empty() && previousGpu.rgba.size() != gpu.rgba.size())) {
+            std::printf("  %s / %s\n", session.gpu.GetLastError().c_str(),
+                        context.GetLastAssetError().c_str());
+            return Check(false, "CPU and GPU ocean frames render and capture");
+        }
+        Check(session.gpu.GetFrameStats().computeDispatches == 3,
+              "GPU dispatches both FFT axes and vertex assembly");
+        const auto pixels = gpu.rgba.size() / 4;
+        const auto differences = differentPixels(cpu, gpu);
+        std::printf("  FFT %.3f: %zu of %zu pixels differ by more than 3 levels\n", time,
+                    differences, pixels);
+        Check(differences * 100 < pixels, "GPU displacement, normals and foam match CPU render");
+        if (!previousGpu.rgba.empty())
+            Check(differentPixels(previousGpu, gpu) * 20 > pixels,
+                  "GPU ocean changes between simulation times");
+        previousGpu = std::move(gpu);
+    }
+    Check(session.gpu.GetCounters().validationErrors == 0, "GPU ocean barriers validate");
+}
+
 void LargeMipTexture() {
     Session session(96, 96);
     if (!session.ok)
@@ -3099,6 +3204,7 @@ int main(int argc, char** argv) {
     run("scene3d", Scene3D);
     run("scene_submission", SceneSubmission);
     run("water_composite", WaterComposite);
+    run("ocean_fft", OceanFft);
     run("materials", MaterialModes);
     run("material_textures", MaterialTextures);
     run("large_mips", LargeMipTexture);

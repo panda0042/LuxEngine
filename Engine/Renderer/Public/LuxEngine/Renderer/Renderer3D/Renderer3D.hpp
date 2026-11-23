@@ -91,6 +91,8 @@ private:
     Vec3 up_{0.0f, 1.0f, 0.0f};
 };
 
+class OceanSpectrum;
+
 class LUX_API Mesh3D {
 public:
     bool Upload(GpuDevice* device, std::span<const Vec3> positions,
@@ -98,6 +100,11 @@ public:
     bool Upload(GpuDevice* device, std::span<const Vertex3D> vertices,
                 std::span<const uint32> indices);
     bool UpdateVertices(std::span<const Vertex3D> vertices);
+    // Creates a periodic patch centered on the mesh origin. Use WaterSurface::MakeMaterial
+    // to shade the surface with the foam computed by the GPU.
+    bool UploadOcean(GpuDevice* device, const OceanSpectrum& spectrum);
+    // Records the GPU transform inside an open frame, before any draw that uses this mesh.
+    bool UpdateOcean(float timeSeconds);
     void Release();
     bool IsValid() const;
 
@@ -108,6 +115,7 @@ private:
     GpuBuffer vertices_;
     GpuBuffer indices_;
     uint32 indexCount_ = 0;
+    bool ocean_ = false;
     Vec3 origin_;
     Vec3 minimum_, maximum_;
 };

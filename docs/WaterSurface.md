@@ -37,4 +37,4 @@ Forge는 물이 보이는 프레임에서 불투명 씬의 색과 깊이를 수�
 
 Rainy Creek 샘플은 `SampleRainyCreek --preset day`로 시작할 수 있다. H로 물을 끄고 켜면서 HDRI 하늘과 물 반사를 비교할 수 있다. `RainyCreek_geometry`는 인덱스, 법선, 시간 주기, 메시와 수위 조회의 일치를 검사한다.
 
-바다 예제는 [OceanSpectrum](../samples/OceanSpectrum/README.md)에서 실행할 수 있다. 현재 CPU 역 FFT로 계산한 주기 수면과 Jolt 부표를 그린다.
+바다 예제는 주기 수면을 Forge GPU 역 FFT로 생성하고 야코비안으로 파도 마루의 거품을 계산한다. Jolt 부표는 같은 스펙트럼과 시각을 CPU에서 평가해 수면 높이와 유속을 얻는다. [OceanSpectrum 예제](../samples/OceanSpectrum/README.md)

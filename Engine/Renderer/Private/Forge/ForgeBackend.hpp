@@ -49,6 +49,9 @@ public:
     bool ReadFrameCapture(GpuFrameCapture& capture) override;
 
     bool CreateBuffer(BufferType type, uint32 sizeBytes, uint64& handle) override;
+    bool CreateOceanBuffer(uint32 resolution, std::span<const float> modes, float patchLength,
+                           float foamThreshold, float foamSoftness, uint64& handle) override;
+    bool UpdateOceanBuffer(uint64 handle, float timeSeconds) override;
     bool UpdateBuffer(uint64 handle, const void* data, uint32 sizeBytes,
                       uint32 offsetBytes) override;
     void DestroyBuffer(uint64 handle) override;

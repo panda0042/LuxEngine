@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 15u
+#define LUX_FORGE_API_VERSION 16u
 
 #if defined(_WIN32)
 #if defined(LUX_FORGE_BUILD)
@@ -84,6 +84,7 @@ typedef struct LuxForgeStats {
     uint32_t liveBuffers;
     uint32_t validationErrors;
     uint32_t validationWarnings;
+    uint32_t computeDispatches;
 } LuxForgeStats;
 
 typedef struct LuxForgePointLight {
@@ -222,6 +223,10 @@ typedef struct LuxForgeApi {
     // reference dead resources are skipped; *drawn (optional) receives the number rendered.
     int (*renderScene)(LuxForgeDevice* device, const LuxForgeScene* scene,
                        const LuxForgeSceneDraw* draws, uint32_t drawCount, uint32_t* drawn);
+    // A compute-generated vertex buffer. modes holds eight floats per grid point.
+    uint32_t (*createOceanBuffer)(LuxForgeDevice* device, uint32_t resolution, const float* modes,
+                                  float patchLength, float foamThreshold, float foamSoftness);
+    int (*updateOceanBuffer)(LuxForgeDevice* device, uint32_t buffer, float timeSeconds);
 } LuxForgeApi;
 
 typedef const LuxForgeApi* (*LuxForgeGetApiFn)(void);
