@@ -64,6 +64,23 @@ private:
             case LuxKey::G:
                 settings_.rayTracing.indirectDiffuse = !settings_.rayTracing.indirectDiffuse;
                 break;
+            case LuxKey::D:
+                settings_.rayTracing.restirDirect = !settings_.rayTracing.restirDirect;
+                break;
+            case LuxKey::I:
+                settings_.rayTracing.restirIndirect = !settings_.rayTracing.restirIndirect;
+                if (settings_.rayTracing.restirIndirect)
+                    settings_.radianceCascades.strength = 0;
+                break;
+            case LuxKey::C:
+                settings_.radianceCascades = {settings_.radianceCascades.strength > 0 ? 0.f : .8f,
+                                              5.5f};
+                if (settings_.radianceCascades.strength > 0)
+                    settings_.rayTracing.restirIndirect = false;
+                break;
+            case LuxKey::V:
+                settings_.virtualShadows = !settings_.virtualShadows;
+                break;
             case LuxKey::F:
                 settings_.fog.density = settings_.fog.density > 0 ? 0.f : .055f;
                 break;
@@ -85,7 +102,9 @@ private:
         camera.SetPosition({8.4, 5.4, 11});
         camera.SetTarget({0, .8, .6});
         GetGpuDevice().Clear(.04f, .07f, .11f, 1);
-        renderer_.BeginScene(camera, settings_, 1);
+        const std::array lights{PointLight{{-4, 2.8, .1}, {1, .48, .19}, 5, 7},
+                                PointLight{{3, 2.9, 2.5}, {.16, .53, 1}, 4, 6}};
+        renderer_.BeginScene(camera, settings_, 1, lights);
 
         const auto floor = Opaque({.20f, .25f, .28f, 1}, .2f, .25f);
         renderer_.DrawCube({0, -.93, 0}, {26, .3, 24}, floor);
@@ -135,6 +154,7 @@ int Run(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
         std::cout << "SampleRayTracing [--smoke-test]\n"
                      "R: ray shadows/reflection/refraction. G: indirect light.\n"
+                     "D: ReSTIR DI. I: ReSTIR GI. C: radiance cascades. V: virtual shadows.\n"
                      "F: froxel fog. T: ray-traced fog shadows. Escape: quit.\n";
         return 0;
     }

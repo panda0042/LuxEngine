@@ -6,6 +6,7 @@
 #include "LuxFogCompute.srt.h"
 #endif
 #include "LuxFogSampling.h"
+#include "LuxVirtualShadow.h"
 
 float FogShadow(float3 position) {
 #if defined(LUX_FOG_RAY)
@@ -21,8 +22,12 @@ float FogShadow(float3 position) {
     if (uv.x < 0.0f || uv.x >= 1.0f || uv.y < 0.0f || uv.y >= 1.0f ||
         ndc.z < 0.0f || ndc.z > 1.0f)
         return 1.0f;
-    const float resolution = round(1.0f / gFog.shadowOptions.y);
-    const float nearest = LoadTex2D(gFogShadow, NO_SAMPLER, int2(uv * resolution), 0).r;
+    const int resolution = int(round(1.0f / gFog.shadowOptions.y));
+    const int2 virtualPixel = min(int2(uv * float(resolution)), int2(resolution - 1, resolution - 1));
+    const int2 atlasPixel = ShadowAtlasPixel(virtualPixel, gFog.virtualShadowPages);
+    if (atlasPixel.x < 0)
+        return 1.0f;
+    const float nearest = LoadTex2D(gFogShadow, NO_SAMPLER, atlasPixel, 0).r;
     return ndc.z - gFog.shadowOptions.z <= nearest ? 1.0f : 0.0f;
 #endif
 }

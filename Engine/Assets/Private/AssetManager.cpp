@@ -63,7 +63,8 @@ uint64 TextureVersion(const std::string& key) {
 }
 
 constexpr uint64 MaxTextureFileSizeBytes =
-    64ull * 1024ull * 1024ull;            // 64 MiB max compressed texture file
+    64ull * 1024ull * 1024ull; // 64 MiB max compressed texture file
+constexpr uint64 MaxJpegTextureFileBytes = 128ull << 20;
 constexpr int MaxTextureDimension = 8192; // 8192 x 8192 max 2D texture width/height
 constexpr uint64 MaxDecodedTextureBytes =
     256ull * 1024ull * 1024ull; // 256 MiB max uncompressed pixel memory
@@ -107,7 +108,7 @@ bool ReadTextureFile(const std::string& filepath, std::vector<uint8>& data) {
         const auto file = Path(filepath);
         std::error_code ec;
         const auto size = std::filesystem::file_size(file, ec);
-        if (ec || size == 0 || size > MaxTextureFileSizeBytes)
+        if (ec || size == 0 || size > MaxJpegTextureFileBytes)
             return false;
         const auto time = std::filesystem::last_write_time(file, ec);
         if (ec)
@@ -115,6 +116,15 @@ bool ReadTextureFile(const std::string& filepath, std::vector<uint8>& data) {
         std::ifstream input(file, std::ios::binary);
         if (!input)
             return false;
+        if (size > MaxTextureFileSizeBytes) {
+            // High-quality 8K JPEGs can exceed the ordinary encoded-file allowance.
+            // Check the signature before allocating and keep the decoded RGBA8 bounds.
+            unsigned char signature[3] = {};
+            if (!input.read(reinterpret_cast<char*>(signature), sizeof(signature)) ||
+                signature[0] != 0xff || signature[1] != 0xd8 || signature[2] != 0xff ||
+                !input.seekg(0))
+                return false;
+        }
         data.resize(static_cast<size_t>(size));
         if (!input.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size)) ||
             input.peek() != std::char_traits<char>::eof() ||

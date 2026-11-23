@@ -1,7 +1,10 @@
 #include <LuxEngine/Environment/Atmosphere.hpp>
 #include <LuxEngine/Environment/EnvironmentMap.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <numbers>
 #include <stdexcept>
@@ -26,6 +29,40 @@ Vec3 PanoramaSample(const AtmospherePanorama& image, Vec3 direction) {
 
 double Brightness(Vec3 color) {
     return color.Dot({.2126, .7152, .0722});
+}
+
+void Check8KEnvironment() {
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+
+    struct TemporaryFile {
+        std::filesystem::path path;
+
+        ~TemporaryFile() {
+            std::error_code ignored;
+            std::filesystem::remove(path, ignored);
+        }
+    } fixture{std::filesystem::temp_directory_path() /
+              ("lux-atmosphere-" + std::to_string(stamp) + ".hdr")};
+
+    constexpr int Width = 8192, Height = Width / 2;
+    {
+        std::ofstream output(fixture.path, std::ios::binary);
+        output << "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y " << Height << " +X " << Width << '\n';
+        std::vector<unsigned char> row{2, 2, Width >> 8, Width & 255};
+        for (unsigned char channel : {128, 64, 32, 129})
+            for (int remaining = Width; remaining > 0; remaining -= 127) {
+                row.push_back(static_cast<unsigned char>(128 + std::min(remaining, 127)));
+                row.push_back(channel);
+            }
+        for (int y = 0; y < Height; ++y)
+            output.write(reinterpret_cast<const char*>(row.data()), row.size());
+        Check(output.good(), "8K HDR fixture writes");
+    }
+    const auto bytes = fixture.path.u8string();
+    const std::string path(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    std::string error;
+    if (!EnvironmentData::ValidateFile(path, error))
+        throw std::runtime_error(error);
 }
 } // namespace
 
@@ -68,6 +105,7 @@ int main() {
                   cube.pixels[center + 2] > cube.pixels[center] &&
                   environment->diffuse.layers == 6 && environment->specular.levels == 8,
               "built-in cubemap and environment lighting use the baked atmosphere");
+        Check8KEnvironment();
         std::cout << "Atmosphere and built-in IBL passed. Zenith radiance " << zenith.x << ' '
                   << zenith.y << ' ' << zenith.z << ", IBL preparation "
                   << environment->preparationMs << " ms\n";

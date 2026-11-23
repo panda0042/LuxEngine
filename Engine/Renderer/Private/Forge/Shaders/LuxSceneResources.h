@@ -2,6 +2,7 @@
 #define LUX_SCENE_RESOURCES_H
 
 #include "LuxStructs.h"
+#include "LuxVirtualShadow.h"
 #ifdef LUX_RAY_QUERY
 #include "fsl_ext.h"
 #include "LuxRayScene.srt.h"
@@ -81,12 +82,16 @@ float DirectionalShadow(float3 world, float3 normal) {
     float visibility = 0.0f;
     UNROLL for (int y = -1; y <= 1; ++y) {
         UNROLL for (int x = -1; x <= 1; ++x) {
-            const int2 pixel =
+            const int2 virtualPixel =
                 clamp(center + int2(x, y), int2(0, 0), int2(resolution - 1, resolution - 1));
-            visibility +=
-                p.z - gScene.shadowOptions.z <= LoadTex2D(gShadowMap, NO_SAMPLER, pixel, 0).r
-                    ? 1.0f
-                    : 0.0f;
+            const int2 atlasPixel = ShadowAtlasPixel(virtualPixel, gScene.virtualShadowPages);
+            if (atlasPixel.x < 0)
+                visibility += 1.0f;
+            else
+                visibility += p.z - gScene.shadowOptions.z <=
+                                      LoadTex2D(gShadowMap, NO_SAMPLER, atlasPixel, 0).r
+                                  ? 1.0f
+                                  : 0.0f;
         }
     }
     return visibility / 9.0f;

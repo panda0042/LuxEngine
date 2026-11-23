@@ -23,9 +23,12 @@ struct RayTracingSettings {
     uint32 maxBounces = 2;
     float maxDistance = 100.0f;
     float indirectStrength = .35f;
+    bool restirDirect = false;
+    bool restirIndirect = false;
 
     bool Enabled() const {
-        return shadows || reflections || refractions || indirectDiffuse;
+        return shadows || reflections || refractions || indirectDiffuse || restirDirect ||
+               restirIndirect;
     }
 };
 
@@ -37,6 +40,18 @@ struct VolumetricFogSettings {
     double baseHeight = 0;
     float anisotropy = .2f;
     bool rayTracedShadows = false;
+};
+
+struct WaterReflectionSettings {
+    std::string environmentPath;
+    float rotation = 0; // Degrees about the vertical axis.
+    float intensity = 1;
+    uint32 faceSize = 128; // Pixels per reflection cube face, either 128, 256 or 512.
+};
+
+struct RadianceCascadeSettings {
+    float strength = 0; // Zero disables the cascades.
+    float spacing = 2;  // Finest probe spacing, in world units.
 };
 
 struct Render3DSettings {
@@ -56,6 +71,9 @@ struct Render3DSettings {
     float shadowNormalBias = .02f;
     RayTracingSettings rayTracing;
     VolumetricFogSettings fog;
+    bool virtualShadows = false;
+    WaterReflectionSettings waterReflection;
+    RadianceCascadeSettings radianceCascades;
 };
 
 LUX_API bool ValidateRender3DSettings(const Render3DSettings& settings);

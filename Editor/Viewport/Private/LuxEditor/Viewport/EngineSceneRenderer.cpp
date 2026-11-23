@@ -497,8 +497,10 @@ bool EngineSceneRenderer::RenderGame(LuxEngine::Scene& scene, int pixelWidth, in
     try {
         if (camera.perspective) {
             auto settings = scene.GetSettings().render3D;
-            if (!settings.environmentPath.empty())
-                settings.environmentPath = scene.ResolveAssetPath(settings.environmentPath);
+            for (auto* path :
+                 {&settings.environmentPath, &settings.waterReflection.environmentPath})
+                if (!path->empty())
+                    *path = scene.ResolveAssetPath(*path);
             LuxEngine::Renderer3D::BeginScene(camera.camera3D, settings,
                                               scene.GetSettings().exposure);
             scene.OnRender3D();
@@ -577,8 +579,10 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
         renderSettings.showSkybox = renderSettings.showSkybox && drawSkybox;
         if (backgroundOnly)
             renderSettings.shadows = false;
-        if (!renderSettings.environmentPath.empty())
-            renderSettings.environmentPath = scene.ResolveAssetPath(renderSettings.environmentPath);
+        for (auto* path :
+             {&renderSettings.environmentPath, &renderSettings.waterReflection.environmentPath})
+            if (!path->empty())
+                *path = scene.ResolveAssetPath(*path);
         LuxEngine::Renderer3D::BeginScene(camera, renderSettings, scene.GetSettings().exposure);
         for (LuxEngine::Entity entity : scene.GetEntities()) {
             if (backgroundOnly)

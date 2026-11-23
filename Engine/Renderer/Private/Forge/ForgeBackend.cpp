@@ -221,6 +221,10 @@ void ForgeBackend::UpdateFrameStats() {
     frameStats_.accelerationStructureBuilds = stats.accelerationStructureBuilds;
     frameStats_.volumetricFogPasses = stats.volumetricFogPasses;
     frameStats_.rayVolumetricFogPasses = stats.rayVolumetricFogPasses;
+    frameStats_.waterReflectionPasses = stats.waterReflectionPasses;
+    frameStats_.restirPasses = stats.restirPasses;
+    frameStats_.radianceCascadePasses = stats.radianceCascadePasses;
+    frameStats_.virtualShadowPages = stats.virtualShadowPages;
     frameStats_.vertexBytes = stats.vertexBytes;
 }
 
@@ -537,6 +541,20 @@ struct EnvironmentJob {
     std::shared_ptr<EnvironmentData> data;
 };
 
+struct SceneEnvironment {
+    bool Matches(const std::string& path) const {
+        return handle != 0 && activePath == path;
+    }
+
+    uint32 handle = 0;
+    std::shared_ptr<EnvironmentJob> job;
+    std::string requestedPath, activePath, error;
+    uint64 requestedRevision = UINT64_MAX, activeRevision = UINT64_MAX;
+    uint32 requestedFaceSize = 0;
+    bool attempted = false;
+    double preparationMs = 0;
+};
+
 LuxForgeEnvironmentImage ToForge(const EnvironmentImage& image) {
     return {image.size, image.levels, image.layers, image.pixels.data(),
             static_cast<uint64_t>(image.pixels.size())};
@@ -556,7 +574,8 @@ public:
 
     ~ForgeScene3DRenderer() override {
         if (auto lib = Library()) {
-            lib->api->destroyEnvironment(lib->device, environment_);
+            lib->api->destroyEnvironment(lib->device, environment_.handle);
+            lib->api->destroyEnvironment(lib->device, waterEnvironment_.handle);
             lib->api->destroyEnvironment(lib->device, neutral_);
         }
     }
@@ -590,6 +609,7 @@ public:
         d.occlusionStrength = draw.occlusionStrength;
         d.sampling = draw.sampling;
         d.shadowOnly = draw.shadowOnly ? 1 : 0;
+        d.shadowPageMask = draw.shadowPageMask;
         Copy4(d.water, draw.water);
         draws_.push_back(d);
         models_.push_back(draw.model);
@@ -606,12 +626,12 @@ public:
     }
 
     bool EnvironmentReady() const override {
-        return ready_ && activePath_ == attemptedPath_ && activeRevision_ == attemptedRevision_ &&
-               !job_;
+        return environment_.Matches(environment_.requestedPath) &&
+               environment_.activeRevision == environment_.requestedRevision && !environment_.job;
     }
 
     double EnvironmentPreparationMs() const override {
-        return preparationMs_;
+        return environment_.preparationMs;
     }
 
     bool Render(const PerspectiveCamera& camera, const Render3DSettings& settings, float exposure,
@@ -637,8 +657,12 @@ public:
             error = std::string("3D scene environment failed: ") + api.lastError(lib->device);
             return Fallback(origin, viewProjection, exposure);
         }
-        PollEnvironment(*lib, settings);
-        const bool active = ready_ && activePath_ == settings.environmentPath;
+        PollEnvironment(*lib, environment_, settings.environmentPath,
+                        settings.imageBasedLighting || settings.showSkybox);
+        const bool active = environment_.Matches(settings.environmentPath);
+        const auto& water = settings.waterReflection;
+        if (!water.environmentPath.empty())
+            PollEnvironment(*lib, waterEnvironment_, water.environmentPath, true, water.faceSize);
 
         LuxForgeScene scene = {};
         CopyMatrix(scene.viewProjection, viewProjection);
@@ -670,10 +694,16 @@ public:
             scene.shadowOptions[3] = settings.shadowNormalBias;
             scene.shadowResolution = settings.shadowResolution;
         }
-        scene.environmentMap = active ? environment_ : neutral_;
+        scene.environmentMap = active ? environment_.handle : neutral_;
+        if (!water.environmentPath.empty() && waterEnvironment_.Matches(water.environmentPath)) {
+            scene.waterEnvironmentMap = waterEnvironment_.handle;
+            Copy4(scene.waterReflection,
+                  {1, water.rotation * std::numbers::pi_v<float> / 180, water.intensity, 0});
+        }
         const auto& rays = settings.rayTracing;
         const unsigned effects = (rays.shadows ? 1u : 0u) | (rays.reflections ? 2u : 0u) |
-                                 (rays.refractions ? 4u : 0u) | (rays.indirectDiffuse ? 8u : 0u);
+                                 (rays.refractions ? 4u : 0u) | (rays.indirectDiffuse ? 8u : 0u) |
+                                 (rays.restirDirect ? 16u : 0u) | (rays.restirIndirect ? 32u : 0u);
         Copy4(scene.rayOptions, {static_cast<float>(effects), rays.maxDistance,
                                  static_cast<float>(rays.maxBounces), rays.indirectStrength});
         const auto& fog = settings.fog;
@@ -685,6 +715,16 @@ public:
                static_cast<float>(std::clamp(origin.y - fog.baseHeight, -1e6, 1e6)),
                fog.anisotropy});
         scene.rayTracedFog = fog.rayTracedShadows;
+        scene.virtualShadows = settings.shadows && settings.virtualShadows;
+        const auto& cascades = settings.radianceCascades;
+        scene.cascadeOptions[0] = cascades.strength;
+        scene.cascadeOptions[1] = cascades.spacing;
+        if (cascades.strength > 0) {
+            Copy4(scene.cascadeOrigin,
+                  {static_cast<float>(-std::remainder(origin.x, cascades.spacing)),
+                   static_cast<float>(-std::remainder(origin.y, cascades.spacing)),
+                   static_cast<float>(-std::remainder(origin.z, cascades.spacing)), 0});
+        }
 
         uint32_t drawn = 0;
         if (!api.renderScene(lib->device, &scene, draws_.data(),
@@ -701,8 +741,11 @@ public:
         backend_->UpdateFrameStats();
         if (drawn < draws_.size())
             error = "3D object budget reached; excess objects skipped";
-        if (!environmentError_.empty())
-            error += (error.empty() ? "" : "; ") + environmentError_;
+        for (const auto& environmentError :
+             {environment_.error,
+              water.environmentPath.empty() ? std::string{} : waterEnvironment_.error})
+            if (!environmentError.empty())
+                error += (error.empty() ? "" : "; ") + environmentError;
         return true;
     }
 
@@ -718,61 +761,66 @@ private:
         return lib.api->createEnvironment(lib.device, images);
     }
 
-    void PollEnvironment(ForgeLibrary& lib, const Render3DSettings& settings) {
-        const auto revision = EnvironmentData::Revision(settings.environmentPath);
-        if (job_) {
-            std::shared_ptr<EnvironmentData> data;
+    void PollEnvironment(ForgeLibrary& lib, SceneEnvironment& state, const std::string& path,
+                         bool enabled, uint32 faceSize = 0) {
+        const auto revision = EnvironmentData::Revision(path);
+        const auto label = faceSize ? "Water reflection environment" : "Environment";
+        if (state.job) {
+            std::shared_ptr<EnvironmentData> prepared;
             bool done;
             {
-                std::lock_guard lock(job_->mutex);
-                done = job_->done;
+                std::lock_guard lock(state.job->mutex);
+                done = state.job->done;
                 if (done)
-                    data = job_->data;
+                    prepared = state.job->data;
             }
             if (done) {
-                job_.reset();
-                if (requestedPath_ == settings.environmentPath && requestedRevision_ == revision) {
-                    if (!data)
-                        environmentError_ = "Environment preparation failed";
-                    else if (!data->error.empty())
-                        environmentError_ = data->error;
-                    else if (const uint32_t uploaded = Upload(lib, *data)) {
-                        lib.api->destroyEnvironment(lib.device, environment_);
-                        environment_ = uploaded;
-                        activePath_ = requestedPath_;
-                        activeRevision_ = requestedRevision_;
-                        ready_ = true;
-                        preparationMs_ = data->preparationMs;
-                        environmentError_.clear();
+                state.job.reset();
+                if (enabled && state.requestedPath == path && state.requestedRevision == revision &&
+                    state.requestedFaceSize == faceSize) {
+                    if (!prepared)
+                        state.error = std::string(label) + " preparation failed";
+                    else if (!prepared->error.empty())
+                        state.error = std::string(label) + ": " + prepared->error;
+                    else if (const uint32_t uploaded = Upload(lib, *prepared)) {
+                        lib.api->destroyEnvironment(lib.device, state.handle);
+                        state.handle = uploaded;
+                        state.activePath = path;
+                        state.activeRevision = revision;
+                        state.preparationMs = prepared->preparationMs;
+                        state.error.clear();
                     } else
-                        environmentError_ = std::string("Environment upload failed: ") +
-                                            lib.api->lastError(lib.device);
-                }
+                        state.error = std::string(label) +
+                                      " upload failed: " + lib.api->lastError(lib.device);
+                } else
+                    state.attempted = false;
             }
         }
-        if ((settings.imageBasedLighting || settings.showSkybox) && !job_ &&
-            (!hasAttempt_ || attemptedPath_ != settings.environmentPath ||
-             attemptedRevision_ != revision)) {
-            requestedPath_ = attemptedPath_ = settings.environmentPath;
-            requestedRevision_ = attemptedRevision_ = revision;
-            hasAttempt_ = true;
-            try {
-                auto job = std::make_shared<EnvironmentJob>();
-                std::thread([job, path = requestedPath_] {
-                    std::shared_ptr<EnvironmentData> prepared;
-                    try {
-                        prepared = EnvironmentData::Prepare(path);
-                    } catch (...) {
-                    }
-                    std::lock_guard lock(job->mutex);
-                    job->data = std::move(prepared);
-                    job->done = true;
-                }).detach();
-                job_ = std::move(job);
-            } catch (const std::exception& e) {
-                environmentError_ =
-                    std::string("Environment preparation could not start: ") + e.what();
-            }
+        if (!enabled || state.job ||
+            (state.attempted && state.requestedPath == path &&
+             state.requestedRevision == revision && state.requestedFaceSize == faceSize))
+            return;
+        state.requestedPath = path;
+        state.requestedRevision = revision;
+        state.requestedFaceSize = faceSize;
+        state.attempted = true;
+        state.error.clear();
+        try {
+            auto job = std::make_shared<EnvironmentJob>();
+            std::thread([job, path, faceSize] {
+                std::shared_ptr<EnvironmentData> prepared;
+                try {
+                    prepared = faceSize ? EnvironmentData::PrepareReflection(path, faceSize)
+                                        : EnvironmentData::Prepare(path);
+                } catch (...) {
+                }
+                std::lock_guard lock(job->mutex);
+                job->data = std::move(prepared);
+                job->done = true;
+            }).detach();
+            state.job = std::move(job);
+        } catch (const std::exception& e) {
+            state.error = std::string(label) + " preparation could not start: " + e.what();
         }
     }
 
@@ -797,14 +845,9 @@ private:
     std::weak_ptr<ForgeLibrary> library_;
     std::vector<LuxForgeSceneDraw> draws_;
     std::vector<Mat4> models_;
-    uint32_t environment_ = 0, neutral_ = 0;
-    std::shared_ptr<EnvironmentJob> job_;
-    std::string requestedPath_, attemptedPath_, activePath_;
-    uint64 requestedRevision_ = UINT64_MAX, attemptedRevision_ = UINT64_MAX,
-           activeRevision_ = UINT64_MAX;
-    bool hasAttempt_ = false, ready_ = false;
-    double preparationMs_ = 0;
-    std::string environmentError_;
+    uint32_t neutral_ = 0;
+    SceneEnvironment environment_;
+    SceneEnvironment waterEnvironment_;
 };
 
 std::unique_ptr<Rhi::Scene3DRenderer> ForgeBackend::CreateScene3DRenderer() {

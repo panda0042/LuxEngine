@@ -19,6 +19,8 @@ constexpr uint32 SpecularLevels = 8;
 constexpr uint32 EnvironmentSamples = 64;
 constexpr uint32 BrdfSize = 128;
 constexpr uint32 BrdfSamples = 128;
+constexpr int MaxPanoramaWidth = 8192;
+constexpr uint64 MaxEnvironmentFileBytes = 128ull << 20;
 std::mutex revisionsMutex;
 std::unordered_map<std::string, uint64> revisions;
 uint64 nextRevision = 1;
@@ -169,24 +171,25 @@ bool Decode(const std::string& path, int& width, int& height, HdrPixels& pixels,
             throw std::runtime_error("Environment must be a Radiance .hdr image");
         const auto size = std::filesystem::file_size(file);
         const auto time = std::filesystem::last_write_time(file);
-        if (!size || size > (64ull << 20))
-            throw std::runtime_error("Environment exceeds 64 MiB");
+        if (!size || size > MaxEnvironmentFileBytes)
+            throw std::runtime_error("Environment is empty or exceeds 128 MiB");
+        // Validate and decode the same immutable snapshot even if a tool is rewriting the file.
         std::vector<unsigned char> bytes(static_cast<size_t>(size));
         std::ifstream input(file, std::ios::binary);
         if (!input.read(reinterpret_cast<char*>(bytes.data()),
                         static_cast<std::streamsize>(size)) ||
+            input.peek() != std::char_traits<char>::eof() ||
             std::filesystem::file_size(file) != size ||
             std::filesystem::last_write_time(file) != time)
-            throw std::runtime_error("Environment changed while reading");
+            throw std::runtime_error("Could not read a stable environment file");
         int channels = 0;
-        if (!stbi_is_hdr_from_memory(bytes.data(), static_cast<int>(size)) ||
-            !stbi_info_from_memory(bytes.data(), static_cast<int>(size), &width, &height,
-                                   &channels) ||
-            width < 2 || height < 1 || width > 8192 || height > 4096 || width != 2 * height ||
-            static_cast<uint64>(width) * height * 3 * sizeof(float) > (256ull << 20))
-            throw std::runtime_error("Invalid 2:1 HDR dimensions or decoded size");
-        pixels.reset(stbi_loadf_from_memory(bytes.data(), static_cast<int>(size), &width, &height,
-                                            &channels, 3));
+        const auto length = static_cast<int>(bytes.size());
+        if (!stbi_is_hdr_from_memory(bytes.data(), length) ||
+            !stbi_info_from_memory(bytes.data(), length, &width, &height, &channels) || width < 2 ||
+            height < 1 || width > MaxPanoramaWidth || height > MaxPanoramaWidth / 2 ||
+            width != 2 * height)
+            throw std::runtime_error("Expected a Radiance 2:1 HDR panorama up to 8192 pixels wide");
+        pixels.reset(stbi_loadf_from_memory(bytes.data(), length, &width, &height, &channels, 3));
         if (!pixels)
             throw std::runtime_error("HDR decode failed");
         const float* const end = pixels.get() + static_cast<size_t>(width) * height * 3;
@@ -261,9 +264,11 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Neutral() {
     return data;
 }
 
-std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& path) {
+namespace {
+std::shared_ptr<EnvironmentData> PrepareEnvironment(const std::string& path, bool reflectionOnly,
+                                                    uint32 specularSize) {
     const auto start = std::chrono::steady_clock::now();
-    auto data = std::make_shared<EnvironmentData>();
+    auto data = reflectionOnly ? EnvironmentData::Neutral() : std::make_shared<EnvironmentData>();
     try {
         Source source;
         if (path.empty()) {
@@ -272,18 +277,22 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& pat
             source.height = static_cast<int>(source.atmosphere.height);
         } else if (!Decode(path, source.width, source.height, source.pixels, data->error))
             return data;
-        const uint32 skySize =
-            std::clamp(std::bit_floor(static_cast<uint32>(source.width)) / 4, 256u, 1024u);
-        data->sky = Cube(skySize, 1, [&](Vec3 n, uint32) { return source.Sample(n); });
         const auto& kernels = Kernels();
-        data->diffuse = Cube(32, 1, [&](Vec3 n, uint32) {
-            const TangentFrame frame(n);
-            Vec3 sum{};
-            for (const auto& direction : kernels.diffuse)
-                sum += source.Sample(frame.Rotate(direction));
-            return sum * (1.f / EnvironmentSamples);
-        });
-        data->specular = Cube(128, SpecularLevels, [&](Vec3 n, uint32 level) {
+        if (!reflectionOnly) {
+            const uint32 skySize =
+                std::clamp(std::bit_floor(static_cast<uint32>(source.width)) / 4, 256u, 1024u);
+            data->sky = Cube(skySize, 1, [&](Vec3 n, uint32) { return source.Sample(n); });
+            data->diffuse = Cube(32, 1, [&](Vec3 n, uint32) {
+                const TangentFrame frame(n);
+                Vec3 sum{};
+                for (const auto& direction : kernels.diffuse)
+                    sum += source.Sample(frame.Rotate(direction));
+                return sum * (1.f / EnvironmentSamples);
+            });
+            const auto& brdf = BrdfPixels();
+            data->brdf = {BrdfSize, 1, 1, {brdf.begin(), brdf.end()}};
+        }
+        data->specular = Cube(specularSize, SpecularLevels, [&](Vec3 n, uint32 level) {
             if (!level)
                 return source.Sample(n);
             const TangentFrame frame(n);
@@ -293,8 +302,6 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& pat
                     sum += source.Sample(frame.Rotate(direction)) * direction.z;
             return sum * (1 / std::max(kernels.specularWeight[level - 1], 1e-5f));
         });
-        const auto& brdf = BrdfPixels();
-        data->brdf = {BrdfSize, 1, 1, {brdf.begin(), brdf.end()}};
         const size_t bytes = (data->sky.pixels.size() + data->diffuse.pixels.size() +
                               data->specular.pixels.size() + data->brdf.pixels.size()) *
                              sizeof(float);
@@ -307,6 +314,21 @@ std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& pat
     data->preparationMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     return data;
+}
+} // namespace
+
+std::shared_ptr<EnvironmentData> EnvironmentData::Prepare(const std::string& path) {
+    return PrepareEnvironment(path, false, 128);
+}
+
+std::shared_ptr<EnvironmentData> EnvironmentData::PrepareReflection(const std::string& path,
+                                                                    uint32 faceSize) {
+    if (faceSize != 128 && faceSize != 256 && faceSize != 512) {
+        auto data = std::make_shared<EnvironmentData>();
+        data->error = "Reflection cube face size must be 128, 256 or 512";
+        return data;
+    }
+    return PrepareEnvironment(path, true, faceSize);
 }
 
 bool EnvironmentData::ValidateFile(const std::string& path, std::string& error) {

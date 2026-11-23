@@ -21,6 +21,15 @@ settings.fog.rayTracedShadows = true;
 
 샘플에서 효과를 켜고 끄며 비교할 수 있다. [SampleRayTracing](../samples/RayTracing/README.md)
 
+## ReSTIR, Radiance Cascades와 가상 섀도우 맵
+
+- `rayTracing.restirDirect`는 점광원 후보의 가중 reservoir를 생성한다. 깊이·법선·인스턴스가 맞는 주변 픽셀과 후보를 재표본화하고, 선택한 점광원으로 가시성 광선을 쏜다. 방향광은 기존 별도 경로로 계산한다.
+- `rayTracing.restirIndirect`는 한 번 반사된 확산광 후보를 주변 픽셀과 공유하고 선택한 경로를 확인한다. 두 ReSTIR 모드는 해상도가 제한된 현재 프레임의 화면 공간 reservoir를 사용한다. 시간 누적은 아직 제공하지 않는다.
+- `radianceCascades`는 세 단계의 3D 프로브가 서로 다른 거리 구간의 광선을 추적한다. 먼 구간부터 가시성을 고려해 병합하고, 첫 번째 단계의 방사휘도를 구면조화 계수로 저장해 불투명 재질에서 보간한다. `spacing`과 `strength`로 프로브 간격과 기여도를 정한다. 같은 픽셀에 유효한 ReSTIR GI가 있으면 그 값을 사용한다.
+- `virtualShadows`는 방향광 섀도우 맵을 4×4 가상 페이지로 나눈다. 메시와 포그가 필요한 페이지를 3×3 물리 아틀라스에 배치하며 PCF 탭마다 페이지를 변환한다. 한 패스에 9페이지를 초과하면 밀집 섀도우 맵을 사용한다. 페이지를 패스마다 결정하며 시간 캐시와 다단 클립맵은 제공하지 않는다.
+
+ReSTIR과 Radiance Cascades는 하드웨어 레이 쿼리가 있는 Vulkan에서 실행한다. 미지원 장치에서는 기존 직접광과 환경광을 사용한다.
+
 ## CPU 삼각형 BVH
 
 TriangleRayScene은 월드 좌표의 삼각형과 재질을 복사해 BVH를 만든다. 렌더용 메시로부터 가장 가까운 교차점, 유한한 광선 구간의 가림 여부와 선형 방사휘도를 계산할 수 있다. 이 API는 CPU에서 실행되며 광원·반사 프로브 제작이나 광선 교차의 기준 결과를 계산할 때 사용할 수 있다.

@@ -60,6 +60,16 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 tint, float roughness, 
         ? SampleLvlTexCube(gSpecularEnv, gSamplerTrilinearClamp, RotateEnvironment(reflect(-v, n)),
                            roughness * 7.0f).rgb * gScene.environment.w
         : environment;
+    const bool customReflection = gScene.waterReflection.x > 0.5f;
+    if (customReflection) {
+        const float3 direction = reflect(-v, n);
+        const float c = cos(gScene.waterReflection.y);
+        const float s = sin(gScene.waterReflection.y);
+        const float3 rotated = float3(c * direction.x + s * direction.z, direction.y,
+                                      c * direction.z - s * direction.x);
+        reflected = SampleLvlTexCube(gWaterSpecularEnv, gSamplerTrilinearClamp, rotated,
+                                     roughness * 7.0f).rgb * gScene.waterReflection.z;
+    }
     float3 behind = opaque.rgb + (1.0f - opaque.a) * environment;
     float f0 = (ior - 1.0f) / (ior + 1.0f);
     f0 *= f0;
@@ -70,7 +80,9 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 tint, float roughness, 
     {
         const float3 direction = reflect(-v, n);
         const float3 origin = BiasRayOrigin(In.world, n, direction);
-        reflected = TraceRayRadiance(origin, direction, roughness, bounces).rgb;
+        const float4 traced = TraceRayRadiance(origin, direction, roughness, bounces);
+        if (!customReflection || traced.w >= 0.0f)
+            reflected = traced.rgb;
     }
     if (RayEffect(4u))
     {
@@ -162,20 +174,41 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
     float3 result = Brdf(color.rgb, metal, rough, normal, v, -gLights.direction.xyz) *
                     gLights.colorIntensity.rgb * max(gLights.colorIntensity.w, 0.0f);
     result *= SurfaceDirectionalShadow(In.world, normal);
-    for (uint i = 0; i < pointCount; ++i)
+    bool useRestirDI = false;
+#ifdef LUX_RAY_QUERY
+    float4 restirGI = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    if (RayEffect(LUX_RESTIR_DI | LUX_RESTIR_GI) && gDraw.options.y < 1.5f)
     {
-        const float4 source = gLights.pointPositionRadius[i];
-        const float4 sourceColor = gLights.pointColorIntensity[i];
-        const float3 delta = source.xyz - In.world;
-        const float distance = length(delta);
-        const float falloff = saturate(1.0f - distance / max(source.w, 1e-5f));
-        result += Brdf(color.rgb, metal, rough, normal, v, SafeDirection(delta, normal)) * sourceColor.rgb *
-                  max(sourceColor.w, 0.0f) * falloff * falloff;
+        const uint receiver = RestirReceiverIndex(In.position.xy, In.world, normal);
+        if (receiver != 0xffffffffu)
+        {
+            if (RayEffect(LUX_RESTIR_DI))
+            {
+                const float4 direct = gRestirLighting[receiver + 2u];
+                useRestirDI = direct.z > 0.0f;
+                if (useRestirDI)
+                    result += RestirDirectLighting(direct, In.world, color.rgb, metal, rough, normal, v);
+            }
+            if (RayEffect(LUX_RESTIR_GI))
+                restirGI = gRestirLighting[receiver + 3u];
+        }
     }
+#endif
+    if (!useRestirDI)
+        for (uint i = 0; i < pointCount; ++i)
+        {
+            const float4 source = gLights.pointPositionRadius[i];
+            const float4 sourceColor = gLights.pointColorIntensity[i];
+            const float3 delta = source.xyz - In.world;
+            const float distance = length(delta);
+            const float falloff = saturate(1.0f - distance / max(source.w, 1e-5f));
+            result += Brdf(color.rgb, metal, rough, normal, v, SafeDirection(delta, normal)) * sourceColor.rgb *
+                      max(sourceColor.w, 0.0f) * falloff * falloff;
+        }
     const float occlusion = (maps & 8u) != 0u ? lerp(1.0f, SampleMaterial(gOcclusionTexture, In.uv).r, gDraw.materialOptions.y) : 1.0f;
 #ifdef LUX_RAY_QUERY
-    if (RayEffect(2u | 8u))
-        result += RayEnvironmentLighting(color.rgb, metal, rough, normal, v, In.world, In.position.xy) * occlusion;
+    if (RayEffect(2u | 8u | LUX_RESTIR_GI | 64u))
+        result += RayEnvironmentLighting(color.rgb, metal, rough, normal, v, In.world, In.position.xy, restirGI) * occlusion;
     else
 #endif
         result += EnvironmentLighting(color.rgb, metal, rough, normal, v) * occlusion;

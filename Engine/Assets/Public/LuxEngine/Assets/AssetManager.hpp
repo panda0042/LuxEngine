@@ -31,8 +31,8 @@ public:
     static bool HasTexture(const std::string& filepath);
     static void UnloadTexture(const std::string& filepath);
 
-    // Validates image file format, dimensions (<= 8192), file size (<= 64 MiB), and memory budget
-    // (<= 256 MiB) on CPU.
+    // Validates image format, dimensions (<= 8192), and decoded memory (<= 256 MiB).
+    // Encoded files are limited to 64 MiB, or 128 MiB for JPEG.
     static bool ValidateTextureFile(const std::string& filepath, int* outWidth = nullptr,
                                     int* outHeight = nullptr);
 

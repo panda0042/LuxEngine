@@ -28,6 +28,9 @@ function Get-LuxWindowsRuntimeFiles {
         "DIRECT3D12/luxtone.frag",
         "DIRECT3D12/luxfog.comp",
         "DIRECT3D12/luxfogray.comp",
+        "DIRECT3D12/luxrestirinit.comp",
+        "DIRECT3D12/luxrestirresolve.comp",
+        "DIRECT3D12/luxradiancecascades.comp",
         "DIRECT3D12/luxfogcomposite.frag",
         "DIRECT3D12/luxoceanfft.comp",
         "DIRECT3D12/luxoceanassemble.comp"

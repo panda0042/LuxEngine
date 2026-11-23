@@ -1,0 +1,7 @@
+Lakeside Sunrise
+Photography by Greg Zaal. Processing by Jarod Guest. Published by Poly Haven.
+Source: https://polyhaven.com/a/lakeside_sunrise
+Released under Creative Commons CC0 1.0 Universal (CC0-1.0).
+https://polyhaven.com/license
+https://creativecommons.org/publicdomain/zero/1.0/legalcode
+The included Radiance HDR file is a linear RGB derivative of the 24K EXR.

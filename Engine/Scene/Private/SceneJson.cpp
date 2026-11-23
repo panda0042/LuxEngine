@@ -54,7 +54,9 @@ Json ToJson(const RayTracingSettings& rays) {
             {"indirect_diffuse", rays.indirectDiffuse},
             {"max_bounces", rays.maxBounces},
             {"max_distance", rays.maxDistance},
-            {"indirect_strength", rays.indirectStrength}};
+            {"indirect_strength", rays.indirectStrength},
+            {"restir_direct", rays.restirDirect},
+            {"restir_indirect", rays.restirIndirect}};
 }
 
 Json ToJson(const VolumetricFogSettings& fog) {
@@ -153,6 +155,10 @@ void ReadJsonValue(const Json& json, RayTracingSettings& rays) {
     ReadJsonValue(json.at("max_bounces"), rays.maxBounces);
     ReadJsonValue(json.at("max_distance"), rays.maxDistance);
     ReadJsonValue(json.at("indirect_strength"), rays.indirectStrength);
+    if (json.contains("restir_direct"))
+        ReadJsonValue(json.at("restir_direct"), rays.restirDirect);
+    if (json.contains("restir_indirect"))
+        ReadJsonValue(json.at("restir_indirect"), rays.restirIndirect);
 }
 
 void ReadJsonValue(const Json& json, VolumetricFogSettings& fog) {
@@ -321,6 +327,19 @@ bool Scene::SerializeToString(std::string& output) {
             render["ray_tracing"] = rays;
         if (fog != ToJson(VolumetricFogSettings{}))
             render["volumetric_fog"] = fog;
+        if (settings_.render3D.virtualShadows)
+            render["virtual_shadows"] = true;
+        const auto& water = settings_.render3D.waterReflection;
+        if (!water.environmentPath.empty() || water.rotation != 0 || water.intensity != 1 ||
+            water.faceSize != WaterReflectionSettings{}.faceSize)
+            render["water_reflection"] = {{"environment", water.environmentPath},
+                                          {"rotation", water.rotation},
+                                          {"intensity", water.intensity},
+                                          {"face_size", water.faceSize}};
+        const auto& cascades = settings_.render3D.radianceCascades;
+        if (cascades.strength != 0 || cascades.spacing != RadianceCascadeSettings{}.spacing)
+            render["radiance_cascades"] = {{"strength", cascades.strength},
+                                           {"spacing", cascades.spacing}};
         settings["render3d"] = std::move(render);
         root["settings"] = std::move(settings);
         root["entities"] = Json::array();
@@ -550,6 +569,22 @@ bool Scene::DeserializeJson(const std::string& data) {
             ReadJsonValue(render.at("ray_tracing"), settings.render3D.rayTracing);
         if (render.contains("volumetric_fog"))
             ReadJsonValue(render.at("volumetric_fog"), settings.render3D.fog);
+        if (render.contains("virtual_shadows"))
+            ReadJsonValue(render.at("virtual_shadows"), settings.render3D.virtualShadows);
+        if (render.contains("water_reflection")) {
+            const auto& water = render.at("water_reflection");
+            auto& reflection = settings.render3D.waterReflection;
+            ReadJsonValue(water.at("environment"), reflection.environmentPath);
+            ReadJsonValue(water.at("rotation"), reflection.rotation);
+            ReadJsonValue(water.at("intensity"), reflection.intensity);
+            if (water.contains("face_size"))
+                ReadJsonValue(water.at("face_size"), reflection.faceSize);
+        }
+        if (render.contains("radiance_cascades")) {
+            const auto& cascades = render.at("radiance_cascades");
+            ReadJsonValue(cascades.at("strength"), settings.render3D.radianceCascades.strength);
+            ReadJsonValue(cascades.at("spacing"), settings.render3D.radianceCascades.spacing);
+        }
         RequireValidScene(parsed.SetSettings(settings));
         const auto& entities = root.at("entities");
         RequireValidScene(entities.is_array() && entities.size() <= MaxEntities);

@@ -194,6 +194,7 @@ SceneSettings InheritedSettings(const SceneSettings& current, const SceneSetting
     inherit(render.showSkybox, oldRender.showSkybox, newRender.showSkybox);
     inherit(render.toneMapping, oldRender.toneMapping, newRender.toneMapping);
     inherit(render.shadows, oldRender.shadows, newRender.shadows);
+    inherit(render.virtualShadows, oldRender.virtualShadows, newRender.virtualShadows);
     inherit(render.shadowResolution, oldRender.shadowResolution, newRender.shadowResolution);
     inherit(render.shadowRange, oldRender.shadowRange, newRender.shadowRange);
     inherit(render.shadowDepthBias, oldRender.shadowDepthBias, newRender.shadowDepthBias);
@@ -208,6 +209,19 @@ SceneSettings InheritedSettings(const SceneSettings& current, const SceneSetting
     inherit(rays.maxBounces, oldRays.maxBounces, newRays.maxBounces);
     inherit(rays.maxDistance, oldRays.maxDistance, newRays.maxDistance);
     inherit(rays.indirectStrength, oldRays.indirectStrength, newRays.indirectStrength);
+    inherit(rays.restirDirect, oldRays.restirDirect, newRays.restirDirect);
+    inherit(rays.restirIndirect, oldRays.restirIndirect, newRays.restirIndirect);
+    auto& water = render.waterReflection;
+    inherit(water.environmentPath, oldRender.waterReflection.environmentPath,
+            newRender.waterReflection.environmentPath);
+    inherit(water.rotation, oldRender.waterReflection.rotation, newRender.waterReflection.rotation);
+    inherit(water.intensity, oldRender.waterReflection.intensity,
+            newRender.waterReflection.intensity);
+    inherit(water.faceSize, oldRender.waterReflection.faceSize, newRender.waterReflection.faceSize);
+    inherit(render.radianceCascades.strength, oldRender.radianceCascades.strength,
+            newRender.radianceCascades.strength);
+    inherit(render.radianceCascades.spacing, oldRender.radianceCascades.spacing,
+            newRender.radianceCascades.spacing);
     auto& fog = render.fog;
     const auto& oldFog = oldRender.fog;
     const auto& newFog = newRender.fog;
@@ -327,15 +341,19 @@ void RewritePaths(Scene& scene, const fs::path& owner, const fs::path* destinati
     if (depth > MaxDepth)
         throw std::runtime_error("씬 참조 스냅샷의 중첩 한도를 넘었습니다.");
     auto settings = scene.GetSettings();
-    if (!settings.render3D.environmentPath.empty()) {
-        const auto absolute = Canonical(Path(settings.render3D.environmentPath), owner);
+    bool changed = false;
+    for (auto* path :
+         {&settings.render3D.environmentPath, &settings.render3D.waterReflection.environmentPath}) {
+        if (path->empty())
+            continue;
+        const auto absolute = Canonical(Path(*path), owner);
         const auto relative =
             destination ? absolute.lexically_relative(destination->parent_path()) : fs::path{};
-        settings.render3D.environmentPath =
-            Utf8(destination && !relative.empty() ? relative : absolute);
-        if (!scene.SetSettings(settings))
-            throw std::runtime_error("Invalid rebased environment path");
+        *path = Utf8(destination && !relative.empty() ? relative : absolute);
+        changed = true;
     }
+    if (changed && !scene.SetSettings(settings))
+        throw std::runtime_error("Invalid rebased environment path");
     for (auto entity : scene.GetEntities())
         RewriteEntityPaths(entity, owner, destination, depth);
 }

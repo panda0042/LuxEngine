@@ -504,9 +504,10 @@ void ScenePlayer::OnRender(float) {
     GetGpuDevice().Clear(clear.x, clear.y, clear.z, clear.w);
     if (perspective_) {
         auto renderSettings = scene_->GetSettings().render3D;
-        if (!renderSettings.environmentPath.empty())
-            renderSettings.environmentPath =
-                scene_->ResolveAssetPath(renderSettings.environmentPath);
+        for (auto* path :
+             {&renderSettings.environmentPath, &renderSettings.waterReflection.environmentPath})
+            if (!path->empty())
+                *path = scene_->ResolveAssetPath(*path);
         Renderer3D::BeginScene(camera3D_, renderSettings, scene_->GetSettings().exposure);
         scene_->OnRender3D();
         Renderer3D::EndScene();

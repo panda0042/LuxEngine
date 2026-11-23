@@ -215,9 +215,12 @@ private:
     std::set<fs::path> clips_, controllers_;
 
     void InspectAssets(LuxEngine::Scene& scene, const fs::path& owner) {
-        const auto& environment = scene.GetSettings().render3D.environmentPath;
-        if (!environment.empty()) {
-            const auto file = ResolveModel(environment, owner, true);
+        const auto& render = scene.GetSettings().render3D;
+        for (const auto* environment :
+             {&render.environmentPath, &render.waterReflection.environmentPath}) {
+            if (environment->empty())
+                continue;
+            const auto file = ResolveModel(*environment, owner, true);
             if (textureFiles_.insert(file).second) {
                 Charge(fs::file_size(file));
                 std::string error;

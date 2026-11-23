@@ -28,6 +28,8 @@
 #include "Graphics/GraphicsConfig.h"
 #include "Graphics/Interfaces/IGraphics.h"
 #include "LuxFog.h"
+#include "LuxRadianceCascades.h"
+#include "LuxRestir.hpp"
 #include "Resources/ResourceLoader/Interfaces/IResourceLoader.h"
 #include "Resources/ResourceLoader/ThirdParty/OpenSource/tinyimageformat/tinyimageformat_query.h"
 #include "OS/Interfaces/IOperatingSystem.h"
@@ -41,6 +43,9 @@
 #include "Shaders/LuxFogComposite.srt.h"
 #if defined(VULKAN) && defined(ENABLE_RAYTRACING)
 #include "Shaders/LuxFogRayCompute.srt.h"
+#include "Shaders/LuxRadianceCascades.srt.h"
+#include "Shaders/LuxRestirInit.srt.h"
+#include "Shaders/LuxRestirResolve.srt.h"
 #endif
 #include "Shaders/LuxOcean.srt.h"
 #include "Shaders/LuxOceanAssemble.srt.h"
@@ -94,6 +99,10 @@ struct LuxForgeDevice {
     std::string lastError;
     ForgeRayTracing* rayTracing = nullptr;
     LuxForgeFog* fog = nullptr;
+    LuxForgeRadianceCascades* radianceCascades = nullptr;
+#if defined(VULKAN) && defined(ENABLE_RAYTRACING)
+    LuxForgeRestir* restir = nullptr;
+#endif
 
     WindowHandle window = {};
     SwapChain* swapChain = nullptr;
@@ -289,6 +298,9 @@ constexpr DescriptorType UniformBufferDescriptor = DESCRIPTOR_TYPE_UNIFORM_BUFFE
 void CollectSceneGarbage(LuxForgeDevice* device, bool everything);
 void ShutdownScene(LuxForgeDevice* device);
 void ShutdownFog(LuxForgeDevice* device);
+void ShutdownRadianceCascades(LuxForgeDevice* device);
+void ShutdownRestir(LuxForgeDevice* device);
+void CollectRestir(LuxForgeDevice* device);
 void BeginSceneFrame(LuxForgeDevice* device);
 int EndFrame(LuxForgeDevice* device);
 bool AddDepthTarget(LuxForgeDevice* device);
@@ -556,6 +568,7 @@ void ReleaseBuffer(LuxForgeDevice* device, LuxForgeDevice::BufferSlot& slot) {
 // Frees resources whose last possible use is a frame the GPU has finished.
 void CollectGarbage(LuxForgeDevice* device, bool everything) {
     CollectForgeRayTracing(device->rayTracing, everything ? UINT64_MAX : device->completedFrames);
+    CollectRestir(device);
     auto& pending = device->pendingTextures;
     size_t kept = 0;
     for (size_t i = 0; i < pending.size(); ++i) {
@@ -1205,6 +1218,10 @@ int BeginFrame(LuxForgeDevice* device) {
     device->frameStats.accelerationStructureBuilds = 0;
     device->frameStats.volumetricFogPasses = 0;
     device->frameStats.rayVolumetricFogPasses = 0;
+    device->frameStats.waterReflectionPasses = 0;
+    device->frameStats.restirPasses = 0;
+    device->frameStats.radianceCascadePasses = 0;
+    device->frameStats.virtualShadowPages = 0;
     device->frameStats.vertexBytes = 0;
 
     uint32_t index = UINT32_MAX;
@@ -1562,6 +1579,23 @@ void Stats(const LuxForgeDevice* device, LuxForgeStats* stats) {
         buffer(device->fog->constants);
         buffer(device->fog->volume);
     }
+    if (const auto* cascades = device->radianceCascades) {
+        buffer(cascades->constants);
+        buffer(cascades->radiance[0]);
+        buffer(cascades->radiance[1]);
+        buffer(cascades->irradiance);
+    }
+#if defined(VULKAN) && defined(ENABLE_RAYTRACING)
+    if (const auto* restir = device->restir) {
+        buffer(restir->candidates);
+        buffer(restir->output);
+        for (const auto& retired : restir->retired) {
+            buffer(retired.candidates, false);
+            buffer(retired.output, false);
+            stats->pendingDeletes += 2;
+        }
+    }
+#endif
     stats->validationErrors = static_cast<uint32_t>(
         std::min<uint64_t>(UINT32_MAX, g_ValidationErrors.load() - device->validationErrorBase));
     stats->validationWarnings = static_cast<uint32_t>(std::min<uint64_t>(
@@ -2410,6 +2444,8 @@ bool InitScene(LuxForgeDevice* device) {
 
 void ShutdownScene(LuxForgeDevice* device) {
     ShutdownFog(device);
+    ShutdownRadianceCascades(device);
+    ShutdownRestir(device);
     if (device->raySceneSet)
         removeDescriptorSet(device->renderer, device->raySceneSet);
     for (auto* pipeline : device->rayMaterialPipelines)
@@ -2663,13 +2699,15 @@ Pipeline* MaterialPipeline(LuxForgeDevice* device, const LuxForgeSceneDraw& draw
 
 void DrawSceneMeshes(LuxForgeDevice* device, Cmd* cmd, const std::vector<SceneMesh>& draws,
                      uint32_t firstDraw, size_t begin, size_t end, Pipeline* pipeline, bool shadow,
-                     bool rayTracing = false) {
+                     bool rayTracing = false, uint32_t shadowPageBit = 0) {
     const uint32_t stride = LuxForgeDevice::kVertexStride;
     const uint64_t offset = 0;
     uint32_t boundMaterial = UINT32_MAX, boundVertices = 0, boundIndices = 0;
     for (size_t i = begin; i < end; ++i) {
         const auto& mesh = draws[i];
         const auto& draw = *mesh.draw;
+        if (shadowPageBit && !(draw.shadowPageMask & shadowPageBit))
+            continue;
         if (shadow && (draw.alphaMode == 2 || WaterDraw(draw)))
             continue;
         if (!shadow) {
@@ -2740,6 +2778,9 @@ void WriteSceneMaterial(LuxForgeDevice* device, uint32_t materialIndex,
 }
 
 #include "LuxFog.inl"
+#include "LuxRadianceCascades.inl"
+#include "LuxRestir.inl"
+#include "LuxVirtualShadow.inl"
 
 int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxForgeSceneDraw* draws,
                 uint32_t drawCount, uint32_t* drawn) {
@@ -2773,15 +2814,6 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
         RetireTarget(device, device->hdr);
         return Fail(device, "HDR render target could not be created");
     }
-    if (shadows && device->shadowResolution != resolution) {
-        RetireTarget(device, device->shadow);
-        device->shadowResolution = 0;
-        if (!AddSceneTarget(device, device->shadow, resolution, resolution, kDepthFormat, 4,
-                            "LuxForge shadow map"))
-            return Fail(device, "Shadow map could not be created");
-        device->shadowResolution = resolution;
-    }
-
     auto& frame = device->frames[device->frameSlot];
     std::vector<SceneMesh> visible;
     visible.reserve(drawCount);
@@ -2825,6 +2857,16 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
     const size_t opaqueEnd = firstLayer(SceneLayer::Water);
     const size_t waterEnd = firstLayer(SceneLayer::Blend);
     const size_t colorEnd = firstLayer(SceneLayer::ShadowOnly);
+    const auto shadowPlan = PlanVirtualShadow(*scene, visible, colorEnd);
+    const uint32_t atlasResolution = shadowPlan.atlasResolution;
+    if (shadows && device->shadowResolution != atlasResolution) {
+        RetireTarget(device, device->shadow);
+        device->shadowResolution = 0;
+        if (!AddSceneTarget(device, device->shadow, atlasResolution, atlasResolution, kDepthFormat,
+                            4, "LuxForge shadow map"))
+            return Fail(device, "Shadow map could not be created");
+        device->shadowResolution = atlasResolution;
+    }
     const bool water = opaqueEnd < waterEnd;
     if (water && !device->waterHdr.target &&
         (!AddSceneTarget(device, device->waterHdr, device->width, device->height, kHdrFormat, 8,
@@ -2859,26 +2901,37 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
     constants[46] = 1.0f / constants[44];
     constants[47] = 1.0f / constants[45];
     std::memcpy(constants + 48, scene->rayOptions, sizeof(scene->rayOptions));
+    const bool customWaterEnvironment = water && scene->waterReflection[0] > 0 &&
+                                        IsLiveEnvironment(device, scene->waterEnvironmentMap);
+    std::memcpy(constants + 52, scene->waterReflection, sizeof(scene->waterReflection));
+    constants[52] = customWaterEnvironment ? 1.f : 0.f;
+    device->frameStats.waterReflectionPasses += customWaterEnvironment ? 1u : 0u;
+    std::memcpy(constants + 56, shadowPlan.packed.data(), 4 * sizeof(uint32_t));
 
     // The opaque entry binds stand-ins for both targets being written.
     // Water and the copy read the finished opaque targets. Tone maps the final HDR image.
     const auto& environment = device->environments[scene->environmentMap];
-    Texture* textures[7] = {environment.maps[1],
+    Texture* textures[8] = {environment.maps[1],
                             environment.maps[2],
                             environment.maps[0],
                             environment.maps[3],
                             shadows ? device->shadow.target->pTexture : environment.maps[3],
                             environment.maps[3],
-                            environment.maps[3]};
-    const uint32_t indices[7] = {SRT_RES_IDX(LuxSceneSrt, Persistent, gDiffuseEnv),
+                            environment.maps[3],
+                            customWaterEnvironment
+                                ? device->environments[scene->waterEnvironmentMap].maps[2]
+                                : environment.maps[2]};
+    const uint32_t indices[8] = {SRT_RES_IDX(LuxSceneSrt, Persistent, gDiffuseEnv),
                                  SRT_RES_IDX(LuxSceneSrt, Persistent, gSpecularEnv),
                                  SRT_RES_IDX(LuxSceneSrt, Persistent, gSkyEnv),
                                  SRT_RES_IDX(LuxSceneSrt, Persistent, gBrdfLut),
                                  SRT_RES_IDX(LuxSceneSrt, Persistent, gShadowMap),
                                  SRT_RES_IDX(LuxSceneSrt, Persistent, gHdrImage),
-                                 SRT_RES_IDX(LuxSceneSrt, Persistent, gOpaqueDepth)};
-    DescriptorData params[15] = {};
-    for (uint32_t i = 0; i < 7; ++i) {
+                                 SRT_RES_IDX(LuxSceneSrt, Persistent, gOpaqueDepth),
+                                 SRT_RES_IDX(LuxSceneSrt, Persistent, gWaterSpecularEnv)};
+    constexpr uint32_t commonDescriptors = 12;
+    DescriptorData params[commonDescriptors + 6] = {};
+    for (uint32_t i = 0; i < 8; ++i) {
         params[i].mIndex = indices[i];
         params[i].ppTextures = &textures[i];
     }
@@ -2888,20 +2941,21 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
         SRT_RES_IDX(LuxSceneSrt, Persistent, gMaterialAnisotropicClamp),
         SRT_RES_IDX(LuxSceneSrt, Persistent, gMaterialAnisotropicRepeat)};
     for (uint32_t sampler = 0; sampler < 4; ++sampler) {
-        params[7 + sampler].mIndex = samplerBindings[sampler];
-        params[7 + sampler].ppSamplers = &device->materialSamplers[sampler];
+        params[8 + sampler].mIndex = samplerBindings[sampler];
+        params[8 + sampler].ppSamplers = &device->materialSamplers[sampler];
     }
     const uint32_t entry = (device->frameSlot * LuxForgeDevice::kMaxScenePasses + pass) *
                            LuxForgeDevice::kSceneDescriptors;
     const uint32_t toneEntry = entry + 1;
     const uint32_t waterEntry = entry + 2;
-    updateDescriptorSet(device->renderer, entry, device->sceneSet, 11, params);
+    updateDescriptorSet(device->renderer, entry, device->sceneSet, commonDescriptors, params);
     textures[5] = water ? device->waterHdr.target->pTexture : device->hdr.target->pTexture;
-    updateDescriptorSet(device->renderer, toneEntry, device->sceneSet, 11, params);
+    updateDescriptorSet(device->renderer, toneEntry, device->sceneSet, commonDescriptors, params);
     if (water) {
         textures[5] = device->hdr.target->pTexture;
         textures[6] = device->sceneDepth.target->pTexture;
-        updateDescriptorSet(device->renderer, waterEntry, device->sceneSet, 11, params);
+        updateDescriptorSet(device->renderer, waterEntry, device->sceneSet, commonDescriptors,
+                            params);
     }
 
     // Per-object constants: one LuxDraw block serves the shadow and the HDR pass.
@@ -2962,8 +3016,12 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
     bool rayTracing = false;
     AccelerationStructure* fogRays = nullptr;
 #if defined(VULKAN)
+    const bool cascades = scene->cascadeOptions[0] > 0;
+    const uint32_t effects = scene->rayOptions[0] >= 1.f && scene->rayOptions[0] <= 63.f
+                                 ? static_cast<uint32_t>(scene->rayOptions[0])
+                                 : 0u;
     const bool rayShading =
-        colorEnd && scene->rayOptions[0] >= 1 && device->rayTracing && InitRayScene(device);
+        colorEnd && (effects || cascades) && device->rayTracing && InitRayScene(device);
     const bool rayFog = scene->rayTracedFog && scene->fogColorDensity[3] > 0;
     if (device->rayTracing && (rayShading || rayFog)) {
         std::vector<ForgeRayDraw> rayDraws;
@@ -2980,26 +3038,46 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
         if (rayFog)
             fogRays = result.scene;
         if (result.scene && rayShading) {
+            uint32_t activeEffects = effects;
+            auto* restir = (effects & 48u)
+                               ? DispatchRestir(device, *scene, pass, result, environment.maps[2])
+                               : nullptr;
+            if (!restir)
+                activeEffects &= ~48u;
+            auto* cascade =
+                cascades ? RenderRadianceCascades(device, *scene, pass, result) : nullptr;
+            if (cascade)
+                activeEffects |= 64u;
+            constants[48] = static_cast<float>(activeEffects);
+            Buffer* restirLighting = restir ? restir : result.instances;
+            Buffer* cascadeLighting = cascade ? cascade : result.instances;
             DescriptorDataRange range = {pass * LuxForgeDevice::kSceneStride,
                                          LuxForgeDevice::kSceneStride, 0};
-            params[11].mIndex = SRT_RES_IDX(LuxRaySceneSrt, Persistent, gScene);
-            params[11].ppBuffers = &device->sceneUniforms[device->frameSlot];
-            params[11].pRanges = &range;
-            params[12].mIndex = SRT_RES_IDX(LuxRaySceneSrt, Persistent, gRayScene);
-            params[12].ppAccelerationStructures = &result.scene;
-            params[13].mIndex = SRT_RES_IDX(LuxRaySceneSrt, Persistent, gRayInstances);
-            params[13].ppBuffers = &result.instances;
-            params[14].mIndex = SRT_RES_IDX(LuxRaySceneSrt, Persistent, gRayTriangles);
-            params[14].ppBuffers = &result.triangles;
+            auto* rayParams = params + commonDescriptors;
+            rayParams[0].mIndex = SRT_RES_IDX(LuxRaySceneSrt, Persistent, gScene);
+            rayParams[0].ppBuffers = &device->sceneUniforms[device->frameSlot];
+            rayParams[0].pRanges = &range;
+            rayParams[1].mIndex = SRT_RES_IDX(LuxRaySceneSrt, Persistent, gRayScene);
+            rayParams[1].ppAccelerationStructures = &result.scene;
+            rayParams[2].mIndex = SRT_RES_IDX(LuxRaySceneSrt, Persistent, gRayInstances);
+            rayParams[2].ppBuffers = &result.instances;
+            rayParams[3].mIndex = SRT_RES_IDX(LuxRaySceneSrt, Persistent, gRayTriangles);
+            rayParams[3].ppBuffers = &result.triangles;
+            rayParams[4].mIndex = SRT_RES_IDX(LuxRaySceneSrt, Persistent, gRestirLighting);
+            rayParams[4].ppBuffers = &restirLighting;
+            rayParams[5].mIndex = SRT_RES_IDX(LuxRaySceneSrt, Persistent, gCascadeIrradiance);
+            rayParams[5].ppBuffers = &cascadeLighting;
             textures[5] = textures[6] = environment.maps[3];
-            updateDescriptorSet(device->renderer, entry, device->raySceneSet, 15, params);
+            updateDescriptorSet(device->renderer, entry, device->raySceneSet, commonDescriptors + 6,
+                                params);
             if (water) {
                 textures[5] = device->hdr.target->pTexture;
                 textures[6] = device->sceneDepth.target->pTexture;
-                updateDescriptorSet(device->renderer, waterEntry, device->raySceneSet, 15, params);
+                updateDescriptorSet(device->renderer, waterEntry, device->raySceneSet,
+                                    commonDescriptors + 6, params);
             }
-            rayTracing = true;
-            ++device->frameStats.rayTracedPasses;
+            rayTracing = activeEffects != 0;
+            device->frameStats.rayTracedPasses += rayTracing ? 1u : 0u;
         }
     }
 #endif
@@ -3012,13 +3090,10 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
         bind.mDepthStencil.mLoadActionStencil = LOAD_ACTION_DONTCARE;
         bind.mDepthStencil.mStoreActionStencil = STORE_ACTION_DONTCARE;
         cmdBindRenderTargets(cmd, &bind);
-        cmdSetViewport(cmd, 0.0f, 0.0f, static_cast<float>(resolution),
-                       static_cast<float>(resolution), 0.0f, 1.0f);
-        cmdSetScissor(cmd, 0, 0, resolution, resolution);
         BindPipeline(device, cmd, device->pipelineShadow);
         BindDescriptors(device, cmd, entry, device->sceneSet);
-        DrawSceneMeshes(device, cmd, visible, firstDraw, 0, visible.size(), device->pipelineShadow,
-                        true);
+        DrawVirtualShadowPages(device, cmd, visible, firstDraw, shadowPlan);
+        device->frameStats.virtualShadowPages += shadowPlan.count;
         cmdBindRenderTargets(cmd, nullptr);
         Transition(cmd, device->shadow, RESOURCE_STATE_SHADER_RESOURCE);
         device->shadow.lastUsedFrame = thisFrame;
@@ -3092,7 +3167,7 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
     }
 
     // Tone mapping onto the swap chain (keeps its contents and the main depth buffer).
-    if (!RenderFog(device, *scene, pass, water, shadows, fogRays)) {
+    if (!RenderFog(device, *scene, pass, water, shadows, fogRays, shadowPlan.packed.data())) {
         BindPass(device, false, nullptr);
         BindPipeline(device, cmd, device->pipelineTone);
         BindDescriptors(device, cmd, toneEntry, device->sceneSet);
