@@ -222,11 +222,13 @@ float3 RayEnvironmentLighting(float3 base, float metal, float roughness, float3 
     const float3 diffuseWeight =
         (useIbl ? 1.0f - fresnel : float3(1.0f, 1.0f, 1.0f)) * (1.0f - metal) * base;
     float3 irradiance = RayDiffuseEnvironment(normal);
-    if (RayEffect(64u))
+    const bool useCascades = RayEffect(64u);
+    const bool traceDiffuse = RayEffect(8u);
+    if (useCascades)
         irradiance = SampleRadianceCascades(position, normal, irradiance);
     if (restirGI.w > 0.0f) {
         irradiance = restirGI.rgb;
-    } else if (!RayEffect(64u) && RayEffect(8u) && metal < 1.0f && gScene.rayOptions.w > 0.0f) {
+    } else if (!useCascades && traceDiffuse && metal < 1.0f && gScene.rayOptions.w > 0.0f) {
         const uint seed = PixelRayHash(uint(pixel.x) + uint(pixel.y) * uint(gScene.frameSize.x));
         const float3 first = DiffuseRay(normal, seed);
         const float3 second = DiffuseRay(normal, seed ^ 0xa511e9b3u);
