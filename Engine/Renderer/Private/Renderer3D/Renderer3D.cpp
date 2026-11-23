@@ -545,9 +545,9 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     const auto relativeModel = Mat4::Translate(impl_->camera * -1) * model;
     const bool shadowOnly =
         OutsideClipVolume(impl_->viewProjection * relativeModel, mesh.minimum_, mesh.maximum_);
-    const bool outsideShadow = impl_->shadowProjection &&
-                               OutsideClipVolume(*impl_->shadowProjection * relativeModel,
-                                                 mesh.minimum_, mesh.maximum_);
+    const bool outsideShadow =
+        impl_->shadowProjection &&
+        OutsideClipVolume(*impl_->shadowProjection * relativeModel, mesh.minimum_, mesh.maximum_);
     if (shadowOnly) {
         const bool opaqueCaster = !material.water && material.alphaMode != MaterialAlphaMode::Blend;
         const bool rasterCaster = opaqueCaster && impl_->shadowProjection && !outsideShadow;

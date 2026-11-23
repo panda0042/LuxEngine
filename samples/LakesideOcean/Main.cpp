@@ -212,7 +212,8 @@ public:
     int Run() {
         const int result = Application::Run();
         return result == 0 && (options_.benchmark || !options_.capture.empty()) && !runFinished_
-                   ? 1 : result;
+                   ? 1
+                   : result;
     }
 
 private:
@@ -432,8 +433,8 @@ private:
         if (stats.computeDispatches == 3 + stats.volumetricFogPasses)
             ++waveUpdates_;
         ++frames_;
-        const bool smokeReady = options_.smoke && frames_ >= 5 && waveUpdates_ >= 2 &&
-                                environmentReady;
+        const bool smokeReady =
+            options_.smoke && frames_ >= 5 && waveUpdates_ >= 2 && environmentReady;
         if (captureRequested_ || smokeReady) {
             if (stats.volumetricFogPasses != 1 || gpu.GetCounters().validationErrors)
                 throw std::runtime_error("Lakeside frame did not render the expected passes");
@@ -442,15 +443,15 @@ private:
             if (captureRequested_) {
                 LuxSamples::WritePpmCapture(gpu, options_.capture);
                 runFinished_ = true;
-                std::cout << "Lakeside tick " << options_.tick
-                          << " | virtual shadow pages " << stats.virtualShadowPages
-                          << " | ray-traced passes " << stats.rayTracedPasses << '\n';
+                std::cout << "Lakeside tick " << options_.tick << " | virtual shadow pages "
+                          << stats.virtualShadowPages << " | ray-traced passes "
+                          << stats.rayTracedPasses << '\n';
             }
             Close();
         } else if (std::chrono::steady_clock::now() - start_ > std::chrono::seconds(20)) {
             throw std::runtime_error("Lakeside validation timed out after " +
-                                     std::to_string(waveUpdates_) + " FFT updates: " +
-                                     renderer_.GetLastAssetError());
+                                     std::to_string(waveUpdates_) +
+                                     " FFT updates: " + renderer_.GetLastAssetError());
         }
     }
 
@@ -474,8 +475,8 @@ private:
             std::sort(shadowTimes_.begin(), shadowTimes_.end());
             uint32 width = 0, height = 0;
             GetWindow().GetFramebufferSize(width, height);
-            std::cout << "Lakeside " << gpu.GetInfo().deviceName << " | " << width << 'x'
-                      << height << " | " << Samples << " GPU frames | frame ms p50 "
+            std::cout << "Lakeside " << gpu.GetInfo().deviceName << " | " << width << 'x' << height
+                      << " | " << Samples << " GPU frames | frame ms p50 "
                       << frameTimes_[Samples / 2 - 1] << " p95 "
                       << frameTimes_[Samples * 95 / 100 - 1] << " | shadow ms p50 "
                       << shadowTimes_[Samples / 2 - 1] << " p95 "
@@ -520,8 +521,8 @@ int Run(int argc, char** argv) {
     constexpr auto usage = "SampleLakesideOcean [--smoke-test | --benchmark | "
                            "--capture PATH.ppm [--tick 0..600] [--view default|shore|waterline]]\n";
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
-        std::cout << usage <<
-                     "Space: pause waves. F: fog. R: hardware rays. C: radiance cascades.\n"
+        std::cout << usage
+                  << "Space: pause waves. F: fog. R: hardware rays. C: radiance cascades.\n"
                      "Escape: quit.\n";
         return 0;
     }
@@ -537,8 +538,8 @@ int Run(int argc, char** argv) {
     } else if (argc > 1) {
         if (argc < 3 || std::string_view(argv[1]) != "--capture")
             return invalidOptions();
-        options.capture = std::filesystem::path(
-            std::u8string_view(reinterpret_cast<const char8_t*>(argv[2])));
+        options.capture =
+            std::filesystem::path(std::u8string_view(reinterpret_cast<const char8_t*>(argv[2])));
         if (options.capture.extension() != ".ppm")
             return invalidOptions();
         for (int index = 3; index < argc; index += 2) {
@@ -549,7 +550,8 @@ int Run(int argc, char** argv) {
             if (name == "--tick") {
                 const auto [end, error] =
                     std::from_chars(value.data(), value.data() + value.size(), options.tick);
-                if (error != std::errc{} || end != value.data() + value.size() || options.tick > 600)
+                if (error != std::errc{} || end != value.data() + value.size() ||
+                    options.tick > 600)
                     return invalidOptions();
             } else if (name == "--view" && value == "default") {
                 options.view = CameraView::Default;

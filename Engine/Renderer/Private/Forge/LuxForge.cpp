@@ -228,7 +228,7 @@ struct LuxForgeDevice {
 
     // HDR scene (renderScene). The targets are shared by every pass and frame: one queue runs
     // the passes in order and barriers separate each write from the reads before it.
-    static constexpr uint32_t kMaxScenePasses = 16;  // per frame, like the Vulkan backend
+    static constexpr uint32_t kMaxScenePasses = 16; // per frame, like the Vulkan backend
     static constexpr uint32_t kTimingQueriesPerSlot = 1 + kMaxScenePasses;
     QueryPool* timingQueries = nullptr;
     double timestampFrequency = 0;
@@ -2365,8 +2365,8 @@ bool InitScene(LuxForgeDevice* device) {
     device->shaderSky = LoadShader(device, "luxfullscreen.vert", "luxsky.frag");
     device->shaderTone = LoadShader(device, "luxfullscreen.vert", "luxtone.frag");
     device->shaderOpaqueCopy = LoadShader(device, "luxfullscreen.vert", "luxopaquecopy.frag");
-    if (!device->shaderScene || !device->shaderShadow || !device->shaderOpaqueShadow || !device->shaderSky ||
-        !device->shaderTone || !device->shaderOpaqueCopy)
+    if (!device->shaderScene || !device->shaderShadow || !device->shaderOpaqueShadow ||
+        !device->shaderSky || !device->shaderTone || !device->shaderOpaqueCopy)
         return failed("LuxForge HDR scene shader files are missing next to the renderer library");
 
     const uint32_t entries = device->framesInFlight * LuxForgeDevice::kMaxScenePasses *
@@ -2488,8 +2488,7 @@ bool InitScene(LuxForgeDevice* device) {
     graphics.pDepthState = &noDepth;
     addPipeline(device->renderer, &desc, &device->pipelineTone);
     if (!device->pipelineSky || !device->pipelineShadow || !device->pipelineOpaqueShadow ||
-        !device->pipelineTone ||
-        !device->pipelineOpaqueCopy) {
+        !device->pipelineTone || !device->pipelineOpaqueCopy) {
         // pipelineTone doubles as "initialised": make sure it is unset after a partial failure.
         if (device->pipelineTone)
             removePipeline(device->renderer, device->pipelineTone);
@@ -2549,14 +2548,16 @@ void ShutdownScene(LuxForgeDevice* device) {
             removePipeline(device->renderer, pipeline);
         pipeline = nullptr;
     }
-    for (Pipeline** pipeline : {&device->pipelineShadow, &device->pipelineOpaqueShadow, &device->pipelineSky,
-                                &device->pipelineTone, &device->pipelineOpaqueCopy})
+    for (Pipeline** pipeline :
+         {&device->pipelineShadow, &device->pipelineOpaqueShadow, &device->pipelineSky,
+          &device->pipelineTone, &device->pipelineOpaqueCopy})
         if (*pipeline) {
             removePipeline(device->renderer, *pipeline);
             *pipeline = nullptr;
         }
-    for (Shader** shader : {&device->shaderScene, &device->shaderShadow, &device->shaderOpaqueShadow, &device->shaderSky,
-                            &device->shaderTone, &device->shaderOpaqueCopy})
+    for (Shader** shader :
+         {&device->shaderScene, &device->shaderShadow, &device->shaderOpaqueShadow,
+          &device->shaderSky, &device->shaderTone, &device->shaderOpaqueCopy})
         if (*shader) {
             removeShader(device->renderer, *shader);
             *shader = nullptr;
@@ -2769,7 +2770,8 @@ Pipeline* DrawSceneMeshes(LuxForgeDevice* device, Cmd* cmd, const std::vector<Sc
         if (shadowPipeline &&
             (draw.alphaMode == 2 || WaterDraw(draw) || !(draw.shadowPageMask & shadowPages)))
             continue;
-        Pipeline* next = shadowPipeline ? shadowPipeline : MaterialPipeline(device, draw, rayTracing);
+        Pipeline* next =
+            shadowPipeline ? shadowPipeline : MaterialPipeline(device, draw, rayTracing);
         if (next != pipeline) {
             BindPipeline(device, cmd, next);
             if (shadowPipeline)
@@ -2814,7 +2816,8 @@ void DrawColorMeshes(LuxForgeDevice* device, Cmd* cmd, const std::vector<SceneMe
     BindDescriptors(device, cmd,
                     device->frameSlot * LuxForgeDevice::kMaxLightBlocks + device->currentLight,
                     device->lightSet);
-    DrawSceneMeshes(device, cmd, draws, firstDraw, begin, end, pipeline, entry, nullptr, rayTracing);
+    DrawSceneMeshes(device, cmd, draws, firstDraw, begin, end, pipeline, entry, nullptr,
+                    rayTracing);
 }
 
 void WriteSceneMaterial(LuxForgeDevice* device, uint32_t materialIndex,
@@ -2918,11 +2921,12 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
     const size_t waterEnd = firstLayer(SceneLayer::Blend);
     const size_t colorEnd = firstLayer(SceneLayer::ShadowOnly);
     const auto shadowPlan = PlanVirtualShadow(*scene, visible, colorEnd);
-    if (shadows && (!device->shadow.target || device->shadow.target->mWidth != shadowPlan.atlasWidth ||
-                    device->shadow.target->mHeight != shadowPlan.atlasHeight)) {
+    if (shadows &&
+        (!device->shadow.target || device->shadow.target->mWidth != shadowPlan.atlasWidth ||
+         device->shadow.target->mHeight != shadowPlan.atlasHeight)) {
         RetireTarget(device, device->shadow);
-        if (!AddSceneTarget(device, device->shadow, shadowPlan.atlasWidth, shadowPlan.atlasHeight, kDepthFormat,
-                            4, "LuxForge shadow map"))
+        if (!AddSceneTarget(device, device->shadow, shadowPlan.atlasWidth, shadowPlan.atlasHeight,
+                            kDepthFormat, 4, "LuxForge shadow map"))
             return Fail(device, "Shadow map could not be created");
     }
     const bool water = opaqueEnd < waterEnd;
