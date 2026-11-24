@@ -1,6 +1,7 @@
 #include <LuxEditor/Viewport/EngineSceneRenderer.hpp>
 #include <LuxEditor/Viewport/GameViewport.hpp>
 #include <LuxEditor/Viewport/ViewportCamera3D.hpp>
+#include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/Platform/Input.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
@@ -26,6 +27,25 @@ LuxEngine::Vec3 Transform(const LuxEngine::Mat4& matrix, LuxEngine::Vec3 point) 
 LuxUI::PointF Project2D(const LuxEngine::Mat4& matrix, LuxUI::SizeF size, LuxEngine::Vec3 point) {
     const auto clip = Transform(matrix, point);
     return {(clip.x + 1) * size.width() * .5, (1 - clip.y) * size.height() * .5};
+}
+
+std::pair<int, int> SpriteCell(int size, LuxEngine::uint32 cell, LuxEngine::uint32 count) {
+    const auto start = static_cast<int>(std::ceil(double(cell) * size / count - .5));
+    const auto end = static_cast<int>(std::ceil(double(cell + 1) * size / count - .5));
+    const int first = std::clamp(start, 0, size - 1);
+    return {first, std::clamp(end, first + 1, size)};
+}
+
+void TintSprite(LuxUI::Image& image, const std::array<float, 4>& tint) {
+    for (int y = 0; y < image.height(); ++y) {
+        auto* pixels = image.scanLine(y);
+        for (int x = 0; x < image.width(); ++x)
+            for (size_t channel = 0; channel < tint.size(); ++channel) {
+                auto& value = pixels[static_cast<size_t>(x) * 4 + channel];
+                value = static_cast<unsigned char>(
+                    std::clamp(float(value) * tint[channel], 0.f, 255.f) + .5f);
+            }
+    }
 }
 
 std::optional<LuxEngine::LuxMouseButton> MouseButton(LuxUI::Flags::MouseButton button) {
@@ -78,6 +98,8 @@ void GameViewport::SetScene(LuxEngine::Scene* scene) {
     paused_ = false;
     inputEnabled_ = false;
     frame_ = {};
+    softwareTextures_.clear();
+    softwareTextureBytes_ = 0;
     update();
 }
 
@@ -89,6 +111,8 @@ void GameViewport::SetSceneProvider(std::function<LuxEngine::Scene*()> provider)
     inputEnabled_ = false;
     paused_ = false;
     frame_ = {};
+    softwareTextures_.clear();
+    softwareTextureBytes_ = 0;
     update();
 }
 
@@ -196,6 +220,33 @@ void GameViewport::paintEvent(LuxUI::PaintEvent*) {
     }
 }
 
+LuxUI::Image GameViewport::ReadSoftwareTexture(const std::string& path) {
+    const auto revision = LuxEngine::AssetManager::GetTextureRevision(path);
+    if (const auto found = softwareTextures_.find(path); found != softwareTextures_.end()) {
+        if (found->second.revision == revision)
+            return found->second.image;
+        softwareTextureBytes_ -= static_cast<size_t>(found->second.image.sizeInBytes());
+        softwareTextures_.erase(found);
+    }
+    int width = 0, height = 0;
+    std::vector<LuxEngine::uint8> rgba;
+    if (!LuxEngine::AssetManager::DecodeTextureCpu(path, width, height, rgba))
+        return {};
+    const auto image =
+        LuxUI::Image(rgba.data(), width, height, LuxUI::Image::Format_RGBA8888).copy();
+    constexpr size_t budget = 64 * 1024 * 1024;
+    const auto bytes = static_cast<size_t>(image.sizeInBytes());
+    if (bytes && bytes <= budget) {
+        if (softwareTextures_.size() >= 256 || bytes > budget - softwareTextureBytes_) {
+            softwareTextures_.clear();
+            softwareTextureBytes_ = 0;
+        }
+        softwareTextures_.emplace(path, SoftwareTexture{revision, image});
+        softwareTextureBytes_ += bytes;
+    }
+    return image;
+}
+
 void GameViewport::PaintSoftware(LuxUI::Painter& painter, LuxEngine::Scene& scene) {
     const auto camera = ResolveGameViewCamera(scene, width(), height());
     painter.setRenderHint(LuxUI::Painter::Antialiasing);
@@ -255,12 +306,19 @@ void GameViewport::PaintSoftware(LuxUI::Painter& painter, LuxEngine::Scene& scen
             painter.drawPolygon(face.points);
         }
     }
+    const auto project = [&](const LuxEngine::Mat4& world, LuxEngine::Vec3 point) {
+        return Project2D(camera.camera2D.GetViewProjectionMatrix(), size(),
+                         Transform(world, point));
+    };
+    const auto exposure = scene.GetSettings().exposure;
+    const auto exposed = [exposure](LuxEngine::Vec4 color) {
+        return LuxEngine::Vec4{color.x * exposure, color.y * exposure, color.z * exposure, color.w};
+    };
     const auto drawQuad = [&](const LuxEngine::Mat4& world, LuxEngine::Vec4 color) {
         LuxUI::PolygonF points;
         for (const auto point :
              {LuxEngine::Vec3{-.5f, -.5f, 0}, {.5f, -.5f, 0}, {.5f, .5f, 0}, {-.5f, .5f, 0}})
-            points << Project2D(camera.camera2D.GetViewProjectionMatrix(), size(),
-                                Transform(world, point));
+            points << project(world, point);
         painter.setBrush(Color(color));
         painter.drawPolygon(points);
     };
@@ -285,11 +343,52 @@ void GameViewport::PaintSoftware(LuxUI::Painter& painter, LuxEngine::Scene& scen
                              LuxEngine::Mat4::Translate(
                                  {(x + .5f) * map->tileSize, (y + .5f) * map->tileSize, 0}) *
                              LuxEngine::Mat4::Scale({map->tileSize, map->tileSize, 1}),
-                         tileColors[tile]);
+                         exposed(tileColors[tile]));
             }
     }
-    for (auto entity : entities)
-        if (const auto* sprite = entity.TryGetComponent<LuxEngine::SpriteRendererComponent>())
-            drawQuad(scene.GetWorldMatrix(entity.GetId()), sprite->color);
+    for (auto entity : entities) {
+        const auto* sprite = entity.TryGetComponent<LuxEngine::SpriteRendererComponent>();
+        if (!sprite)
+            continue;
+        const auto world = scene.GetWorldMatrix(entity.GetId());
+        const auto color = exposed(sprite->color);
+        if (!std::isfinite(color.x) || !std::isfinite(color.y) || !std::isfinite(color.z) ||
+            !std::isfinite(color.w))
+            continue;
+        if (sprite->texturePath.empty()) {
+            drawQuad(world, color);
+            continue;
+        }
+        if (!sprite->columns || !sprite->rows || sprite->columns > 4096 || sprite->rows > 4096 ||
+            sprite->frame >= sprite->columns * sprite->rows)
+            continue;
+        auto texture = ReadSoftwareTexture(scene.ResolveAssetPath(sprite->texturePath));
+        if (texture.isNull())
+            continue;
+        const auto [left, right] =
+            SpriteCell(texture.width(), sprite->frame % sprite->columns, sprite->columns);
+        const auto [top, bottom] =
+            SpriteCell(texture.height(), sprite->frame / sprite->columns, sprite->rows);
+        LuxUI::Rect source(left, top, right - left, bottom - top);
+        const std::array<float, 4> tint{color.x, color.y, color.z, color.w};
+        if (!std::ranges::all_of(tint, [](float value) { return value == 1; })) {
+            texture = texture.copy(source);
+            TintSprite(texture, tint);
+            source = texture.rect();
+        }
+        const auto topLeft = project(world, {-.5, .5, 0});
+        const auto across = project(world, {.5, .5, 0}) - topLeft;
+        const auto down = project(world, {-.5, -.5, 0}) - topLeft;
+        if (!std::isfinite(topLeft.x()) || !std::isfinite(topLeft.y()) ||
+            !std::isfinite(across.x()) || !std::isfinite(across.y()) || !std::isfinite(down.x()) ||
+            !std::isfinite(down.y()))
+            continue;
+        painter.save();
+        painter.setWorldTransform(
+            LuxUI::Transform(across.x(), across.y(), down.x(), down.y(), topLeft.x(), topLeft.y()),
+            true);
+        painter.drawImage(LuxUI::RectF(0, 0, 1, 1), texture, LuxUI::RectF(source));
+        painter.restore();
+    }
 }
 } // namespace LuxEditor

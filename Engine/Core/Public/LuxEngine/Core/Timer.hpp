@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LuxEngine/Core/Core.hpp>
+#include <chrono>
 
 namespace LuxEngine {
 
@@ -12,7 +13,7 @@ public:
     double ElapsedMilliseconds() const;
 
 private:
-    uint64 startTicksNs_ = 0;
+    std::chrono::steady_clock::time_point start_;
 };
 
 class LUX_API FixedStepAccumulator {

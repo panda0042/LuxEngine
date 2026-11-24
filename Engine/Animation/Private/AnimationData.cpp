@@ -27,7 +27,7 @@ std::array<double, 4> BlendAnimationValue(AnimationProperty property, const Valu
     if (property != AnimationProperty::Rotation) {
         Value result;
         for (size_t i = 0; i < 4; ++i)
-            result[i] = a[i] + (b[i] - a[i]) * weight;
+            result[i] = std::lerp(a[i], b[i], weight);
         return result;
     }
     const auto value = SlerpRotation({a[0], a[1], a[2]}, {b[0], b[1], b[2]}, weight);
@@ -88,6 +88,10 @@ std::vector<AnimationEvent> AnimationPlayback::Advance(double dt, double duratio
                 if (wrap == AnimationWrap::PingPong && event.time > 0 && event.time < duration)
                     emit(start + period - event.time, event);
             }
+        if (wrap == AnimationWrap::Loop && next < previous && phase == 0)
+            for (const auto& event : events)
+                if (event.time == duration)
+                    emit(0, event);
     }
     std::stable_sort(crossed.begin(), crossed.end(), [&](const auto& a, const auto& b) {
         return next >= previous ? a.first < b.first : a.first > b.first;

@@ -42,6 +42,13 @@ void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, dou
         {
             const auto matrix = scene.GetWorldMatrix(id);
             const auto* m = matrix.elements;
+            if (!std::all_of(std::begin(matrix.elements), std::end(matrix.elements),
+                             [](double value) { return std::isfinite(value); })) {
+                if (error_.empty())
+                    error_ = "Jolt physics entity #" + std::to_string(id) +
+                             ": non-finite world transform";
+                continue;
+            }
             const Vec3 axes[] = {{m[0], m[1], m[2]}, {m[4], m[5], m[6]}, {m[8], m[9], m[10]}};
             const double lengths[] = {std::hypot(static_cast<double>(m[0]), m[1], m[2]),
                                       std::hypot(static_cast<double>(m[4]), m[5], m[6]),
@@ -53,10 +60,10 @@ void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, dou
             if (supported)
                 for (int a = 0; a < axisCount; ++a)
                     for (int b = a + 1; b < axisCount; ++b) {
-                        const double dot = static_cast<double>(axes[a].x) * axes[b].x +
-                                           static_cast<double>(axes[a].y) * axes[b].y +
-                                           static_cast<double>(axes[a].z) * axes[b].z;
-                        supported = supported && std::abs(dot / (lengths[a] * lengths[b])) <= 1e-4;
+                        const double dot = (axes[a].x / lengths[a]) * (axes[b].x / lengths[b]) +
+                                           (axes[a].y / lengths[a]) * (axes[b].y / lengths[b]) +
+                                           (axes[a].z / lengths[a]) * (axes[b].z / lengths[b]);
+                        supported = supported && std::abs(dot) <= 1e-4;
                     }
             if (!supported) {
                 if (error_.empty())
@@ -65,7 +72,14 @@ void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, dou
                 continue;
             }
         }
-        const auto transform = scene.GetWorldTransform(id);
+        TransformComponent transform;
+        try {
+            transform = scene.GetWorldTransform(id);
+        } catch (const std::logic_error&) {
+            if (error_.empty())
+                error_ = "Jolt physics entity #" + std::to_string(id) + ": invalid world transform";
+            continue;
+        }
         PhysicsBodyDescription body;
         body.entity = id;
         body.position = transform.position;

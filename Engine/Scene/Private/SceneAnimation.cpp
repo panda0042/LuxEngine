@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <string_view>
 
@@ -139,6 +140,15 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
                                 RootMotionDeltas* physicsMotion) {
     if (!IsAlive(owner))
         return;
+    const auto finite = [](Vec3 value) {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+    };
+    const auto finiteValues = [](const auto& values) {
+        return std::ranges::all_of(values, [](double value) { return std::isfinite(value); });
+    };
+    const auto fitsFloat = [](double value) {
+        return std::abs(value) <= std::numeric_limits<float>::max();
+    };
     for (auto id : GetComponentEntityIds<ModelAnimationComponent>()) {
         auto& model = GetComponent<ModelAnimationComponent>(id);
         if (model.poseOwner == owner)
@@ -146,7 +156,7 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
     }
     auto applyMotion = [&](Vec3 delta) {
         auto* transform = TryGetComponent<TransformComponent>(owner);
-        if (!rootMotion || !transform || dt <= 0)
+        if (!rootMotion || !transform || dt <= 0 || !finite(delta))
             return;
         auto* body2D = TryGetComponent<Rigidbody2DComponent>(owner);
         auto* body3D = TryGetComponent<Rigidbody3DComponent>(owner);
@@ -156,18 +166,29 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
                                HasComponent<BoxCollider3DComponent>(owner);
         if (dynamic2D || dynamic3D) {
             const auto worldDelta = GetWorldMatrix(owner).TransformDirection(delta);
+            if (!finite(worldDelta))
+                return;
             if (physicsMotion)
                 (*physicsMotion)[owner] = worldDelta;
-            else if (dynamic2D)
-                body2D->velocity = {worldDelta.x / dt, worldDelta.y / dt};
-            else
-                body3D->velocity = worldDelta * (1 / dt);
-        } else
-            transform->position += transform->GetTransform().TransformDirection(delta);
+            else {
+                const Vec3 velocity{worldDelta.x / dt, worldDelta.y / dt, worldDelta.z / dt};
+                if (!finite(velocity))
+                    return;
+                if (dynamic2D)
+                    body2D->velocity = {velocity.x, velocity.y};
+                else
+                    body3D->velocity = velocity;
+            }
+        } else {
+            const auto position =
+                transform->position + transform->GetTransform().TransformDirection(delta);
+            if (finite(position))
+                transform->position = position;
+        }
     };
     for (const auto& sample : frame.samples) {
         const uint32 target = bindings.Resolve(owner, sample.target);
-        if (!target)
+        if (!target || !finiteValues(sample.value))
             continue;
         const auto& v = sample.value;
         auto* transform = TryGetComponent<TransformComponent>(target);
@@ -180,6 +201,8 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
         else if (sample.property == AnimationProperty::Scale && transform)
             transform->scale = {v[0], v[1], v[2]};
         else if (sample.property == AnimationProperty::Color) {
+            if (!std::ranges::all_of(v, fitsFloat))
+                continue;
             const Vec4 color{static_cast<float>(v[0]), static_cast<float>(v[1]),
                              static_cast<float>(v[2]), static_cast<float>(v[3])};
             if (auto* sprite = TryGetComponent<SpriteRendererComponent>(target))
@@ -232,7 +255,8 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
             }
             if (auto* script = TryGetComponent<ScriptComponent>(target)) {
                 auto at = script->fields.find(sample.field);
-                if (at != script->fields.end() && std::holds_alternative<float>(at->second))
+                if (at != script->fields.end() && std::holds_alternative<float>(at->second) &&
+                    fitsFloat(v[0]))
                     at->second = static_cast<float>(v[0]);
             }
         }
@@ -293,7 +317,7 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
     }
     std::vector<ModelPoseOverride> overrides;
     for (const auto& sample : frame.samples) {
-        if (sample.target.empty() || int(sample.property) > 2)
+        if (sample.target.empty() || int(sample.property) > 2 || !finiteValues(sample.value))
             continue;
         std::optional<uint32> match;
         for (uint32 node = 0; node < model->nodes.size(); ++node) {

@@ -4,8 +4,11 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace LuxEngine {
+class GpuBuffer;
 class PerspectiveCamera;
 struct Render3DSettings;
 
@@ -54,6 +57,14 @@ class RenderBackend {
 public:
     virtual ~RenderBackend();
 
+    void RetainGeometry(const Ref<GpuBuffer>& vertices, const Ref<GpuBuffer>& indices) {
+        frameGeometry_.emplace_back(vertices, indices);
+    }
+
+    void ReleaseFrameGeometry() {
+        frameGeometry_.clear();
+    }
+
     virtual bool Initialize(Window& window, const GpuDeviceConfig& config) = 0;
     virtual void Shutdown() = 0;
     virtual bool Usable() const = 0;
@@ -99,6 +110,9 @@ public:
     virtual bool HasTexture(uint64 handle) const = 0;
 
     virtual std::unique_ptr<Scene3DRenderer> CreateScene3DRenderer() = 0;
+
+private:
+    std::vector<std::pair<Ref<GpuBuffer>, Ref<GpuBuffer>>> frameGeometry_;
 };
 
 // Creates the backend used by GpuDevice::Initialize.

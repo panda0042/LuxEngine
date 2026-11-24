@@ -42,7 +42,9 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 tint, float roughness, 
     const float sceneDepth = OpaqueDepthAt(uv);
     const float thickness = clamp((WaterDepth(sceneDepth) - pointDepth) * rayScale, 0.0f, 32.0f);
     const float ior = gDraw.water.w;
-    const float3 bend = refract(-v, n, rcp(ior)) + v;
+    const float3 refraction = refract(-v, n, frontFacing ? rcp(ior) : ior);
+    const bool totalInternalReflection = dot(refraction, refraction) <= 1e-10f;
+    const float3 bend = totalInternalReflection ? float3(0.0f, 0.0f, 0.0f) : refraction + v;
     const float2 screenBend = float2(dot(bend, normalize(gScene.right.xyz)),
                                    -dot(bend, normalize(gScene.up.xyz)));
     float2 sampleUV = saturate(uv + screenBend * min(0.05f, thickness * 0.025f));
@@ -73,7 +75,8 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 tint, float roughness, 
     float3 behind = opaque.rgb + (1.0f - opaque.a) * environment;
     float f0 = (ior - 1.0f) / (ior + 1.0f);
     f0 *= f0;
-    float fresnel = f0 + (1.0f - f0) * pow(1.0f - saturate(dot(n, v)), 5.0f);
+    const float fresnel = totalInternalReflection
+        ? 1.0f : f0 + (1.0f - f0) * pow(1.0f - saturate(dot(n, v)), 5.0f);
 #ifdef LUX_RAY_QUERY
     const uint bounces = uint(gScene.rayOptions.z);
     if (RayEffect(2u))
@@ -84,21 +87,15 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 tint, float roughness, 
         if (!customReflection || traced.w >= 0.0f)
             reflected = traced.rgb;
     }
-    if (RayEffect(4u))
+    if (RayEffect(4u) && !totalInternalReflection)
     {
-        const float3 direction = refract(-v, n, frontFacing ? rcp(ior) : ior);
-        if (dot(direction, direction) > 1e-10f)
+        const float3 origin = BiasRayOrigin(In.world, n, refraction);
+        const float4 traced = TraceRayRadiance(origin, refraction, roughness, bounces);
+        if (traced.w >= 0.0f)
         {
-            const float3 origin = BiasRayOrigin(In.world, n, direction);
-            const float4 traced = TraceRayRadiance(origin, direction, roughness, bounces);
-            if (traced.w >= 0.0f)
-            {
-                behind = traced.rgb;
-                refractedDepth = clamp(traced.w, 0.0f, 32.0f);
-            }
+            behind = traced.rgb;
+            refractedDepth = clamp(traced.w, 0.0f, 32.0f);
         }
-        else
-            fresnel = 1.0f;
     }
 #endif
     const float3 transmittance = exp(-gDraw.water.xyz * refractedDepth);

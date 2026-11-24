@@ -178,6 +178,16 @@ int main() {
             gpu.Clear(0, 0, 0, 1);
             gpu.RequestFrameCapture();
             Renderer3D::BeginScene(camera, DirectionalLight{});
+            ModelPose incomplete;
+            if (Renderer3D::DrawMeshAsset(LUX_FBX_ANIMATED_FIXTURE, transform, Material3D{}, 0, 0,
+                                          .25, 1, &incomplete) ||
+                Renderer3D::GetLastAssetError().empty())
+                throw std::runtime_error(
+                    "Missing pose submesh should be rejected with a diagnostic");
+            incomplete.submeshes.emplace_back();
+            if (Renderer3D::DrawMeshAsset(LUX_FBX_ANIMATED_FIXTURE, transform, Material3D{}, 0, 0,
+                                          .25, 1, &incomplete))
+                throw std::runtime_error("Pose with the wrong vertex count should be rejected");
             if (!Renderer3D::DrawMeshAsset(LUX_FBX_ANIMATED_FIXTURE, transform, Material3D{}, 0, 0,
                                            .25, 1, &pose, 1))
                 throw std::runtime_error("Blended model upload failed");

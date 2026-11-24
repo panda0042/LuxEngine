@@ -461,18 +461,32 @@ struct World::State {
     Stats stats;
     std::map<ChunkKey, Loaded> loaded;
     std::mutex mutex;
-    std::condition_variable_any wake;
+    std::condition_variable wake;
     std::deque<ChunkKey> requests;
     std::deque<Draft> ready;
     std::optional<ChunkKey> active;
     std::exception_ptr workerError;
-    std::jthread worker;
+    bool stopping = false;
+    std::thread worker;
 
-    void Work(std::stop_token stop) {
+    ~State() {
+        if (!worker.joinable())
+            return;
+        {
+            const std::lock_guard lock(mutex);
+            stopping = true;
+        }
+        wake.notify_one();
+        worker.join();
+    }
+
+    void Work() {
         try {
             std::unique_lock lock(mutex);
-            while (wake.wait(lock, stop, [&] { return !requests.empty() && ready.size() < 4; })) {
-                if (stop.stop_requested())
+            for (;;) {
+                wake.wait(lock,
+                          [&] { return stopping || (!requests.empty() && ready.size() < 4); });
+                if (stopping)
                     return;
                 const auto key = requests.front();
                 requests.pop_front();
@@ -558,7 +572,7 @@ void World::Start(unsigned seed, unsigned vegetation, int radius, Vec2 initial, 
     s.vegetation = vegetation;
     s.radius = radius;
     s.Commit(Generate(KeyFor(initial), seed, vegetation), device);
-    s.worker = std::jthread([&s](std::stop_token token) { s.Work(token); });
+    s.worker = std::thread([&s] { s.Work(); });
     Stream(initial, {}, device);
 }
 

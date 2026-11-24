@@ -26,6 +26,11 @@ bool FiniteVertexColor(const Vec4& color) {
            std::isfinite(color.w);
 }
 
+bool FitsGpuVector(Vec3 value) {
+    constexpr auto limit = std::numeric_limits<float>::max();
+    return std::abs(value.x) <= limit && std::abs(value.y) <= limit && std::abs(value.z) <= limit;
+}
+
 float AlphaMaskCutoff(const Material3D& material) {
     if (material.alphaMode != MaterialAlphaMode::Mask || material.alphaCutoff <= 0 ||
         material.albedoColor.w <= 0)
@@ -132,7 +137,6 @@ struct Renderer3D::Context::Impl {
     std::unordered_map<std::string, CachedTexture> textures;
     // Scene draws retain GPU IDs until Render() records them. Cache eviction must not retire
     // buffers or textures that a previously submitted draw in this scene still references.
-    std::vector<Ref<Mesh3D>> frameMeshes;
     std::vector<Ref<GpuTexture>> frameTextures;
     std::unordered_map<std::string, std::string> warnings;
     std::string lastError;
@@ -228,23 +232,28 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
         const auto& position = vertex.position;
         const auto& normal = vertex.normal;
         if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
-            !std::isfinite(position.z) || !std::isfinite(normal.x) || !std::isfinite(normal.y) ||
-            !std::isfinite(normal.z) || !std::isfinite(vertex.texCoords.x) ||
-            !std::isfinite(vertex.texCoords.y) || !FiniteVertexColor(vertex.color))
+            !std::isfinite(position.z) || !FitsGpuVector(normal) ||
+            !std::isfinite(vertex.texCoords.x) || !std::isfinite(vertex.texCoords.y) ||
+            !FiniteVertexColor(vertex.color))
             return false;
         const auto relative = position - origin;
+        if (!FitsGpuVector(relative))
+            return false;
         ExtendBounds(minimum, maximum, relative);
         data.push_back({relative, vertex.color, vertex.texCoords, normal});
     }
     const auto vertexBytes = static_cast<uint32>(data.size() * sizeof(RenderVertex));
     const auto indexBytes = static_cast<uint32>(indices.size_bytes());
-    if (!vertices_.Initialize(gpu, BufferType::Vertex, vertexBytes) ||
-        !vertices_.SetData(data.data(), vertexBytes) ||
-        !indices_.Initialize(gpu, BufferType::Index, indexBytes) ||
-        !indices_.SetData(indices.data(), indexBytes)) {
-        Release();
+    auto verticesBuffer = CreateRef<GpuBuffer>();
+    auto indicesBuffer = CreateRef<GpuBuffer>();
+    if (!verticesBuffer->Initialize(gpu, BufferType::Vertex, vertexBytes) ||
+        !verticesBuffer->SetData(data.data(), vertexBytes) ||
+        !indicesBuffer->Initialize(gpu, BufferType::Index, indexBytes) ||
+        !indicesBuffer->SetData(indices.data(), indexBytes)) {
         return false;
     }
+    vertices_ = std::move(verticesBuffer);
+    indices_ = std::move(indicesBuffer);
     origin_ = origin;
     minimum_ = minimum;
     maximum_ = maximum;
@@ -253,21 +262,21 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
 }
 
 void Mesh3D::Release() {
-    vertices_.Release();
-    indices_.Release();
+    vertices_.reset();
+    indices_.reset();
     indexCount_ = 0;
     ocean_ = false;
 }
 
 bool Mesh3D::IsValid() const {
-    return indexCount_ != 0 && vertices_.IsValid() && indices_.IsValid();
+    return indexCount_ != 0 && vertices_ && indices_ && vertices_->IsValid() && indices_->IsValid();
 }
 
 bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
     if (ocean_ || !IsValid() ||
-        vertices.size_bytes() / sizeof(Vertex3D) != vertices_.GetSize() / sizeof(RenderVertex))
+        vertices.size_bytes() / sizeof(Vertex3D) != vertices_->GetSize() / sizeof(RenderVertex))
         return false;
-    const Vec3 origin = vertices.front().position;
+    const auto origin = vertices.front().position;
     Vec3 minimum, maximum;
     std::vector<RenderVertex> data;
     data.reserve(vertices.size());
@@ -275,22 +284,29 @@ bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
         const auto& p = vertex.position;
         const auto& n = vertex.normal;
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
-            !std::isfinite(n.x) || !std::isfinite(n.y) || !std::isfinite(n.z) ||
-            !std::isfinite(vertex.texCoords.x) || !std::isfinite(vertex.texCoords.y) ||
-            !FiniteVertexColor(vertex.color))
+            !FitsGpuVector(n) || !std::isfinite(vertex.texCoords.x) ||
+            !std::isfinite(vertex.texCoords.y) || !FiniteVertexColor(vertex.color))
             return false;
         const auto relative = p - origin;
+        if (!FitsGpuVector(relative))
+            return false;
         ExtendBounds(minimum, maximum, relative);
         data.push_back({relative, vertex.color, vertex.texCoords, n});
     }
-    const bool updated =
-        vertices_.SetData(data.data(), static_cast<uint32>(data.size() * sizeof(RenderVertex)));
-    if (updated) {
-        origin_ = origin;
-        minimum_ = minimum;
-        maximum_ = maximum;
+    const auto size = static_cast<uint32>(data.size() * sizeof(RenderVertex));
+    if (vertices_.use_count() > 1) {
+        auto next = CreateRef<GpuBuffer>();
+        if (!next->InitializeFromBackend(vertices_->owner_.lock(), BufferType::Vertex, size) ||
+            !next->SetData(data.data(), size))
+            return false;
+        vertices_ = std::move(next);
+    } else if (!vertices_->SetData(data.data(), size)) {
+        return false;
     }
-    return updated;
+    origin_ = origin;
+    minimum_ = minimum;
+    maximum_ = maximum;
+    return true;
 }
 
 bool Mesh3D::UploadOcean(GpuDevice* gpu, const OceanSpectrum& spectrum) {
@@ -314,17 +330,19 @@ bool Mesh3D::UploadOcean(GpuDevice* gpu, const OceanSpectrum& spectrum) {
         }
 
     Mesh3D mesh;
+    mesh.vertices_ = CreateRef<GpuBuffer>();
+    mesh.indices_ = CreateRef<GpuBuffer>();
     const auto indexBytes = static_cast<uint32>(indices.size() * sizeof(uint32));
-    if (!mesh.indices_.Initialize(gpu, BufferType::Index, indexBytes) ||
-        !mesh.indices_.SetData(indices.data(), indexBytes))
+    if (!mesh.indices_->Initialize(gpu, BufferType::Index, indexBytes) ||
+        !mesh.indices_->SetData(indices.data(), indexBytes))
         return false;
     if (!gpu->backend_->CreateOceanBuffer(n, modes, static_cast<float>(settings.patchLength),
                                           static_cast<float>(settings.foamThreshold),
                                           static_cast<float>(settings.foamSoftness),
-                                          mesh.vertices_.handle_))
+                                          mesh.vertices_->handle_))
         return false;
-    mesh.vertices_.owner_ = gpu->backend_;
-    mesh.vertices_.sizeBytes_ = stride * stride * sizeof(RenderVertex);
+    mesh.vertices_->owner_ = gpu->backend_;
+    mesh.vertices_->sizeBytes_ = stride * stride * sizeof(RenderVertex);
     mesh.indexCount_ = static_cast<uint32>(indices.size());
     mesh.ocean_ = true;
     const double halfPatch = settings.patchLength * .5;
@@ -336,8 +354,10 @@ bool Mesh3D::UploadOcean(GpuDevice* gpu, const OceanSpectrum& spectrum) {
 }
 
 bool Mesh3D::UpdateOcean(float timeSeconds) {
-    const auto owner = vertices_.owner_.lock();
-    return ocean_ && owner && owner->UpdateOceanBuffer(vertices_.handle_, timeSeconds);
+    if (!ocean_ || !vertices_)
+        return false;
+    const auto owner = vertices_->owner_.lock();
+    return owner && owner->UpdateOceanBuffer(vertices_->handle_, timeSeconds);
 }
 
 Renderer3D::Context::Context() : impl_(std::make_unique<Impl>()) {}
@@ -374,7 +394,6 @@ void Renderer3D::Context::Shutdown() {
     if (impl_->modern)
         impl_->modern->ClearDraws();
     impl_->modern.reset();
-    impl_->frameMeshes.clear();
     impl_->frameTextures.clear();
     impl_->meshes.clear();
     impl_->textures.clear();
@@ -466,7 +485,6 @@ void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera,
                                     camera.GetPosition(), true});
     }
     impl_->stats = {};
-    impl_->frameMeshes.clear();
     impl_->frameTextures.clear();
     impl_->active = true;
 }
@@ -494,13 +512,17 @@ void Renderer3D::Context::AbortScene() {
     if (!impl_)
         return;
     impl_->active = false;
-    impl_->frameMeshes.clear();
+    if (impl_->modern)
+        impl_->modern->ClearDraws();
     impl_->frameTextures.clear();
 }
 
 void Renderer3D::Context::DrawMesh(std::span<const Vec3> positions, std::span<const uint32> indices,
                                    const Mat4& transform, const Material3D& material) {
     if (!impl_ || !impl_->active || positions.empty() || indices.empty() || indices.size() % 3)
+        return;
+    const auto state = impl_->LockValidState();
+    if (!state)
         return;
     for (auto index : indices)
         if (index >= positions.size())
@@ -534,7 +556,7 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     auto lockedState = impl_->LockValidState();
     if (!lockedState)
         return;
-    if (!mesh.vertices_.BelongsTo(*impl_->device) || !mesh.indices_.BelongsTo(*impl_->device))
+    if (!mesh.vertices_->BelongsTo(*impl_->device) || !mesh.indices_->BelongsTo(*impl_->device))
         return;
     const auto* texture = textures.baseColor;
     if ((texture && !texture->BelongsTo(*impl_->device)) ||
@@ -629,8 +651,8 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
             : LUX_VIRTUAL_SHADOW_ALL_PAGES;
     if (outsideShadow)
         shadowPageMask = 0;
-    if (!impl_->modern->AddDraw({mesh.vertices_.handle_,
-                                 mesh.indices_.handle_,
+    if (!impl_->modern->AddDraw({mesh.vertices_->handle_,
+                                 mesh.indices_->handle_,
                                  texture ? texture->handle_ : 0,
                                  mesh.indexCount_,
                                  model,
@@ -655,6 +677,7 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
                                  terrainRoughness}))
         return;
     ++impl_->stats.meshCount;
+    lockedState->RetainGeometry(mesh.vertices_, mesh.indices_);
     ++impl_->stats.drawCalls;
 }
 
@@ -782,7 +805,14 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
             error = "FBX 애니메이션 시간 또는 클립 번호가 올바르지 않습니다.";
         }
         if (model && static_cast<size_t>(modelSubmesh) < model->submeshes.size()) {
-            const auto& part = model->submeshes[static_cast<size_t>(modelSubmesh)];
+            const auto index = static_cast<size_t>(modelSubmesh);
+            const auto& part = model->submeshes[index];
+            if (overridePose && (index >= overridePose->submeshes.size() ||
+                                 overridePose->submeshes[index].size() != part.vertices.size())) {
+                impl_->Report("mesh:" + key,
+                              "FBX 포즈의 정점 데이터가 하위 메시와 일치하지 않습니다: " + path);
+                return false;
+            }
             const bool ownsPose = overridePose && poseOwner.get() == overridePose;
             const bool poseMatches = overridePose ? ownsPose && cached.usesOverride &&
                                                         cached.pose.lock() == poseOwner &&
@@ -794,7 +824,7 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
                 ModelPose pose;
                 const std::vector<ModelVertex>* source = &part.vertices;
                 if (overridePose) {
-                    source = &overridePose->submeshes.at(static_cast<size_t>(modelSubmesh));
+                    source = &overridePose->submeshes[index];
                 } else if (clip >= 0 || part.skinned || part.morphTargets) {
                     if (model->Evaluate(time, clip, pose, error))
                         source = &pose.submeshes[static_cast<size_t>(modelSubmesh)];
@@ -954,7 +984,6 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
         drawable.occlusionTexture.clear();
         drawable.terrainLayer.reset();
     }
-    impl_->frameMeshes.push_back(cached.mesh);
     DrawMesh(*cached.mesh, transform, drawable);
     return impl_->stats.meshCount > previous;
 }

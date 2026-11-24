@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -18,6 +19,21 @@
 
 namespace {
 int checks = 0;
+
+struct RuntimeFiles {
+    std::filesystem::path root =
+        std::filesystem::temp_directory_path() / std::filesystem::path(u8"lux-runtime-씬") /
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+
+    RuntimeFiles() {
+        std::filesystem::create_directories(root);
+    }
+
+    ~RuntimeFiles() {
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+    }
+};
 
 void Check(bool ok, const char* message) {
     ++checks;
@@ -239,6 +255,102 @@ void Primary2DCamera() {
           "the explicit view is used when no primary camera is active");
 }
 
+void FitMeshBounds() {
+    using namespace LuxEngine;
+    RuntimeFiles files;
+    const auto writeMesh = [&](const char* name, int farZ) {
+        std::ofstream obj(files.root / name);
+        obj << "v 100 -1 -700\nv 102 -1 -700\nv 101 1 " << farZ << "\nf 1 2 3\n";
+        obj.close();
+        Check(static_cast<bool>(obj), "off-center OBJ is written");
+    };
+    writeMesh("off-center.obj", -700);
+    writeMesh("deep.obj", -2700);
+    Scene scene;
+    const auto path = (files.root / "scene.lux").u8string();
+    scene.SetSourcePath({reinterpret_cast<const char*>(path.data()), path.size()});
+    auto entity = scene.CreateEntity("Off-center mesh");
+    auto& mesh = entity.AddComponent<MeshRendererComponent>();
+    mesh.meshPath = "off-center.obj";
+    constexpr double aspect = 9.0 / 16;
+    const auto fitted = FitSceneView(scene, aspect);
+    Check(fitted.centerX == 101, "automatic view centers on the OBJ bounds");
+
+    auto& transform = entity.GetComponent<TransformComponent>();
+    transform.rotation.z = ToRadians(90);
+    transform.scale = {2, 3, 1};
+    const auto view = FitSceneView(scene, aspect);
+    const auto cameras = ResolveScenePlayerCameras(scene, aspect, view);
+    Check(cameras.perspective && cameras.camera3D.GetTarget().z == -700 &&
+              std::abs(view.centerY - 202) < 1e-9,
+          "fallback camera uses rotated, scaled mesh bounds in all three dimensions");
+    const auto visible = [](const Mat4& matrix, Vec3 p) {
+        const auto clip = matrix.TransformPoint(p);
+        const auto* m = matrix.elements;
+        const auto w = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15];
+        return w > 0 && std::abs(clip.x) < w && std::abs(clip.y) < w && clip.z > 0 && clip.z < w;
+    };
+    const auto& matrix = cameras.camera3D.GetViewProjectionMatrix();
+    const auto world = transform.GetTransform();
+    for (const Vec3 vertex : {Vec3{100, -1, -700}, Vec3{102, -1, -700}, Vec3{101, 1, -700}})
+        Check(visible(matrix, world.TransformPoint(vertex)),
+              "every OBJ vertex lies inside the fitted perspective view");
+
+    transform = {};
+    mesh.meshPath = "deep.obj";
+    const auto deep = ResolveScenePlayerCameras(scene, aspect, FitSceneView(scene, aspect));
+    Check(visible(deep.camera3D.GetViewProjectionMatrix(), {100, -1, -700}) &&
+              visible(deep.camera3D.GetViewProjectionMatrix(), {101, 1, -2700}),
+          "a deep mesh fits from its nearest edge through its farthest vertex");
+    mesh.meshPath = "missing.obj";
+    const auto fallback = FitSceneView(scene, aspect);
+    Check(fallback.centerX == 0 && fallback.centerY == 0 && std::isfinite(fallback.halfHeight),
+          "an unavailable mesh uses a finite fallback size");
+}
+
+void PrimaryPerspectiveSelection() {
+    using namespace LuxEngine;
+    Scene scene;
+    auto first = scene.CreateEntity("First primary");
+    auto second = scene.CreateEntity("Second primary");
+    auto& firstCamera = first.AddComponent<CameraComponent>();
+    firstCamera.isPerspective = true;
+    second.AddComponent<CameraComponent>().isPerspective = true;
+    first.GetComponent<TransformComponent>().position = {1e160, 0, 0};
+    second.GetComponent<TransformComponent>().position = {42, 0, 5};
+    const auto positionFallback = ResolveScenePlayerCameras(scene, 1, {});
+    Check(positionFallback.perspective && positionFallback.cameraEntity == second.GetId() &&
+              positionFallback.camera3D.GetPosition().x == 42,
+          "an unusable primary pose hands both its camera ID and view to the next camera");
+
+    first.GetComponent<TransformComponent>().position = {5, 0, 0};
+    firstCamera.fov = .01;
+    const auto projectionFallback = ResolveScenePlayerCameras(scene, 1e-37, {});
+    Check(projectionFallback.cameraEntity == second.GetId() &&
+              projectionFallback.camera3D.GetPosition().x == 42,
+          "camera ID and projection use the same aspect-dependent validation");
+}
+
+void StreamingObserverSkipsInvalidPlayer() {
+    using namespace LuxEngine;
+    Scene scene;
+    auto invalid = scene.CreateEntity("Player");
+    auto parent = scene.CreateEntity("Parent");
+    invalid.GetComponent<TransformComponent>().position.x = 1e308;
+    parent.GetComponent<TransformComponent>().position.x = 1e308;
+    Check(scene.SetParent(invalid.GetId(), parent.GetId(), false), "streaming test hierarchy");
+    auto camera = scene.CreateEntity("Camera");
+    camera.GetComponent<TransformComponent>().position = {12, 4, 0};
+    camera.AddComponent<CameraComponent>();
+    const auto fallback = ResolveSceneStreamingObserver(scene, {}, invalid.GetId());
+    Check(fallback.x == 12 && fallback.y == 4, "invalid player position falls back to the camera");
+    auto valid = scene.CreateEntity("Player");
+    valid.GetComponent<TransformComponent>().position = {1, 2, 3};
+    const auto observer = ResolveSceneStreamingObserver(scene, {}, invalid.GetId());
+    Check(observer.x == 1 && observer.y == 2 && observer.z == 3,
+          "a usable tagged player takes precedence over the camera");
+}
+
 void FixedUpdateTime() {
     constexpr double step = 1.0 / 30;
     LuxEngine::FixedStepAccumulator clock;
@@ -409,24 +521,15 @@ void LegacyLightingAndFrameLimitGpu(const std::filesystem::path& directory) {
     Check(player.RunFrame() == Application::FrameResult::Stopped &&
               player.GetPresentedFrameCount() == 1,
           "the restarted player presents exactly one frame again");
+    Check(!player.LoadedScene(), "a stopped player clears its loaded state");
+    Check(std::filesystem::remove(directory / "legacy-light.lux"), "remove the restart fixture");
+    Check(!player.Initialize() && !player.LoadedScene() && !player.RuntimeFailed(),
+          "a failed restart cannot reuse the previous successful scene state");
 }
 
 int SceneManagementGpu() {
     namespace fs = std::filesystem;
-
-    struct Files {
-        fs::path root = fs::temp_directory_path() / fs::path(u8"lux-runtime-씬") /
-                        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-
-        Files() {
-            fs::create_directories(root);
-        }
-
-        ~Files() {
-            std::error_code error;
-            fs::remove_all(root, error);
-        }
-    } files;
+    RuntimeFiles files;
 
     if (const int result = CameraClippingGpu(files.root); result != 0)
         return result;
@@ -512,6 +615,9 @@ int main(int argc, char** argv) {
         else if (suite == "fit") {
             Fit();
             Primary2DCamera();
+            FitMeshBounds();
+            PrimaryPerspectiveSelection();
+            StreamingObserverSkipsInvalidPlayer();
             FixedUpdateTime();
         } else if (suite == "write-scene" && argc > 2)
             WriteScene(argv[2]);
