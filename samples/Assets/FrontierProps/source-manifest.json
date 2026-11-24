@@ -1,0 +1,506 @@
+{
+  "name": "FrontierProps",
+  "author": "tevy",
+  "source": "https://tevy.dev/models",
+  "license": "CC0-1.0",
+  "sources": [
+    {
+      "name": "Corner Shop Block",
+      "source": "https://tevy.dev/models/corner-shop-block",
+      "original": {
+        "lod": 2,
+        "path": "/models/corner-shop-block/v2/lod2.glb",
+        "bytes": 593692,
+        "sha256": "a4b6c307446cdf6006555e3f49dba9e9b4d8be1bfc7b97b88ad2092cef57498d",
+        "triangles": 438,
+        "url": "https://tevy.dev/models/corner-shop-block/v2/lod2.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "corner-shop-block/albedo-0.png",
+        "corner-shop-block/materials.txt",
+        "corner-shop-block/model.fbx",
+        "corner-shop-block/normal-0.png",
+        "corner-shop-block/roughness-0.png"
+      ]
+    },
+    {
+      "name": "Village Grocery Shop",
+      "source": "https://tevy.dev/models/village-shop",
+      "original": {
+        "lod": 2,
+        "path": "/models/village-shop/v2/lod2.glb",
+        "bytes": 75932,
+        "sha256": "fd177fbf573dfad69e384f92d74c6cc6c2b5fcce8b1265f6d2aac86216ca3e38",
+        "triangles": 954,
+        "url": "https://tevy.dev/models/village-shop/v2/lod2.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "village-shop/albedo-1.png",
+        "village-shop/materials.txt",
+        "village-shop/model.fbx",
+        "village-shop/normal-1.png",
+        "village-shop/roughness-1.png"
+      ]
+    },
+    {
+      "name": "Roadside Diner",
+      "source": "https://tevy.dev/models/roadside-diner",
+      "original": {
+        "lod": 2,
+        "path": "/models/roadside-diner/v2/lod2.glb",
+        "bytes": 183732,
+        "sha256": "86bbe4cd57b4605e5a080a5d61fe77247d6726d6e5debe49be40a52d73c65504",
+        "triangles": 2908,
+        "url": "https://tevy.dev/models/roadside-diner/v2/lod2.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "roadside-diner/albedo-0.png",
+        "roadside-diner/materials.txt",
+        "roadside-diner/model.fbx",
+        "roadside-diner/normal-0.png",
+        "roadside-diner/roughness-0.png"
+      ]
+    },
+    {
+      "name": "Car Workshop",
+      "source": "https://tevy.dev/models/workshop-building",
+      "original": {
+        "lod": 2,
+        "path": "/models/workshop-building/v2/lod2.glb",
+        "bytes": 478064,
+        "sha256": "6dc363023036442049953cbc00e6dbebf53ac054311b4b8490c49264523c8858",
+        "triangles": 9196,
+        "url": "https://tevy.dev/models/workshop-building/v2/lod2.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "workshop-building/albedo-0.png",
+        "workshop-building/materials.txt",
+        "workshop-building/model.fbx",
+        "workshop-building/roughness-0.png"
+      ]
+    },
+    {
+      "name": "Two-Storey Wooden House",
+      "source": "https://tevy.dev/models/village-house",
+      "original": {
+        "lod": 2,
+        "path": "/models/village-house/v2/lod2.glb",
+        "bytes": 99172,
+        "sha256": "2ed400d0b6636733dc33887c7ad497cf69fe4f552fe70c6db2578e61af3ef17c",
+        "triangles": 1600,
+        "url": "https://tevy.dev/models/village-house/v2/lod2.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "village-house/albedo-0.png",
+        "village-house/materials.txt",
+        "village-house/model.fbx",
+        "village-house/normal-0.png",
+        "village-house/roughness-0.png"
+      ]
+    },
+    {
+      "name": "Abandoned Fuel Station",
+      "source": "https://tevy.dev/models/abandoned-fuel-station",
+      "original": {
+        "lod": 2,
+        "path": "/models/abandoned-fuel-station/v2/lod2.glb",
+        "bytes": 179200,
+        "sha256": "ea20fcdc7287e26f6b37dee3394b7593855de1f37c54d7ff1f124afc31a82879",
+        "triangles": 3210,
+        "url": "https://tevy.dev/models/abandoned-fuel-station/v2/lod2.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "abandoned-fuel-station/albedo-0.png",
+        "abandoned-fuel-station/materials.txt",
+        "abandoned-fuel-station/model.fbx",
+        "abandoned-fuel-station/roughness-0.png"
+      ]
+    },
+    {
+      "name": "Falu Red Boathouse",
+      "source": "https://tevy.dev/models/boathouse",
+      "original": {
+        "lod": 2,
+        "path": "/models/boathouse/v2/lod2.glb",
+        "bytes": 97328,
+        "sha256": "cf316d558e840db81d9d511a19c8e8086e364e9f671b677c00ac2aa7b2ce1a53",
+        "triangles": 342,
+        "url": "https://tevy.dev/models/boathouse/v2/lod2.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "boathouse/albedo-0.png",
+        "boathouse/materials.txt",
+        "boathouse/model.fbx",
+        "boathouse/normal-0.png",
+        "boathouse/roughness-0.png"
+      ]
+    },
+    {
+      "name": "Old Hay Barn",
+      "source": "https://tevy.dev/models/hay-barn",
+      "original": {
+        "lod": 2,
+        "path": "/models/hay-barn/v2/lod2.glb",
+        "bytes": 116780,
+        "sha256": "c04c2f06ab54a7e825952db2bfbe59bac869d8b434df06f1f7b45bed2793e609",
+        "triangles": 836,
+        "url": "https://tevy.dev/models/hay-barn/v2/lod2.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "hay-barn/albedo-0.png",
+        "hay-barn/materials.txt",
+        "hay-barn/model.fbx",
+        "hay-barn/normal-0.png",
+        "hay-barn/roughness-0.png"
+      ]
+    },
+    {
+      "name": "Crew-Cab Pickup",
+      "source": "https://tevy.dev/models/pickup-truck",
+      "original": {
+        "lod": 2,
+        "path": "/models/pickup-truck/v1/lod2.glb",
+        "bytes": 110628,
+        "sha256": "e7d540525cd730d5f92bd01298277823ae4e67a54cdaf2dffe7597649dc05fe0",
+        "triangles": 3903,
+        "url": "https://tevy.dev/models/pickup-truck/v1/lod2.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "pickup-truck/materials.txt",
+        "pickup-truck/model.fbx",
+        "pickup-truck/normal-15.png"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "License.txt",
+      "bytes": 95,
+      "sha256": "18b34c9b8693b3e3b4e7bb8c9eb97ec6ca0250f6925ddc29f72cae20f3bff508"
+    },
+    {
+      "path": "corner-shop-block/albedo-0.png",
+      "bytes": 565580,
+      "sha256": "e60ce250992c0ddab3253dfd782f86fcab3b1c0acb40b8ca6487b46f3a2637f9",
+      "format": "PNG",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "corner-shop-block/materials.txt",
+      "bytes": 84,
+      "sha256": "5a61e235d972ee05a820bca9ada56c8a4c6dad1be7c687919fd71003af53bf86",
+      "format": "TXT"
+    },
+    {
+      "path": "corner-shop-block/model.fbx",
+      "bytes": 99296,
+      "sha256": "2a5d30c8be8affd8d275a3ae5d7092eea485abc90e5f8847b47da07310e34774",
+      "format": "FBX"
+    },
+    {
+      "path": "corner-shop-block/normal-0.png",
+      "bytes": 195387,
+      "sha256": "d549e0764a316bb12ab8ea321f3cabd9965e3e516c7fd72c1ca0fa60a6204d67",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "corner-shop-block/roughness-0.png",
+      "bytes": 86520,
+      "sha256": "8b0adaedfc87e7b127d8deb25b3c9e4b0adbb5caecef1e18503c2e9871e83a1c",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "village-shop/albedo-1.png",
+      "bytes": 36231,
+      "sha256": "5b2ab13452ae31ab996d0876013b4a199a7ec2ecdf044db6fbd58719ae07e49d",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "village-shop/materials.txt",
+      "bytes": 201,
+      "sha256": "215b9924f9a04fb7296455e9c92bb88ae7c143198ea81efc4543259220fbea92",
+      "format": "TXT"
+    },
+    {
+      "path": "village-shop/model.fbx",
+      "bytes": 252576,
+      "sha256": "a14ffcd3934dd45c39c7b85a29924759117850fd4ffe9acd1e0fffd3dd82b31b",
+      "format": "FBX"
+    },
+    {
+      "path": "village-shop/normal-1.png",
+      "bytes": 10472,
+      "sha256": "0a4d1f2e4179d5cfec63cdde7f3b032617e4af285cf2424a1ce46d1a429c3e79",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "village-shop/roughness-1.png",
+      "bytes": 7940,
+      "sha256": "c4326513fcdd2544b6b51a5c61aaa4b34b704070cda326c41639f13d5470ca9e",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "roadside-diner/albedo-0.png",
+      "bytes": 29774,
+      "sha256": "481e38b766bbcd89db7d954bc01b83177664906e252c67183fa5e3638e0f404d",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "roadside-diner/materials.txt",
+      "bytes": 436,
+      "sha256": "8e407a55a928a231d89d374f464e95148b825fbff1b637fe3322c379afe27b3b",
+      "format": "TXT"
+    },
+    {
+      "path": "roadside-diner/model.fbx",
+      "bytes": 651264,
+      "sha256": "3131710e1e710acfaa7993618d427fdf7cacee031bc9f7b7ec92e1f5a6edbe4d",
+      "format": "FBX"
+    },
+    {
+      "path": "roadside-diner/normal-0.png",
+      "bytes": 51378,
+      "sha256": "5b4f9f39b7302956b19a4328ebd5bc6da24fac562b302da123a49c9746be2c40",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "roadside-diner/roughness-0.png",
+      "bytes": 35862,
+      "sha256": "8f026e19783ff2dc4d3cb6f7e12b3230f6fb833a2d527a794f40fb500776ee43",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "workshop-building/albedo-0.png",
+      "bytes": 413566,
+      "sha256": "d771482b0f47652468bdb753fe1e5bd78e27931d4b481212cfb64d169769fbe3",
+      "format": "PNG",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "workshop-building/materials.txt",
+      "bytes": 410,
+      "sha256": "089e152d333c118e2e9cb7b3ea89840debb1b86137474a9003a37586922ca182",
+      "format": "TXT"
+    },
+    {
+      "path": "workshop-building/model.fbx",
+      "bytes": 1574288,
+      "sha256": "e478c7bbffde94801e138128a4d4cc7a70eb9b25da7b4b2cc1b487a0f84e900b",
+      "format": "FBX"
+    },
+    {
+      "path": "workshop-building/roughness-0.png",
+      "bytes": 100653,
+      "sha256": "e7600edcae90ebea066ecbc6c117c1204f689d02bc6f59568a7426a0d45b1766",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "village-house/albedo-0.png",
+      "bytes": 58548,
+      "sha256": "8f6a37e46d4536b21eb770997845e2bb7f7450fa159534a4cbd852f4e3431311",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "village-house/materials.txt",
+      "bytes": 89,
+      "sha256": "48e647ac28f7062ab438d7d51918632ae3e02aef60df406860b9d2206b565582",
+      "format": "TXT"
+    },
+    {
+      "path": "village-house/model.fbx",
+      "bytes": 408368,
+      "sha256": "9974b6ea5fe0a31a98e245ee9bd339e0a092c346ff7b4781773a1792a7f25ee5",
+      "format": "FBX"
+    },
+    {
+      "path": "village-house/normal-0.png",
+      "bytes": 23973,
+      "sha256": "1668d22392947ddb7f10ea1542cb63e4c981de62e67b44eedb20be1f48b3fd11",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "village-house/roughness-0.png",
+      "bytes": 4247,
+      "sha256": "dc1f25bc3476eb18022b8ce95f3902eea847d869c33adbb0b29939d8638edd2c",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "abandoned-fuel-station/albedo-0.png",
+      "bytes": 177355,
+      "sha256": "6413d1483ec5de68dee78c55f7ceafb1d6cc18658cc8ae8bd3cf404df3244818",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "abandoned-fuel-station/materials.txt",
+      "bytes": 315,
+      "sha256": "35ec254f0532a51087488e16cc0302d06a563cd52676f6e8bb2f6d78f4f46b87",
+      "format": "TXT"
+    },
+    {
+      "path": "abandoned-fuel-station/model.fbx",
+      "bytes": 566064,
+      "sha256": "1461ebaf0adad98d3a131ab44f519e6ca8efcdd2b435380d0dbf556d656796ef",
+      "format": "FBX"
+    },
+    {
+      "path": "abandoned-fuel-station/roughness-0.png",
+      "bytes": 32170,
+      "sha256": "f0703233fe07bee10e9949db7491e6cf910277f11bc4e163e6b81c9839828bae",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "boathouse/albedo-0.png",
+      "bytes": 62565,
+      "sha256": "77513d4c2f9c4a7d44d8d67b030e00b4ed3c41c3f11d567ec772b3aee689ec33",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "boathouse/materials.txt",
+      "bytes": 85,
+      "sha256": "e52f833a9d24ce54ab6bb750259ca181ce091a6bd92c8e0eb9158743e823a155",
+      "format": "TXT"
+    },
+    {
+      "path": "boathouse/model.fbx",
+      "bytes": 108784,
+      "sha256": "c794a93549a47937c9447be474b30f5a100a4db4b6056ac53d9b08ca652d87a7",
+      "format": "FBX"
+    },
+    {
+      "path": "boathouse/normal-0.png",
+      "bytes": 28317,
+      "sha256": "a32203ead5e434f1ec81991cd3ec6ee742cec875bd6c84a01ab30b4b360b3a40",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "boathouse/roughness-0.png",
+      "bytes": 11324,
+      "sha256": "c4ad9d64a1b4ff113ee92617494f1d396ceae97732aec60c7ebe190dcb665111",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "hay-barn/albedo-0.png",
+      "bytes": 77682,
+      "sha256": "e14b70d80afbddb6db3987690b86784bc3ea5873da5344ca640304b38b7dafb5",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "hay-barn/materials.txt",
+      "bytes": 84,
+      "sha256": "8984c5206e1434ba9daf82e78b38c7d2886e957c15704e645940323e2246a5aa",
+      "format": "TXT"
+    },
+    {
+      "path": "hay-barn/model.fbx",
+      "bytes": 229968,
+      "sha256": "d542442daa4bbd1e78a53007fd6a19a92333d2548f71e7eedd8795ea83d5e616",
+      "format": "FBX"
+    },
+    {
+      "path": "hay-barn/normal-0.png",
+      "bytes": 29463,
+      "sha256": "7bf5d3b18340e210d692f68cd06f602290f501a6108bcc504a45ba81a4127d5e",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "hay-barn/roughness-0.png",
+      "bytes": 13297,
+      "sha256": "352fb5edd0d6b73148662a38cc3e93ad54cbcc0f868183bf7e63cc3d71168988",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "pickup-truck/materials.txt",
+      "bytes": 2033,
+      "sha256": "336059c2809bc767111b274752051304cd7fafbdc58644325dca6196e3b27148",
+      "format": "TXT"
+    },
+    {
+      "path": "pickup-truck/model.fbx",
+      "bytes": 158076,
+      "sha256": "a52a8b253bdc68d01f19c16dda7669738290550735460e55188347e73ad662ff",
+      "format": "FBX"
+    },
+    {
+      "path": "pickup-truck/normal-15.png",
+      "bytes": 34324,
+      "sha256": "c7779eef922dba098d04e34cff16923579a84d5c3456e8f3b279e23c5b218289",
+      "format": "PNG",
+      "width": 256,
+      "height": 1024,
+      "colorSpace": "Linear"
+    }
+  ]
+}

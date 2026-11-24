@@ -15,6 +15,7 @@ struct ApplicationSpecification {
     std::string name = "LuxEngine";
     uint32 width = 1280;
     uint32 height = 720;
+    bool resizable = true;
 };
 
 class LUX_API Application {

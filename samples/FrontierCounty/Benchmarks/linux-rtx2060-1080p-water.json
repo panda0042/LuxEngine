@@ -1,0 +1,20 @@
+{
+  "scenario": "water",
+  "device": "NVIDIA GeForce RTX 2060",
+  "preset": "high",
+  "seed": 4805,
+  "width": 1920,
+  "height": 1080,
+  "warmup_frames": 30,
+  "measured_frames": 60,
+  "average_fps": 31.6396625,
+  "one_percent_low_fps": 14.661855,
+  "point_one_percent_low_fps": 14.661855,
+  "mean_present_interval_ms": 31.6058997,
+  "stutter_count": 8,
+  "gpu_timing_samples": 60,
+  "mean_gpu_ms": 3.50526347,
+  "peak_rss_bytes": 801468416,
+  "peak_tracked_gpu_bytes": 373760868,
+  "peak_device_local_bytes": null
+}

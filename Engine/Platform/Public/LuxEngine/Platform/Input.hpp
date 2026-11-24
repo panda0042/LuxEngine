@@ -190,6 +190,8 @@ public:
 
     static bool IsGamepadButtonPressed(LuxGamepadButton button);
     static std::pair<float, float> GetMousePosition();
+    // Consumes accumulated motion in window pixel axes: positive X right, positive Y down.
+    static std::pair<float, float> ConsumeMouseDelta();
     static float GetMouseX();
     static float GetMouseY();
 

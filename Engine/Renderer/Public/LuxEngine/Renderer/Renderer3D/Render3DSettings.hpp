@@ -74,6 +74,10 @@ struct Render3DSettings {
     bool virtualShadows = false;
     WaterReflectionSettings waterReflection;
     RadianceCascadeSettings radianceCascades;
+    // Display-space edge filter in the HDR-to-SDR composite. Does not affect overlays.
+    bool screenSpaceAntialiasing = false;
+    // Jitter and depth-reproject the primary 3D view before tone mapping.
+    bool temporalAntialiasing = false;
 };
 
 LUX_API bool ValidateRender3DSettings(const Render3DSettings& settings);

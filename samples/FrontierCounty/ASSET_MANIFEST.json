@@ -1,0 +1,1357 @@
+{
+  "assets": [
+    {
+      "name": "Rocky Gravel",
+      "url": "https://polyhaven.com/a/rocky_gravel",
+      "license": "CC0-1.0",
+      "authors": {
+        "Dario Barresi": "Processing",
+        "Dimitrios Savva": "Photography"
+      },
+      "files": [
+        {
+          "map": "Diffuse",
+          "original": {
+            "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/rocky_gravel/rocky_gravel_diff_8k.jpg",
+            "width": 8192,
+            "height": 8192,
+            "format": "JPEG",
+            "bytes": 66004903,
+            "md5": "78098f470dc4526cdc3d34fa24c09de8",
+            "sha256": "e471b7eaeca1c1f8dd7bc3aa31f96cb382c948bb8f5950cb3f29cadeb8885a55"
+          },
+          "processed": {
+            "path": "samples/Assets/FrontierCounty/gravel_albedo.jpg",
+            "width": 1024,
+            "height": 1024,
+            "bytes": 618295,
+            "sha256": "86aeceb3c4b0a4c4f3fe72e16cbe8edaee1e75823d76381df899cf0845aeb421",
+            "colorSpace": "sRGB"
+          },
+          "runtimePath": "assets/FrontierCounty/gravel_albedo.jpg"
+        },
+        {
+          "map": "nor_gl",
+          "original": {
+            "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/rocky_gravel/rocky_gravel_nor_gl_8k.jpg",
+            "width": 8192,
+            "height": 8192,
+            "format": "JPEG",
+            "bytes": 75734584,
+            "md5": "c71b83c28602d6e322fec57689430a8f",
+            "sha256": "cdd698e8e1132260f5709ba90d062f23a2a9fa22e5399e3cbd71ca68766da453"
+          },
+          "processed": {
+            "path": "samples/Assets/FrontierCounty/gravel_normal.png",
+            "width": 1024,
+            "height": 1024,
+            "bytes": 2723979,
+            "sha256": "e2ff72c654dc954038319da9ce05c30593c85d839477f62da21aa864575a582b",
+            "colorSpace": "Linear tangent-space OpenGL"
+          },
+          "runtimePath": "assets/FrontierCounty/gravel_normal.png"
+        },
+        {
+          "map": "Rough",
+          "original": {
+            "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/rocky_gravel/rocky_gravel_rough_8k.jpg",
+            "width": 8192,
+            "height": 8192,
+            "format": "JPEG",
+            "bytes": 25977154,
+            "md5": "00e914cda2363afbdd4b634bf9ed4a4e",
+            "sha256": "470a7b4000ecefac8d4a26b9028424d8ad935168d645ad7234d4f4750b693ee1"
+          },
+          "processed": {
+            "path": "samples/Assets/FrontierCounty/gravel_roughness.png",
+            "width": 1024,
+            "height": 1024,
+            "bytes": 517342,
+            "sha256": "c1bc83ae47a54db92dbda27f29ed6e1eb51c344faec72285fe8d705c5e6c15bd",
+            "colorSpace": "Linear"
+          },
+          "runtimePath": "assets/FrontierCounty/gravel_roughness.png"
+        }
+      ]
+    },
+    {
+      "name": "LakesideSunrise",
+      "source": "https://polyhaven.com/a/lakeside_sunrise",
+      "license": "CC0-1.0",
+      "credits": [
+        "Greg Zaal (photography)",
+        "Jarod Guest (processing)",
+        "Poly Haven (publisher)"
+      ],
+      "original": {
+        "download": "https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/16k%2B/lakeside_sunrise_24k.exr",
+        "bytes": 3402731529,
+        "md5": "fda5c4c0f60317530407d13268adde47",
+        "width": 24576,
+        "height": 12288,
+        "format": "OpenEXR RGB float plus alpha"
+      },
+      "files": [
+        {
+          "path": "lakeside_sunrise_water.hdr",
+          "bytes": 6048929,
+          "sha256": "04fa305cf1c8b78a684255debd71b7f41d007475ebbcd6ee7396adcafda7a3b8",
+          "runtimePath": "assets/LakesideSunrise/lakeside_sunrise_water.hdr",
+          "processedPath": "samples/Assets/LakesideSunrise/lakeside_sunrise_water.hdr",
+          "width": 2048,
+          "height": 1024,
+          "format": "Radiance RGBE"
+        }
+      ],
+      "conversion": "Read linear RGB from EXR and average nonoverlapping 12\u00d712 blocks to 2048\u00d71024. Clamp averaged negatives to zero and scale RGB by 0.25 before Radiance RGBE encoding."
+    },
+    {
+      "name": "DungGeunMo",
+      "version": "1.3 (2019-01-13)",
+      "author": "Kil Hyung-jin (orioncactus)",
+      "source": "https://cactus.tistory.com/193",
+      "license": "LicenseRef-Public-Domain",
+      "archive_sha256": "e937a8334da98f6918658626c23b9379bfbdb7e47be0dc829534377ad76fc937",
+      "category": "font",
+      "validation_policy": "Official font-specific Public Domain grant; embedded font name-table Public Domain grant; ZIP CRC and closed original-byte SHA-256 roster; all 11172 Hangul syllables present",
+      "validation_result": "passed (manual; game-dev CLI unavailable)",
+      "files": [
+        {
+          "path": "DungGeunMo.ttf",
+          "bytes": 7354268,
+          "sha256": "3f184d949149f2e7e6a853593e25161fb1d3b6d3708ebf79ce78600788fdea30",
+          "runtimePath": "assets/DungGeunMo/DungGeunMo.ttf",
+          "processedPath": "samples/Assets/DungGeunMo/DungGeunMo.ttf",
+          "format": "TrueType"
+        }
+      ]
+    },
+    {
+      "name": "FrontierPeople",
+      "author": "tevy",
+      "source": "https://tevy.dev/models",
+      "license": "CC0-1.0",
+      "sources": [
+        {
+          "name": "Dog Walker",
+          "source": "https://tevy.dev/models/dog-walker",
+          "original": {
+            "lod": 1,
+            "path": "/models/dog-walker/v1/lod1.glb",
+            "bytes": 600648,
+            "sha256": "a5408cf77434f9a74b112bc4924f07e1f86191edfac7f11eb4bb29b7d28b0ef4",
+            "triangles": 8999,
+            "url": "https://tevy.dev/models/dog-walker/v1/lod1.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "dog-walker/albedo.png",
+            "dog-walker/model.fbx",
+            "dog-walker/motion.fbx",
+            "dog-walker/normal.png",
+            "dog-walker/roughness.png"
+          ]
+        },
+        {
+          "name": "Hiker",
+          "source": "https://tevy.dev/models/hiker",
+          "original": {
+            "lod": 1,
+            "path": "/models/hiker/v1/lod1.glb",
+            "bytes": 614708,
+            "sha256": "bbf5f07bf23991a967cd29ef6c692d852047f1fc0d6860f689108e8e485b2f6e",
+            "triangles": 8999,
+            "url": "https://tevy.dev/models/hiker/v1/lod1.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "hiker/albedo.png",
+            "hiker/model.fbx",
+            "hiker/normal.png",
+            "hiker/roughness.png"
+          ]
+        },
+        {
+          "name": "Road Worker",
+          "source": "https://tevy.dev/models/road-worker",
+          "original": {
+            "lod": 1,
+            "path": "/models/road-worker/v1/lod1.glb",
+            "bytes": 628044,
+            "sha256": "a7b66ac6b58404ad4d076b25dd77412191ef2462c6f5f06e72eb9cd854d4d17b",
+            "triangles": 8999,
+            "url": "https://tevy.dev/models/road-worker/v1/lod1.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "road-worker/albedo.png",
+            "road-worker/model.fbx",
+            "road-worker/normal.png",
+            "road-worker/roughness.png"
+          ]
+        }
+      ],
+      "files": [
+        {
+          "path": "License.txt",
+          "bytes": 95,
+          "sha256": "18b34c9b8693b3e3b4e7bb8c9eb97ec6ca0250f6925ddc29f72cae20f3bff508",
+          "runtimePath": "assets/FrontierPeople/License.txt",
+          "processedPath": "samples/Assets/FrontierPeople/License.txt"
+        },
+        {
+          "path": "dog-walker/albedo.png",
+          "bytes": 320357,
+          "sha256": "1eac9e21d6d625d9e0d641427d6dc3104c73978cebb847978b96bcd863a76848",
+          "format": "PNG",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierPeople/dog-walker/albedo.png",
+          "processedPath": "samples/Assets/FrontierPeople/dog-walker/albedo.png"
+        },
+        {
+          "path": "dog-walker/model.fbx",
+          "bytes": 1133900,
+          "sha256": "89363cdbce8e0ed5799921cf8a787a12c5986bd5377659361e3cf914c0d8cdd1",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierPeople/dog-walker/model.fbx",
+          "processedPath": "samples/Assets/FrontierPeople/dog-walker/model.fbx"
+        },
+        {
+          "path": "dog-walker/motion.fbx",
+          "bytes": 655388,
+          "sha256": "795310d601355dcde6da57ca18732b4c4beb80203a056cb0010a33932d58dcff",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierPeople/dog-walker/motion.fbx",
+          "processedPath": "samples/Assets/FrontierPeople/dog-walker/motion.fbx"
+        },
+        {
+          "path": "dog-walker/normal.png",
+          "bytes": 160375,
+          "sha256": "d09674c4d8be9e3c2f9d7005f2b6e20a36bc45039c985fcbc21b83fe6f07a799",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierPeople/dog-walker/normal.png",
+          "processedPath": "samples/Assets/FrontierPeople/dog-walker/normal.png"
+        },
+        {
+          "path": "dog-walker/roughness.png",
+          "bytes": 31847,
+          "sha256": "dae43103a23bf07b136e807887995e84e93eb4512860c1ad380deada8a7e9bc9",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierPeople/dog-walker/roughness.png",
+          "processedPath": "samples/Assets/FrontierPeople/dog-walker/roughness.png"
+        },
+        {
+          "path": "hiker/albedo.png",
+          "bytes": 293369,
+          "sha256": "1a44227c4d06ccc7b079014f8c779fd491194f5252bf1550597100777b566feb",
+          "format": "PNG",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierPeople/hiker/albedo.png",
+          "processedPath": "samples/Assets/FrontierPeople/hiker/albedo.png"
+        },
+        {
+          "path": "hiker/model.fbx",
+          "bytes": 1149548,
+          "sha256": "7923ac360b30eb334ab5ecce62e02caeb90150351ec1592b4a01c17bf0ff7116",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierPeople/hiker/model.fbx",
+          "processedPath": "samples/Assets/FrontierPeople/hiker/model.fbx"
+        },
+        {
+          "path": "hiker/normal.png",
+          "bytes": 166327,
+          "sha256": "d27811b4241beba28b2c3c56c23f6964e99a9d5b8188d2596b23f13a9ef610fb",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierPeople/hiker/normal.png",
+          "processedPath": "samples/Assets/FrontierPeople/hiker/normal.png"
+        },
+        {
+          "path": "hiker/roughness.png",
+          "bytes": 31879,
+          "sha256": "2ce580f1454f9f94f4086b052771ceebb9917281905dc1758414adb78f7f2820",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierPeople/hiker/roughness.png",
+          "processedPath": "samples/Assets/FrontierPeople/hiker/roughness.png"
+        },
+        {
+          "path": "road-worker/albedo.png",
+          "bytes": 312650,
+          "sha256": "4e21c050e2d240bae1dda6b8bdff8951782dc53abcead6eae8602799269c6934",
+          "format": "PNG",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierPeople/road-worker/albedo.png",
+          "processedPath": "samples/Assets/FrontierPeople/road-worker/albedo.png"
+        },
+        {
+          "path": "road-worker/model.fbx",
+          "bytes": 1152300,
+          "sha256": "f4ad996f8c7faf5eafef97f2223429b3077b5e7e8663b3e5768417a659934e29",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierPeople/road-worker/model.fbx",
+          "processedPath": "samples/Assets/FrontierPeople/road-worker/model.fbx"
+        },
+        {
+          "path": "road-worker/normal.png",
+          "bytes": 166096,
+          "sha256": "fb9c1fe24595f67e7d2f1a935ecef667834bd0184d0a7da80231af3a6fad144e",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierPeople/road-worker/normal.png",
+          "processedPath": "samples/Assets/FrontierPeople/road-worker/normal.png"
+        },
+        {
+          "path": "road-worker/roughness.png",
+          "bytes": 34047,
+          "sha256": "fe252d9b197fcdd29e309dbb643e0460c7701f54e4d51cdf7ad94b351be2d266",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierPeople/road-worker/roughness.png",
+          "processedPath": "samples/Assets/FrontierPeople/road-worker/roughness.png"
+        }
+      ]
+    },
+    {
+      "name": "FrontierFoliage",
+      "author": "tevy",
+      "source": "https://tevy.dev/models",
+      "license": "CC0-1.0",
+      "sources": [
+        {
+          "name": "Norway Spruce",
+          "source": "https://tevy.dev/models/norway-spruce",
+          "original": {
+            "lod": 2,
+            "path": "/models/norway-spruce/v1/lod2.glb",
+            "bytes": 507592,
+            "sha256": "2dbb026f880470e94924e9eb99acba144a7486ecc27908487235a1558b91285f",
+            "triangles": 2520,
+            "url": "https://tevy.dev/models/norway-spruce/v1/lod2.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "spruce.png"
+          ]
+        }
+      ],
+      "files": [
+        {
+          "path": "License.txt",
+          "bytes": 95,
+          "sha256": "18b34c9b8693b3e3b4e7bb8c9eb97ec6ca0250f6925ddc29f72cae20f3bff508",
+          "runtimePath": "assets/FrontierFoliage/License.txt",
+          "processedPath": "samples/Assets/FrontierFoliage/License.txt"
+        },
+        {
+          "path": "spruce.png",
+          "bytes": 262333,
+          "sha256": "9eef627fbe301d36fe13b74cf7bd3ec91d2992d958b7614401c0ede9705216c1",
+          "format": "PNG",
+          "width": 432,
+          "height": 768,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierFoliage/spruce.png",
+          "processedPath": "samples/Assets/FrontierFoliage/spruce.png"
+        }
+      ]
+    },
+    {
+      "name": "FrontierProps",
+      "author": "tevy",
+      "source": "https://tevy.dev/models",
+      "license": "CC0-1.0",
+      "sources": [
+        {
+          "name": "Corner Shop Block",
+          "source": "https://tevy.dev/models/corner-shop-block",
+          "original": {
+            "lod": 2,
+            "path": "/models/corner-shop-block/v2/lod2.glb",
+            "bytes": 593692,
+            "sha256": "a4b6c307446cdf6006555e3f49dba9e9b4d8be1bfc7b97b88ad2092cef57498d",
+            "triangles": 438,
+            "url": "https://tevy.dev/models/corner-shop-block/v2/lod2.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "corner-shop-block/albedo-0.png",
+            "corner-shop-block/materials.txt",
+            "corner-shop-block/model.fbx",
+            "corner-shop-block/normal-0.png",
+            "corner-shop-block/roughness-0.png"
+          ]
+        },
+        {
+          "name": "Village Grocery Shop",
+          "source": "https://tevy.dev/models/village-shop",
+          "original": {
+            "lod": 2,
+            "path": "/models/village-shop/v2/lod2.glb",
+            "bytes": 75932,
+            "sha256": "fd177fbf573dfad69e384f92d74c6cc6c2b5fcce8b1265f6d2aac86216ca3e38",
+            "triangles": 954,
+            "url": "https://tevy.dev/models/village-shop/v2/lod2.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "village-shop/albedo-1.png",
+            "village-shop/materials.txt",
+            "village-shop/model.fbx",
+            "village-shop/normal-1.png",
+            "village-shop/roughness-1.png"
+          ]
+        },
+        {
+          "name": "Roadside Diner",
+          "source": "https://tevy.dev/models/roadside-diner",
+          "original": {
+            "lod": 2,
+            "path": "/models/roadside-diner/v2/lod2.glb",
+            "bytes": 183732,
+            "sha256": "86bbe4cd57b4605e5a080a5d61fe77247d6726d6e5debe49be40a52d73c65504",
+            "triangles": 2908,
+            "url": "https://tevy.dev/models/roadside-diner/v2/lod2.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "roadside-diner/albedo-0.png",
+            "roadside-diner/materials.txt",
+            "roadside-diner/model.fbx",
+            "roadside-diner/normal-0.png",
+            "roadside-diner/roughness-0.png"
+          ]
+        },
+        {
+          "name": "Car Workshop",
+          "source": "https://tevy.dev/models/workshop-building",
+          "original": {
+            "lod": 2,
+            "path": "/models/workshop-building/v2/lod2.glb",
+            "bytes": 478064,
+            "sha256": "6dc363023036442049953cbc00e6dbebf53ac054311b4b8490c49264523c8858",
+            "triangles": 9196,
+            "url": "https://tevy.dev/models/workshop-building/v2/lod2.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "workshop-building/albedo-0.png",
+            "workshop-building/materials.txt",
+            "workshop-building/model.fbx",
+            "workshop-building/roughness-0.png"
+          ]
+        },
+        {
+          "name": "Two-Storey Wooden House",
+          "source": "https://tevy.dev/models/village-house",
+          "original": {
+            "lod": 2,
+            "path": "/models/village-house/v2/lod2.glb",
+            "bytes": 99172,
+            "sha256": "2ed400d0b6636733dc33887c7ad497cf69fe4f552fe70c6db2578e61af3ef17c",
+            "triangles": 1600,
+            "url": "https://tevy.dev/models/village-house/v2/lod2.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "village-house/albedo-0.png",
+            "village-house/materials.txt",
+            "village-house/model.fbx",
+            "village-house/normal-0.png",
+            "village-house/roughness-0.png"
+          ]
+        },
+        {
+          "name": "Abandoned Fuel Station",
+          "source": "https://tevy.dev/models/abandoned-fuel-station",
+          "original": {
+            "lod": 2,
+            "path": "/models/abandoned-fuel-station/v2/lod2.glb",
+            "bytes": 179200,
+            "sha256": "ea20fcdc7287e26f6b37dee3394b7593855de1f37c54d7ff1f124afc31a82879",
+            "triangles": 3210,
+            "url": "https://tevy.dev/models/abandoned-fuel-station/v2/lod2.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "abandoned-fuel-station/albedo-0.png",
+            "abandoned-fuel-station/materials.txt",
+            "abandoned-fuel-station/model.fbx",
+            "abandoned-fuel-station/roughness-0.png"
+          ]
+        },
+        {
+          "name": "Falu Red Boathouse",
+          "source": "https://tevy.dev/models/boathouse",
+          "original": {
+            "lod": 2,
+            "path": "/models/boathouse/v2/lod2.glb",
+            "bytes": 97328,
+            "sha256": "cf316d558e840db81d9d511a19c8e8086e364e9f671b677c00ac2aa7b2ce1a53",
+            "triangles": 342,
+            "url": "https://tevy.dev/models/boathouse/v2/lod2.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "boathouse/albedo-0.png",
+            "boathouse/materials.txt",
+            "boathouse/model.fbx",
+            "boathouse/normal-0.png",
+            "boathouse/roughness-0.png"
+          ]
+        },
+        {
+          "name": "Old Hay Barn",
+          "source": "https://tevy.dev/models/hay-barn",
+          "original": {
+            "lod": 2,
+            "path": "/models/hay-barn/v2/lod2.glb",
+            "bytes": 116780,
+            "sha256": "c04c2f06ab54a7e825952db2bfbe59bac869d8b434df06f1f7b45bed2793e609",
+            "triangles": 836,
+            "url": "https://tevy.dev/models/hay-barn/v2/lod2.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "hay-barn/albedo-0.png",
+            "hay-barn/materials.txt",
+            "hay-barn/model.fbx",
+            "hay-barn/normal-0.png",
+            "hay-barn/roughness-0.png"
+          ]
+        },
+        {
+          "name": "Crew-Cab Pickup",
+          "source": "https://tevy.dev/models/pickup-truck",
+          "original": {
+            "lod": 2,
+            "path": "/models/pickup-truck/v1/lod2.glb",
+            "bytes": 110628,
+            "sha256": "e7d540525cd730d5f92bd01298277823ae4e67a54cdaf2dffe7597649dc05fe0",
+            "triangles": 3903,
+            "url": "https://tevy.dev/models/pickup-truck/v1/lod2.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "pickup-truck/materials.txt",
+            "pickup-truck/model.fbx",
+            "pickup-truck/normal-15.png"
+          ]
+        }
+      ],
+      "files": [
+        {
+          "path": "License.txt",
+          "bytes": 95,
+          "sha256": "18b34c9b8693b3e3b4e7bb8c9eb97ec6ca0250f6925ddc29f72cae20f3bff508",
+          "runtimePath": "assets/FrontierProps/License.txt",
+          "processedPath": "samples/Assets/FrontierProps/License.txt"
+        },
+        {
+          "path": "corner-shop-block/albedo-0.png",
+          "bytes": 565580,
+          "sha256": "e60ce250992c0ddab3253dfd782f86fcab3b1c0acb40b8ca6487b46f3a2637f9",
+          "format": "PNG",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierProps/corner-shop-block/albedo-0.png",
+          "processedPath": "samples/Assets/FrontierProps/corner-shop-block/albedo-0.png"
+        },
+        {
+          "path": "corner-shop-block/materials.txt",
+          "bytes": 84,
+          "sha256": "5a61e235d972ee05a820bca9ada56c8a4c6dad1be7c687919fd71003af53bf86",
+          "format": "TXT",
+          "runtimePath": "assets/FrontierProps/corner-shop-block/materials.txt",
+          "processedPath": "samples/Assets/FrontierProps/corner-shop-block/materials.txt"
+        },
+        {
+          "path": "corner-shop-block/model.fbx",
+          "bytes": 99296,
+          "sha256": "2a5d30c8be8affd8d275a3ae5d7092eea485abc90e5f8847b47da07310e34774",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierProps/corner-shop-block/model.fbx",
+          "processedPath": "samples/Assets/FrontierProps/corner-shop-block/model.fbx"
+        },
+        {
+          "path": "corner-shop-block/normal-0.png",
+          "bytes": 195387,
+          "sha256": "d549e0764a316bb12ab8ea321f3cabd9965e3e516c7fd72c1ca0fa60a6204d67",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/corner-shop-block/normal-0.png",
+          "processedPath": "samples/Assets/FrontierProps/corner-shop-block/normal-0.png"
+        },
+        {
+          "path": "corner-shop-block/roughness-0.png",
+          "bytes": 86520,
+          "sha256": "8b0adaedfc87e7b127d8deb25b3c9e4b0adbb5caecef1e18503c2e9871e83a1c",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/corner-shop-block/roughness-0.png",
+          "processedPath": "samples/Assets/FrontierProps/corner-shop-block/roughness-0.png"
+        },
+        {
+          "path": "village-shop/albedo-1.png",
+          "bytes": 36231,
+          "sha256": "5b2ab13452ae31ab996d0876013b4a199a7ec2ecdf044db6fbd58719ae07e49d",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierProps/village-shop/albedo-1.png",
+          "processedPath": "samples/Assets/FrontierProps/village-shop/albedo-1.png"
+        },
+        {
+          "path": "village-shop/materials.txt",
+          "bytes": 201,
+          "sha256": "215b9924f9a04fb7296455e9c92bb88ae7c143198ea81efc4543259220fbea92",
+          "format": "TXT",
+          "runtimePath": "assets/FrontierProps/village-shop/materials.txt",
+          "processedPath": "samples/Assets/FrontierProps/village-shop/materials.txt"
+        },
+        {
+          "path": "village-shop/model.fbx",
+          "bytes": 252576,
+          "sha256": "a14ffcd3934dd45c39c7b85a29924759117850fd4ffe9acd1e0fffd3dd82b31b",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierProps/village-shop/model.fbx",
+          "processedPath": "samples/Assets/FrontierProps/village-shop/model.fbx"
+        },
+        {
+          "path": "village-shop/normal-1.png",
+          "bytes": 10472,
+          "sha256": "0a4d1f2e4179d5cfec63cdde7f3b032617e4af285cf2424a1ce46d1a429c3e79",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/village-shop/normal-1.png",
+          "processedPath": "samples/Assets/FrontierProps/village-shop/normal-1.png"
+        },
+        {
+          "path": "village-shop/roughness-1.png",
+          "bytes": 7940,
+          "sha256": "c4326513fcdd2544b6b51a5c61aaa4b34b704070cda326c41639f13d5470ca9e",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/village-shop/roughness-1.png",
+          "processedPath": "samples/Assets/FrontierProps/village-shop/roughness-1.png"
+        },
+        {
+          "path": "roadside-diner/albedo-0.png",
+          "bytes": 29774,
+          "sha256": "481e38b766bbcd89db7d954bc01b83177664906e252c67183fa5e3638e0f404d",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierProps/roadside-diner/albedo-0.png",
+          "processedPath": "samples/Assets/FrontierProps/roadside-diner/albedo-0.png"
+        },
+        {
+          "path": "roadside-diner/materials.txt",
+          "bytes": 436,
+          "sha256": "8e407a55a928a231d89d374f464e95148b825fbff1b637fe3322c379afe27b3b",
+          "format": "TXT",
+          "runtimePath": "assets/FrontierProps/roadside-diner/materials.txt",
+          "processedPath": "samples/Assets/FrontierProps/roadside-diner/materials.txt"
+        },
+        {
+          "path": "roadside-diner/model.fbx",
+          "bytes": 651264,
+          "sha256": "3131710e1e710acfaa7993618d427fdf7cacee031bc9f7b7ec92e1f5a6edbe4d",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierProps/roadside-diner/model.fbx",
+          "processedPath": "samples/Assets/FrontierProps/roadside-diner/model.fbx"
+        },
+        {
+          "path": "roadside-diner/normal-0.png",
+          "bytes": 51378,
+          "sha256": "5b4f9f39b7302956b19a4328ebd5bc6da24fac562b302da123a49c9746be2c40",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/roadside-diner/normal-0.png",
+          "processedPath": "samples/Assets/FrontierProps/roadside-diner/normal-0.png"
+        },
+        {
+          "path": "roadside-diner/roughness-0.png",
+          "bytes": 35862,
+          "sha256": "8f026e19783ff2dc4d3cb6f7e12b3230f6fb833a2d527a794f40fb500776ee43",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/roadside-diner/roughness-0.png",
+          "processedPath": "samples/Assets/FrontierProps/roadside-diner/roughness-0.png"
+        },
+        {
+          "path": "workshop-building/albedo-0.png",
+          "bytes": 413566,
+          "sha256": "d771482b0f47652468bdb753fe1e5bd78e27931d4b481212cfb64d169769fbe3",
+          "format": "PNG",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierProps/workshop-building/albedo-0.png",
+          "processedPath": "samples/Assets/FrontierProps/workshop-building/albedo-0.png"
+        },
+        {
+          "path": "workshop-building/materials.txt",
+          "bytes": 410,
+          "sha256": "089e152d333c118e2e9cb7b3ea89840debb1b86137474a9003a37586922ca182",
+          "format": "TXT",
+          "runtimePath": "assets/FrontierProps/workshop-building/materials.txt",
+          "processedPath": "samples/Assets/FrontierProps/workshop-building/materials.txt"
+        },
+        {
+          "path": "workshop-building/model.fbx",
+          "bytes": 1574288,
+          "sha256": "e478c7bbffde94801e138128a4d4cc7a70eb9b25da7b4b2cc1b487a0f84e900b",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierProps/workshop-building/model.fbx",
+          "processedPath": "samples/Assets/FrontierProps/workshop-building/model.fbx"
+        },
+        {
+          "path": "workshop-building/roughness-0.png",
+          "bytes": 100653,
+          "sha256": "e7600edcae90ebea066ecbc6c117c1204f689d02bc6f59568a7426a0d45b1766",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/workshop-building/roughness-0.png",
+          "processedPath": "samples/Assets/FrontierProps/workshop-building/roughness-0.png"
+        },
+        {
+          "path": "village-house/albedo-0.png",
+          "bytes": 58548,
+          "sha256": "8f6a37e46d4536b21eb770997845e2bb7f7450fa159534a4cbd852f4e3431311",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierProps/village-house/albedo-0.png",
+          "processedPath": "samples/Assets/FrontierProps/village-house/albedo-0.png"
+        },
+        {
+          "path": "village-house/materials.txt",
+          "bytes": 89,
+          "sha256": "48e647ac28f7062ab438d7d51918632ae3e02aef60df406860b9d2206b565582",
+          "format": "TXT",
+          "runtimePath": "assets/FrontierProps/village-house/materials.txt",
+          "processedPath": "samples/Assets/FrontierProps/village-house/materials.txt"
+        },
+        {
+          "path": "village-house/model.fbx",
+          "bytes": 408368,
+          "sha256": "9974b6ea5fe0a31a98e245ee9bd339e0a092c346ff7b4781773a1792a7f25ee5",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierProps/village-house/model.fbx",
+          "processedPath": "samples/Assets/FrontierProps/village-house/model.fbx"
+        },
+        {
+          "path": "village-house/normal-0.png",
+          "bytes": 23973,
+          "sha256": "1668d22392947ddb7f10ea1542cb63e4c981de62e67b44eedb20be1f48b3fd11",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/village-house/normal-0.png",
+          "processedPath": "samples/Assets/FrontierProps/village-house/normal-0.png"
+        },
+        {
+          "path": "village-house/roughness-0.png",
+          "bytes": 4247,
+          "sha256": "dc1f25bc3476eb18022b8ce95f3902eea847d869c33adbb0b29939d8638edd2c",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/village-house/roughness-0.png",
+          "processedPath": "samples/Assets/FrontierProps/village-house/roughness-0.png"
+        },
+        {
+          "path": "abandoned-fuel-station/albedo-0.png",
+          "bytes": 177355,
+          "sha256": "6413d1483ec5de68dee78c55f7ceafb1d6cc18658cc8ae8bd3cf404df3244818",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierProps/abandoned-fuel-station/albedo-0.png",
+          "processedPath": "samples/Assets/FrontierProps/abandoned-fuel-station/albedo-0.png"
+        },
+        {
+          "path": "abandoned-fuel-station/materials.txt",
+          "bytes": 315,
+          "sha256": "35ec254f0532a51087488e16cc0302d06a563cd52676f6e8bb2f6d78f4f46b87",
+          "format": "TXT",
+          "runtimePath": "assets/FrontierProps/abandoned-fuel-station/materials.txt",
+          "processedPath": "samples/Assets/FrontierProps/abandoned-fuel-station/materials.txt"
+        },
+        {
+          "path": "abandoned-fuel-station/model.fbx",
+          "bytes": 566064,
+          "sha256": "1461ebaf0adad98d3a131ab44f519e6ca8efcdd2b435380d0dbf556d656796ef",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierProps/abandoned-fuel-station/model.fbx",
+          "processedPath": "samples/Assets/FrontierProps/abandoned-fuel-station/model.fbx"
+        },
+        {
+          "path": "abandoned-fuel-station/roughness-0.png",
+          "bytes": 32170,
+          "sha256": "f0703233fe07bee10e9949db7491e6cf910277f11bc4e163e6b81c9839828bae",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/abandoned-fuel-station/roughness-0.png",
+          "processedPath": "samples/Assets/FrontierProps/abandoned-fuel-station/roughness-0.png"
+        },
+        {
+          "path": "boathouse/albedo-0.png",
+          "bytes": 62565,
+          "sha256": "77513d4c2f9c4a7d44d8d67b030e00b4ed3c41c3f11d567ec772b3aee689ec33",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierProps/boathouse/albedo-0.png",
+          "processedPath": "samples/Assets/FrontierProps/boathouse/albedo-0.png"
+        },
+        {
+          "path": "boathouse/materials.txt",
+          "bytes": 85,
+          "sha256": "e52f833a9d24ce54ab6bb750259ca181ce091a6bd92c8e0eb9158743e823a155",
+          "format": "TXT",
+          "runtimePath": "assets/FrontierProps/boathouse/materials.txt",
+          "processedPath": "samples/Assets/FrontierProps/boathouse/materials.txt"
+        },
+        {
+          "path": "boathouse/model.fbx",
+          "bytes": 108784,
+          "sha256": "c794a93549a47937c9447be474b30f5a100a4db4b6056ac53d9b08ca652d87a7",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierProps/boathouse/model.fbx",
+          "processedPath": "samples/Assets/FrontierProps/boathouse/model.fbx"
+        },
+        {
+          "path": "boathouse/normal-0.png",
+          "bytes": 28317,
+          "sha256": "a32203ead5e434f1ec81991cd3ec6ee742cec875bd6c84a01ab30b4b360b3a40",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/boathouse/normal-0.png",
+          "processedPath": "samples/Assets/FrontierProps/boathouse/normal-0.png"
+        },
+        {
+          "path": "boathouse/roughness-0.png",
+          "bytes": 11324,
+          "sha256": "c4ad9d64a1b4ff113ee92617494f1d396ceae97732aec60c7ebe190dcb665111",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/boathouse/roughness-0.png",
+          "processedPath": "samples/Assets/FrontierProps/boathouse/roughness-0.png"
+        },
+        {
+          "path": "hay-barn/albedo-0.png",
+          "bytes": 77682,
+          "sha256": "e14b70d80afbddb6db3987690b86784bc3ea5873da5344ca640304b38b7dafb5",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierProps/hay-barn/albedo-0.png",
+          "processedPath": "samples/Assets/FrontierProps/hay-barn/albedo-0.png"
+        },
+        {
+          "path": "hay-barn/materials.txt",
+          "bytes": 84,
+          "sha256": "8984c5206e1434ba9daf82e78b38c7d2886e957c15704e645940323e2246a5aa",
+          "format": "TXT",
+          "runtimePath": "assets/FrontierProps/hay-barn/materials.txt",
+          "processedPath": "samples/Assets/FrontierProps/hay-barn/materials.txt"
+        },
+        {
+          "path": "hay-barn/model.fbx",
+          "bytes": 229968,
+          "sha256": "d542442daa4bbd1e78a53007fd6a19a92333d2548f71e7eedd8795ea83d5e616",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierProps/hay-barn/model.fbx",
+          "processedPath": "samples/Assets/FrontierProps/hay-barn/model.fbx"
+        },
+        {
+          "path": "hay-barn/normal-0.png",
+          "bytes": 29463,
+          "sha256": "7bf5d3b18340e210d692f68cd06f602290f501a6108bcc504a45ba81a4127d5e",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/hay-barn/normal-0.png",
+          "processedPath": "samples/Assets/FrontierProps/hay-barn/normal-0.png"
+        },
+        {
+          "path": "hay-barn/roughness-0.png",
+          "bytes": 13297,
+          "sha256": "352fb5edd0d6b73148662a38cc3e93ad54cbcc0f868183bf7e63cc3d71168988",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/hay-barn/roughness-0.png",
+          "processedPath": "samples/Assets/FrontierProps/hay-barn/roughness-0.png"
+        },
+        {
+          "path": "pickup-truck/materials.txt",
+          "bytes": 2033,
+          "sha256": "336059c2809bc767111b274752051304cd7fafbdc58644325dca6196e3b27148",
+          "format": "TXT",
+          "runtimePath": "assets/FrontierProps/pickup-truck/materials.txt",
+          "processedPath": "samples/Assets/FrontierProps/pickup-truck/materials.txt"
+        },
+        {
+          "path": "pickup-truck/model.fbx",
+          "bytes": 158076,
+          "sha256": "a52a8b253bdc68d01f19c16dda7669738290550735460e55188347e73ad662ff",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierProps/pickup-truck/model.fbx",
+          "processedPath": "samples/Assets/FrontierProps/pickup-truck/model.fbx"
+        },
+        {
+          "path": "pickup-truck/normal-15.png",
+          "bytes": 34324,
+          "sha256": "c7779eef922dba098d04e34cff16923579a84d5c3456e8f3b279e23c5b218289",
+          "format": "PNG",
+          "width": 256,
+          "height": 1024,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierProps/pickup-truck/normal-15.png",
+          "processedPath": "samples/Assets/FrontierProps/pickup-truck/normal-15.png"
+        }
+      ]
+    },
+    {
+      "name": "FrontierAsphalt",
+      "title": "Asphalt 01",
+      "source": "https://polyhaven.com/a/asphalt_01",
+      "authors": {
+        "Dario Barresi": "Processing ",
+        "Charlotte Baglioni": "Photography"
+      },
+      "license": "CC0-1.0",
+      "files": [
+        {
+          "path": "License.txt",
+          "bytes": 128,
+          "sha256": "6673a8b2261f520e4355fd02ecd98c8829a9428d7126cd729a09169814303049",
+          "runtimePath": "assets/FrontierAsphalt/License.txt",
+          "processedPath": "samples/Assets/FrontierAsphalt/License.txt"
+        },
+        {
+          "path": "albedo.jpg",
+          "bytes": 289147,
+          "sha256": "902b5b704382808315c9547157001a92a07dcb648cfb6a5786c3c3f7f7f8e038",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "sRGB",
+          "original": {
+            "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/asphalt_01/asphalt_01_diff_8k.jpg",
+            "width": 8192,
+            "height": 8192,
+            "format": "JPEG",
+            "bytes": 49924809,
+            "md5": "a6be55424be17ac4a843819ed3e33600",
+            "sha256": "99c26a75c631afc03a26ec93ae1a4e909db66474c05ee67d374a69b88171a9c3"
+          },
+          "runtimePath": "assets/FrontierAsphalt/albedo.jpg",
+          "processedPath": "samples/Assets/FrontierAsphalt/albedo.jpg"
+        },
+        {
+          "path": "normal.png",
+          "bytes": 2450127,
+          "sha256": "d0a08c58a666f792fa71caea0396a75040b84c09a6ece55ae3e6413d961405a5",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "Linear tangent-space OpenGL",
+          "original": {
+            "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/asphalt_01/asphalt_01_nor_gl_8k.jpg",
+            "width": 8192,
+            "height": 8192,
+            "format": "JPEG",
+            "bytes": 49682024,
+            "md5": "6dcf83619e077d7d29886b38efc92fbc",
+            "sha256": "f1d5a1abbb5bed17f4893b03a1878e7f0ce794e3722888d04ba303f48375a74e"
+          },
+          "runtimePath": "assets/FrontierAsphalt/normal.png",
+          "processedPath": "samples/Assets/FrontierAsphalt/normal.png"
+        },
+        {
+          "path": "roughness.png",
+          "bytes": 373169,
+          "sha256": "5e4cf76ddc68858a49c3bc1f0a15a765df524e0dd966c201b37136ba8174d039",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "Linear",
+          "original": {
+            "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/asphalt_01/asphalt_01_rough_8k.jpg",
+            "width": 8192,
+            "height": 8192,
+            "format": "JPEG",
+            "bytes": 23517718,
+            "md5": "870496fbaaa1218405e388deb45ae00f",
+            "sha256": "4cd9aada0217ec7dc1192146e75fff6749d9a96e6961e10050098d2e3d723d82"
+          },
+          "runtimePath": "assets/FrontierAsphalt/roughness.png",
+          "processedPath": "samples/Assets/FrontierAsphalt/roughness.png"
+        }
+      ]
+    },
+    {
+      "name": "FrontierVegetation",
+      "author": "tevy",
+      "source": "https://tevy.dev/models",
+      "license": "CC0-1.0",
+      "sources": [
+        {
+          "name": "Norway Spruce",
+          "source": "https://tevy.dev/models/norway-spruce",
+          "original": {
+            "lod": 1,
+            "path": "/models/norway-spruce/v1/lod1.glb",
+            "bytes": 1837856,
+            "sha256": "1a99b9b1d8c5307337c204e4db26cecaf6493e4c2e11f51f6254d822dd1e6d07",
+            "triangles": 14282,
+            "url": "https://tevy.dev/models/norway-spruce/v1/lod1.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "norway-spruce/model.fbx",
+            "norway-spruce/albedo-0.png",
+            "norway-spruce/normal-0.png",
+            "norway-spruce/albedo-1.png",
+            "norway-spruce/normal-1.png",
+            "norway-spruce/albedo-2.png",
+            "norway-spruce/normal-2.png",
+            "norway-spruce/materials.txt"
+          ]
+        },
+        {
+          "name": "Wild Grass Clump",
+          "source": "https://tevy.dev/models/grass-clump",
+          "original": {
+            "lod": 1,
+            "path": "/models/grass-clump/v1/lod1.glb",
+            "bytes": 264404,
+            "sha256": "4da6d57ecf7138e85524ba459d72ff907f227892914afe9dc828a616af92110b",
+            "triangles": 718,
+            "url": "https://tevy.dev/models/grass-clump/v1/lod1.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "grass-clump/model.fbx",
+            "grass-clump/albedo-0.png",
+            "grass-clump/normal-0.png",
+            "grass-clump/materials.txt"
+          ]
+        },
+        {
+          "name": "Sedge Tuft",
+          "source": "https://tevy.dev/models/sedge-tuft",
+          "original": {
+            "lod": 1,
+            "path": "/models/sedge-tuft/v1/lod1.glb",
+            "bytes": 45328,
+            "sha256": "e20125e9c6490b5a36c6a491a855a9d37f2f34e5b0c38b695e80b2638aa6ead0",
+            "triangles": 1002,
+            "url": "https://tevy.dev/models/sedge-tuft/v1/lod1.glb",
+            "format": "GLB"
+          },
+          "files": [
+            "sedge-tuft/model.fbx",
+            "sedge-tuft/albedo-0.png",
+            "sedge-tuft/normal-0.png",
+            "sedge-tuft/materials.txt"
+          ]
+        }
+      ],
+      "files": [
+        {
+          "path": "License.txt",
+          "bytes": 95,
+          "sha256": "18b34c9b8693b3e3b4e7bb8c9eb97ec6ca0250f6925ddc29f72cae20f3bff508",
+          "runtimePath": "assets/FrontierVegetation/License.txt",
+          "processedPath": "samples/Assets/FrontierVegetation/License.txt"
+        },
+        {
+          "path": "norway-spruce/model.fbx",
+          "bytes": 3217280,
+          "sha256": "8ad3a89e440084a904c42a2d02d973c953559efa5b4b85bd4d542721e1017e9d",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierVegetation/norway-spruce/model.fbx",
+          "processedPath": "samples/Assets/FrontierVegetation/norway-spruce/model.fbx"
+        },
+        {
+          "path": "norway-spruce/albedo-0.png",
+          "bytes": 101911,
+          "sha256": "3c01d267db45a90fd4faddf8892fa56cf13aaf2b167a37ce7e28c2bfb42f47fd",
+          "format": "PNG",
+          "width": 128,
+          "height": 512,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierVegetation/norway-spruce/albedo-0.png",
+          "processedPath": "samples/Assets/FrontierVegetation/norway-spruce/albedo-0.png"
+        },
+        {
+          "path": "norway-spruce/normal-0.png",
+          "bytes": 129001,
+          "sha256": "12fc275ec1af80d8a5e5cc8e89036563b53f0aba090dbe5e5746eb1272504402",
+          "format": "PNG",
+          "width": 128,
+          "height": 512,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierVegetation/norway-spruce/normal-0.png",
+          "processedPath": "samples/Assets/FrontierVegetation/norway-spruce/normal-0.png"
+        },
+        {
+          "path": "norway-spruce/albedo-1.png",
+          "bytes": 913532,
+          "sha256": "2537f825af0dfdfbafe1c759bdb7b6ec793fd229052cd2293a80cf93c45562a4",
+          "format": "PNG",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierVegetation/norway-spruce/albedo-1.png",
+          "processedPath": "samples/Assets/FrontierVegetation/norway-spruce/albedo-1.png"
+        },
+        {
+          "path": "norway-spruce/normal-1.png",
+          "bytes": 1300130,
+          "sha256": "25642f39bf33da4850aa51c9679cdf3f921ce28f4d1801f606f7b083be1e88e8",
+          "format": "PNG",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierVegetation/norway-spruce/normal-1.png",
+          "processedPath": "samples/Assets/FrontierVegetation/norway-spruce/normal-1.png"
+        },
+        {
+          "path": "norway-spruce/albedo-2.png",
+          "bytes": 101911,
+          "sha256": "3c01d267db45a90fd4faddf8892fa56cf13aaf2b167a37ce7e28c2bfb42f47fd",
+          "format": "PNG",
+          "width": 128,
+          "height": 512,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierVegetation/norway-spruce/albedo-2.png",
+          "processedPath": "samples/Assets/FrontierVegetation/norway-spruce/albedo-2.png"
+        },
+        {
+          "path": "norway-spruce/normal-2.png",
+          "bytes": 129001,
+          "sha256": "12fc275ec1af80d8a5e5cc8e89036563b53f0aba090dbe5e5746eb1272504402",
+          "format": "PNG",
+          "width": 128,
+          "height": 512,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierVegetation/norway-spruce/normal-2.png",
+          "processedPath": "samples/Assets/FrontierVegetation/norway-spruce/normal-2.png"
+        },
+        {
+          "path": "norway-spruce/materials.txt",
+          "bytes": 316,
+          "sha256": "1efc143208c266161ac5cd5d60793e23d8ba5e67865e6ae21005d3a073ef89d7",
+          "format": "TXT",
+          "runtimePath": "assets/FrontierVegetation/norway-spruce/materials.txt",
+          "processedPath": "samples/Assets/FrontierVegetation/norway-spruce/materials.txt"
+        },
+        {
+          "path": "grass-clump/model.fbx",
+          "bytes": 192528,
+          "sha256": "6747e0cf69a49ed89615d075bb0ceddaa55f4b4bc03227214ec0b81b4bb4b009",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierVegetation/grass-clump/model.fbx",
+          "processedPath": "samples/Assets/FrontierVegetation/grass-clump/model.fbx"
+        },
+        {
+          "path": "grass-clump/albedo-0.png",
+          "bytes": 198986,
+          "sha256": "a8ff541ae2047aa74026efc204b63bf6a7bfdc404161650e6089a0042e741465",
+          "format": "PNG",
+          "width": 512,
+          "height": 512,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierVegetation/grass-clump/albedo-0.png",
+          "processedPath": "samples/Assets/FrontierVegetation/grass-clump/albedo-0.png"
+        },
+        {
+          "path": "grass-clump/normal-0.png",
+          "bytes": 78175,
+          "sha256": "627fe6c12e3e7b8a0bec584e94c29bad16938180828c212de86422b4dd9bed01",
+          "format": "PNG",
+          "width": 256,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierVegetation/grass-clump/normal-0.png",
+          "processedPath": "samples/Assets/FrontierVegetation/grass-clump/normal-0.png"
+        },
+        {
+          "path": "grass-clump/materials.txt",
+          "bytes": 83,
+          "sha256": "119224b237e91e0f27ff927929bd88357fc1689f179e344a62919c14b0b7e4cf",
+          "format": "TXT",
+          "runtimePath": "assets/FrontierVegetation/grass-clump/materials.txt",
+          "processedPath": "samples/Assets/FrontierVegetation/grass-clump/materials.txt"
+        },
+        {
+          "path": "sedge-tuft/model.fbx",
+          "bytes": 254560,
+          "sha256": "605cc83b16981dd45abc97270ae8865a115364383a349a36edeb3ca90557ded3",
+          "format": "FBX",
+          "runtimePath": "assets/FrontierVegetation/sedge-tuft/model.fbx",
+          "processedPath": "samples/Assets/FrontierVegetation/sedge-tuft/model.fbx"
+        },
+        {
+          "path": "sedge-tuft/albedo-0.png",
+          "bytes": 5437,
+          "sha256": "9530a94cde482f6e031fbba3e1d76b1896931e2f12d36821b65509b8e1a1113f",
+          "format": "PNG",
+          "width": 128,
+          "height": 512,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierVegetation/sedge-tuft/albedo-0.png",
+          "processedPath": "samples/Assets/FrontierVegetation/sedge-tuft/albedo-0.png"
+        },
+        {
+          "path": "sedge-tuft/normal-0.png",
+          "bytes": 7256,
+          "sha256": "34d39388a3489162eb15125a520acb21b56679289e7f21b6d1606ed7101993fa",
+          "format": "PNG",
+          "width": 64,
+          "height": 256,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierVegetation/sedge-tuft/normal-0.png",
+          "processedPath": "samples/Assets/FrontierVegetation/sedge-tuft/normal-0.png"
+        },
+        {
+          "path": "sedge-tuft/materials.txt",
+          "bytes": 76,
+          "sha256": "f57b4aa73d7cefba02e1e1dae7d0c5b3ee34d72de149fa70cbc160d33ec9b3ca",
+          "format": "TXT",
+          "runtimePath": "assets/FrontierVegetation/sedge-tuft/materials.txt",
+          "processedPath": "samples/Assets/FrontierVegetation/sedge-tuft/materials.txt"
+        }
+      ]
+    },
+    {
+      "name": "FrontierMeadow",
+      "title": "Leafy Grass",
+      "source": "https://polyhaven.com/a/leafy_grass",
+      "authors": {
+        "Charlotte Baglioni": "All"
+      },
+      "license": "CC0-1.0",
+      "files": [
+        {
+          "path": "License.txt",
+          "bytes": 111,
+          "sha256": "ef10aae351f2e11c377fa5459592c101122d3e67d1f71c86cc1ad23023c786e6",
+          "runtimePath": "assets/FrontierMeadow/License.txt",
+          "processedPath": "samples/Assets/FrontierMeadow/License.txt"
+        },
+        {
+          "path": "albedo.jpg",
+          "bytes": 555142,
+          "sha256": "b8a564ab180f13a54737ff2b44263590aa0c2e1af339704c1cd52782913a6158",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "sRGB",
+          "original": {
+            "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/leafy_grass/leafy_grass_diff_8k.jpg",
+            "width": 8192,
+            "height": 8192,
+            "format": "JPEG",
+            "bytes": 66821411,
+            "md5": "690f8eb69aec046a9f52b5ed755d3d89",
+            "sha256": "1a4da4c1f7f616aa4053934211561c1d40dc1844391a9d71e2086a365131e9c9"
+          },
+          "runtimePath": "assets/FrontierMeadow/albedo.jpg",
+          "processedPath": "samples/Assets/FrontierMeadow/albedo.jpg"
+        },
+        {
+          "path": "normal.png",
+          "bytes": 2719945,
+          "sha256": "45a4780b1edec79b5125c18e44092131e5805a7a30569d837327a61545c77b54",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "Linear tangent-space OpenGL",
+          "original": {
+            "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/leafy_grass/leafy_grass_nor_gl_8k.jpg",
+            "width": 8192,
+            "height": 8192,
+            "format": "JPEG",
+            "bytes": 79700327,
+            "md5": "df4b495dff47332f270a8febc3154544",
+            "sha256": "adfea2171d653e62171c06dbc1eb86264eae72bcc1d508bd08523ca4ee71dd0f"
+          },
+          "runtimePath": "assets/FrontierMeadow/normal.png",
+          "processedPath": "samples/Assets/FrontierMeadow/normal.png"
+        },
+        {
+          "path": "roughness.png",
+          "bytes": 542541,
+          "sha256": "9cec9f12a76577b5803239c5bef1a41ffdc99f27cd4718199b3f47cf3a9be168",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "Linear",
+          "original": {
+            "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/leafy_grass/leafy_grass_rough_8k.jpg",
+            "width": 8192,
+            "height": 8192,
+            "format": "JPEG",
+            "bytes": 31805627,
+            "md5": "f74c8ad676a73a351598e5e115cfde08",
+            "sha256": "3516079c5ea9402389a793ec2f241919e515851b12f2d5121ac8ea5b008f57b0"
+          },
+          "runtimePath": "assets/FrontierMeadow/roughness.png",
+          "processedPath": "samples/Assets/FrontierMeadow/roughness.png"
+        }
+      ]
+    }
+  ]
+}

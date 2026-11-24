@@ -89,6 +89,8 @@ struct GpuFrameStats {
     uint32 volumetricFogPasses = 0;
     uint32 rayVolumetricFogPasses = 0;
     uint32 waterReflectionPasses = 0;
+    uint32 temporalResolvePasses = 0;
+    uint32 temporalHistoryPasses = 0;
     uint32 restirPasses = 0;
     uint32 radianceCascadePasses = 0;
     uint32 virtualShadowPages = 0;

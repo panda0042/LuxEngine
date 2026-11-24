@@ -107,6 +107,10 @@ bool Window::IsFullscreen() const {
     return (SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN) != 0;
 }
 
+bool Window::SetRelativeMouseMode(bool enabled) {
+    return window_ && SDL_SetWindowRelativeMouseMode(window_, enabled);
+}
+
 bool Window::SetVSync(bool enabled) {
     if (!presentCallback_ || !presentCallback_(enabled))
         return false;

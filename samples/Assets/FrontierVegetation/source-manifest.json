@@ -1,0 +1,202 @@
+{
+  "name": "FrontierVegetation",
+  "author": "tevy",
+  "source": "https://tevy.dev/models",
+  "license": "CC0-1.0",
+  "sources": [
+    {
+      "name": "Norway Spruce",
+      "source": "https://tevy.dev/models/norway-spruce",
+      "original": {
+        "lod": 1,
+        "path": "/models/norway-spruce/v1/lod1.glb",
+        "bytes": 1837856,
+        "sha256": "1a99b9b1d8c5307337c204e4db26cecaf6493e4c2e11f51f6254d822dd1e6d07",
+        "triangles": 14282,
+        "url": "https://tevy.dev/models/norway-spruce/v1/lod1.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "norway-spruce/model.fbx",
+        "norway-spruce/albedo-0.png",
+        "norway-spruce/normal-0.png",
+        "norway-spruce/albedo-1.png",
+        "norway-spruce/normal-1.png",
+        "norway-spruce/albedo-2.png",
+        "norway-spruce/normal-2.png",
+        "norway-spruce/materials.txt"
+      ]
+    },
+    {
+      "name": "Wild Grass Clump",
+      "source": "https://tevy.dev/models/grass-clump",
+      "original": {
+        "lod": 1,
+        "path": "/models/grass-clump/v1/lod1.glb",
+        "bytes": 264404,
+        "sha256": "4da6d57ecf7138e85524ba459d72ff907f227892914afe9dc828a616af92110b",
+        "triangles": 718,
+        "url": "https://tevy.dev/models/grass-clump/v1/lod1.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "grass-clump/model.fbx",
+        "grass-clump/albedo-0.png",
+        "grass-clump/normal-0.png",
+        "grass-clump/materials.txt"
+      ]
+    },
+    {
+      "name": "Sedge Tuft",
+      "source": "https://tevy.dev/models/sedge-tuft",
+      "original": {
+        "lod": 1,
+        "path": "/models/sedge-tuft/v1/lod1.glb",
+        "bytes": 45328,
+        "sha256": "e20125e9c6490b5a36c6a491a855a9d37f2f34e5b0c38b695e80b2638aa6ead0",
+        "triangles": 1002,
+        "url": "https://tevy.dev/models/sedge-tuft/v1/lod1.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "sedge-tuft/model.fbx",
+        "sedge-tuft/albedo-0.png",
+        "sedge-tuft/normal-0.png",
+        "sedge-tuft/materials.txt"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "License.txt",
+      "bytes": 95,
+      "sha256": "18b34c9b8693b3e3b4e7bb8c9eb97ec6ca0250f6925ddc29f72cae20f3bff508"
+    },
+    {
+      "path": "norway-spruce/model.fbx",
+      "bytes": 3217280,
+      "sha256": "8ad3a89e440084a904c42a2d02d973c953559efa5b4b85bd4d542721e1017e9d",
+      "format": "FBX"
+    },
+    {
+      "path": "norway-spruce/albedo-0.png",
+      "bytes": 101911,
+      "sha256": "3c01d267db45a90fd4faddf8892fa56cf13aaf2b167a37ce7e28c2bfb42f47fd",
+      "format": "PNG",
+      "width": 128,
+      "height": 512,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "norway-spruce/normal-0.png",
+      "bytes": 129001,
+      "sha256": "12fc275ec1af80d8a5e5cc8e89036563b53f0aba090dbe5e5746eb1272504402",
+      "format": "PNG",
+      "width": 128,
+      "height": 512,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "norway-spruce/albedo-1.png",
+      "bytes": 913532,
+      "sha256": "2537f825af0dfdfbafe1c759bdb7b6ec793fd229052cd2293a80cf93c45562a4",
+      "format": "PNG",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "norway-spruce/normal-1.png",
+      "bytes": 1300130,
+      "sha256": "25642f39bf33da4850aa51c9679cdf3f921ce28f4d1801f606f7b083be1e88e8",
+      "format": "PNG",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "norway-spruce/albedo-2.png",
+      "bytes": 101911,
+      "sha256": "3c01d267db45a90fd4faddf8892fa56cf13aaf2b167a37ce7e28c2bfb42f47fd",
+      "format": "PNG",
+      "width": 128,
+      "height": 512,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "norway-spruce/normal-2.png",
+      "bytes": 129001,
+      "sha256": "12fc275ec1af80d8a5e5cc8e89036563b53f0aba090dbe5e5746eb1272504402",
+      "format": "PNG",
+      "width": 128,
+      "height": 512,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "norway-spruce/materials.txt",
+      "bytes": 316,
+      "sha256": "1efc143208c266161ac5cd5d60793e23d8ba5e67865e6ae21005d3a073ef89d7",
+      "format": "TXT"
+    },
+    {
+      "path": "grass-clump/model.fbx",
+      "bytes": 192528,
+      "sha256": "6747e0cf69a49ed89615d075bb0ceddaa55f4b4bc03227214ec0b81b4bb4b009",
+      "format": "FBX"
+    },
+    {
+      "path": "grass-clump/albedo-0.png",
+      "bytes": 198986,
+      "sha256": "a8ff541ae2047aa74026efc204b63bf6a7bfdc404161650e6089a0042e741465",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "grass-clump/normal-0.png",
+      "bytes": 78175,
+      "sha256": "627fe6c12e3e7b8a0bec584e94c29bad16938180828c212de86422b4dd9bed01",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "grass-clump/materials.txt",
+      "bytes": 83,
+      "sha256": "119224b237e91e0f27ff927929bd88357fc1689f179e344a62919c14b0b7e4cf",
+      "format": "TXT"
+    },
+    {
+      "path": "sedge-tuft/model.fbx",
+      "bytes": 254560,
+      "sha256": "605cc83b16981dd45abc97270ae8865a115364383a349a36edeb3ca90557ded3",
+      "format": "FBX"
+    },
+    {
+      "path": "sedge-tuft/albedo-0.png",
+      "bytes": 5437,
+      "sha256": "9530a94cde482f6e031fbba3e1d76b1896931e2f12d36821b65509b8e1a1113f",
+      "format": "PNG",
+      "width": 128,
+      "height": 512,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "sedge-tuft/normal-0.png",
+      "bytes": 7256,
+      "sha256": "34d39388a3489162eb15125a520acb21b56679289e7f21b6d1606ed7101993fa",
+      "format": "PNG",
+      "width": 64,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "sedge-tuft/materials.txt",
+      "bytes": 76,
+      "sha256": "f57b4aa73d7cefba02e1e1dae7d0c5b3ee34d72de149fa70cbc160d33ec9b3ca",
+      "format": "TXT"
+    }
+  ]
+}

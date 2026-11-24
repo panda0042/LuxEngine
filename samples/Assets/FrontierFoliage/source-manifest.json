@@ -1,0 +1,40 @@
+{
+  "name": "FrontierFoliage",
+  "author": "tevy",
+  "source": "https://tevy.dev/models",
+  "license": "CC0-1.0",
+  "sources": [
+    {
+      "name": "Norway Spruce",
+      "source": "https://tevy.dev/models/norway-spruce",
+      "original": {
+        "lod": 2,
+        "path": "/models/norway-spruce/v1/lod2.glb",
+        "bytes": 507592,
+        "sha256": "2dbb026f880470e94924e9eb99acba144a7486ecc27908487235a1558b91285f",
+        "triangles": 2520,
+        "url": "https://tevy.dev/models/norway-spruce/v1/lod2.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "spruce.png"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "License.txt",
+      "bytes": 95,
+      "sha256": "18b34c9b8693b3e3b4e7bb8c9eb97ec6ca0250f6925ddc29f72cae20f3bff508"
+    },
+    {
+      "path": "spruce.png",
+      "bytes": 262333,
+      "sha256": "9eef627fbe301d36fe13b74cf7bd3ec91d2992d958b7614401c0ede9705216c1",
+      "format": "PNG",
+      "width": 432,
+      "height": 768,
+      "colorSpace": "sRGB"
+    }
+  ]
+}

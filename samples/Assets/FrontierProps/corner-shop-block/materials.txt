@@ -1,0 +1,1 @@
+"corner_far" "albedo-0.png" "normal-0.png" "roughness-0.png" 1 1 1 1 1 1 OPAQUE 0.5

@@ -125,7 +125,11 @@ ROOT_SIGNATURE(DefaultRootSignature)
 float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
 {
     INIT_MAIN;
+    const uint maps = uint(round(gDraw.options.w));
+    const float weight = (maps & 16u) != 0u ? saturate(In.color.a) : 0.0f;
     float4 texel = SampleMaterial(gTexture, In.uv);
+    if ((maps & 16u) != 0u)
+        texel.rgb = lerp(texel.rgb, SampleMaterial(gTerrainColor, In.uv).rgb, weight);
     float4 color = In.color * texel;
     if (gDraw.options.y > 0.5f && gDraw.options.y < 1.5f &&
         BelowAlphaCutoff(texel.a, In.color.a, In.uv, In.position.xy))
@@ -136,8 +140,7 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
     const float3 faceNormal = authoredNormal ? In.normal : cross(ddy(In.world), ddx(In.world));
     const float lenSq = dot(faceNormal, faceNormal);
     float3 normal = lenSq > 1e-10f ? faceNormal * rsqrt(lenSq) : float3(0.0f, 1.0f, 0.0f);
-    const uint maps = uint(round(gDraw.options.w));
-    if ((maps & 1u) != 0u)
+    if ((maps & (1u | 32u)) != 0u)
     {
         const float2 uvx = ddx(In.uv), uvy = ddy(In.uv);
         const float3 worldx = ddx(In.world), worldy = ddy(In.world);
@@ -152,7 +155,15 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
                 tangent *= rsqrt(tangentLength);
                 const float3 rawBitangent = (worldy * uvx.x - worldx * uvy.x) / determinant;
                 const float3 bitangent = cross(normal, tangent) * (dot(cross(normal, tangent), rawBitangent) < 0.0f ? -1.0f : 1.0f);
-                float3 mapped = SampleMaterial(gNormalTexture, In.uv).xyz * 2.0f - 1.0f;
+                float3 mapped = (maps & 1u) != 0u
+                    ? SampleMaterial(gNormalTexture, In.uv).xyz * 2.0f - 1.0f
+                    : float3(0, 0, 1);
+                if ((maps & 16u) != 0u) {
+                    const float3 layerNormal = (maps & 32u) != 0u
+                        ? SampleMaterial(gTerrainNormal, In.uv).xyz * 2.0f - 1.0f
+                        : float3(0, 0, 1);
+                    mapped = lerp(mapped, layerNormal, weight);
+                }
                 mapped.xy *= gDraw.materialOptions.x;
                 normal = SafeDirection(tangent * mapped.x + bitangent * mapped.y + normal * mapped.z, normal);
             }
@@ -176,7 +187,12 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
     }
     const float3 v = SafeDirection(gLights.camera.xyz - In.world, normal);
     const float metal = saturate(In.options.y * ((maps & 2u) != 0u ? SampleMaterial(gMetallicTexture, In.uv).r : 1.0f));
-    const float rough = clamp(In.options.z * ((maps & 4u) != 0u ? SampleMaterial(gRoughnessTexture, In.uv).r : 1.0f), 0.045f, 1.0f);
+    float roughnessMap = (maps & 4u) != 0u ? SampleMaterial(gRoughnessTexture, In.uv).r : 1.0f;
+    if ((maps & 16u) != 0u) {
+        const float layerRoughness = (maps & 64u) != 0u ? SampleMaterial(gTerrainRoughness, In.uv).r : 1.0f;
+        roughnessMap = lerp(roughnessMap, layerRoughness, weight);
+    }
+    const float rough = clamp(In.options.z * roughnessMap, 0.045f, 1.0f);
     float3 result = Brdf(color.rgb, metal, rough, normal, v, -gLights.direction.xyz) *
                     gLights.colorIntensity.rgb * max(gLights.colorIntensity.w, 0.0f);
     result *= SurfaceDirectionalShadow(In.world, normal);

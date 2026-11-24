@@ -7,14 +7,47 @@ STRUCT(FullscreenOutput)
     DATA(float2, uv, TEXCOORD0);
 };
 
+float3 NeighborColor(int2 pixel, int2 upper, float3 fallback, float aces) {
+    const float4 hdr = LoadTex2D(gHdrImage, NO_SAMPLER, clamp(pixel, int2(0, 0), upper), 0);
+    return hdr.a > 0.0f ? ToneMapSdr(hdr.rgb / max(hdr.a, 1e-6f), gScene.camera.w, aces)
+                        : fallback;
+}
+
+// Contrast-adaptive filtering along the steepest local luminance gradient.
+float3 EdgeAA(int2 pixel, float3 center, float aces) {
+    const int2 upper = int2(gScene.frameSize.xy) - 1;
+    const float3 north = NeighborColor(pixel - int2(0, 1), upper, center, aces);
+    const float3 south = NeighborColor(pixel + int2(0, 1), upper, center, aces);
+    const float3 west = NeighborColor(pixel - int2(1, 0), upper, center, aces);
+    const float3 east = NeighborColor(pixel + int2(1, 0), upper, center, aces);
+    const float3 weights = float3(0.2126f, 0.7152f, 0.0722f);
+    const float luma = dot(center, weights);
+    const float n = dot(north, weights), s = dot(south, weights);
+    const float w = dot(west, weights), e = dot(east, weights);
+    const float low = min(luma, min(min(n, s), min(w, e)));
+    const float high = max(luma, max(max(n, s), max(w, e)));
+    const float span = high - low;
+    if (span < max(0.035f, high * 0.13f))
+        return center;
+    const bool vertical = max(abs(n - luma), abs(s - luma)) > max(abs(w - luma), abs(e - luma));
+    const float3 pair = vertical ? (north + south) * 0.5f : (west + east) * 0.5f;
+    const float bend = abs(dot(pair, weights) - luma) / max(span, 1e-5f);
+    return lerp(center, pair, 0.47f * smoothstep(0.08f, 0.62f, bend));
+}
+
 // The HDR image matches the swap chain. Untouched pixels leave the previous pass visible.
 ROOT_SIGNATURE(DefaultRootSignature)
 float4 PS_MAIN(FullscreenOutput In)
 {
     INIT_MAIN;
-    float4 color = LoadTex2D(gHdrImage, NO_SAMPLER, int2(In.position.xy), 0);
+    const int2 pixel = int2(In.position.xy);
+    float4 color = LoadTex2D(gHdrImage, NO_SAMPLER, pixel, 0);
     if (color.a <= 0.0f)
         discard;
-    color.rgb = ToneMapSdr(color.rgb / max(color.a, 1e-6f), gScene.camera.w, gScene.options.z);
+    const uint flags = uint(gScene.options.z);
+    const float aces = float(flags & 1u);
+    color.rgb = ToneMapSdr(color.rgb / max(color.a, 1e-6f), gScene.camera.w, aces);
+    if ((flags & 2u) != 0u)
+        color.rgb = EdgeAA(pixel, color.rgb, aces);
     RETURN(color);
 }

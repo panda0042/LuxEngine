@@ -1,0 +1,1 @@
+"swamp_sedge_lod1" "albedo-0.png" "normal-0.png" "" 1 1 1 1 0 0.75 MASK 0.5

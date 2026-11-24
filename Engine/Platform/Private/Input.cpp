@@ -277,6 +277,12 @@ std::pair<float, float> Input::GetMousePosition() {
     return {x, y};
 }
 
+std::pair<float, float> Input::ConsumeMouseDelta() {
+    float x = 0, y = 0;
+    SDL_GetRelativeMouseState(&x, &y);
+    return {x, y};
+}
+
 float Input::GetMouseX() {
     return GetMousePosition().first;
 }

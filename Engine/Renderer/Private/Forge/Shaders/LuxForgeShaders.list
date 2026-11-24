@@ -74,6 +74,9 @@
 #frag luxtone.frag
 #include "LuxTone.frag.fsl"
 #end
+#frag luxtemporal.frag
+#include "LuxTemporal.frag.fsl"
+#end
 
 #comp luxfog.comp
 #include "LuxFog.comp.fsl"

@@ -72,6 +72,62 @@
       "files": 2,
       "manifest_sha256": "aea9ae1dd5245c58c9cd1521334a7a238382363576c90a924181ec2ad844a2ec",
       "version": "4K source, 2K RGBE derivative"
+    },
+    {
+      "name": "FrontierCounty",
+      "source": "https://polyhaven.com/a/rocky_gravel",
+      "license": "CC0-1.0",
+      "files": 4,
+      "version": "8K gravel sources",
+      "manifest_sha256": "86da7aa362cf55731adb82b637af3be3da55feaafc7b0cdc4bf503a4660ad6d1"
+    },
+    {
+      "name": "FrontierPeople",
+      "source": "https://tevy.dev/models",
+      "license": "CC0-1.0",
+      "files": 14,
+      "version": "tevy character model v1",
+      "manifest_sha256": "52ce281b9a9d0fbbf1ba3159e501d85cf662d0d3a5bfa2b38bad75fd03bc5136"
+    },
+    {
+      "name": "FrontierFoliage",
+      "source": "https://tevy.dev/models",
+      "license": "CC0-1.0",
+      "files": 2,
+      "version": "tevy Norway Spruce v1",
+      "manifest_sha256": "4368d66575bf1ebe65ed301ce61dba1a5a47f99f0799ecede52a5ad2579b4749"
+    },
+    {
+      "name": "FrontierProps",
+      "source": "https://tevy.dev/models",
+      "license": "CC0-1.0",
+      "files": 42,
+      "version": "tevy v1/v2 models",
+      "manifest_sha256": "3624c39a4a1cac69176b136f5023be68583a49b2c21da5ebcc55fe2c8a269cb9"
+    },
+    {
+      "name": "FrontierAsphalt",
+      "source": "https://polyhaven.com/a/asphalt_01",
+      "license": "CC0-1.0",
+      "files": 4,
+      "version": "8K Asphalt 01 sources",
+      "manifest_sha256": "9e282256dc8a4f3e3be6c57749df8181f2d184626e851edd6f5ae0188001c1b3"
+    },
+    {
+      "name": "FrontierVegetation",
+      "source": "https://tevy.dev/models",
+      "license": "CC0-1.0",
+      "files": 17,
+      "version": "tevy 3D vegetation v1",
+      "manifest_sha256": "f7880cc38ac87aa64e6a18d9e26c0cf572c7a21a4d9d24cf2fa683a7ac38f1b9"
+    },
+    {
+      "name": "FrontierMeadow",
+      "source": "https://polyhaven.com/a/leafy_grass",
+      "license": "CC0-1.0",
+      "files": 4,
+      "version": "8K Leafy Grass",
+      "manifest_sha256": "101036dbfed74571d7478c093f16f7c23bcb959016f6228dbcc3f557918b2288"
     }
   ],
   "admission": "Existing CC0 graphics/audio plus the official Public Domain DungGeunMo Korean font; source grants, archive CRC/SHA-256 and copied-byte roster verified manually."

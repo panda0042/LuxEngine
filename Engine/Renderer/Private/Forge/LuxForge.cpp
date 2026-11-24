@@ -51,6 +51,7 @@
 #include "Shaders/LuxOcean.srt.h"
 #include "Shaders/LuxOceanAssemble.srt.h"
 #include "Shaders/LuxScene.srt.h"
+#include "Shaders/LuxTemporal.srt.h"
 #if defined(VULKAN)
 #include "Shaders/LuxRayScene.srt.h"
 #endif
@@ -287,6 +288,21 @@ struct LuxForgeDevice {
     uint32_t scenePasses = 0;         // in the current frame
     uint64_t lastShadowlessFrame = 0; // last frame with a scene pass that had shadows off
     SceneTarget hdr, sceneDepth, shadow, waterHdr, waterDepth;
+
+    struct TemporalState {
+        Shader* shader = nullptr;
+        DescriptorSet* set = nullptr;
+        Buffer* constants = nullptr;
+        Pipeline* pipeline = nullptr;
+        SceneTarget color[2], depth[2];
+        std::array<float, 16> matrix{};
+        std::array<double, 3> origin{};
+        std::array<float, 3> forward{};
+        uint64_t frame = 0, view = 0;
+        uint32_t environment = 0, index = 0;
+        bool attempted = false, ready = false;
+    } temporal;
+
     std::vector<PendingTarget> pendingTargets;
     std::vector<EnvironmentSlot> environments = std::vector<EnvironmentSlot>(1); // id 0 unused
     std::vector<uint32_t> freeEnvironmentIds;
@@ -1238,6 +1254,8 @@ int BeginFrame(LuxForgeDevice* device) {
     device->frameStats.volumetricFogPasses = 0;
     device->frameStats.rayVolumetricFogPasses = 0;
     device->frameStats.waterReflectionPasses = 0;
+    device->frameStats.temporalResolvePasses = 0;
+    device->frameStats.temporalHistoryPasses = 0;
     device->frameStats.restirPasses = 0;
     device->frameStats.radianceCascadePasses = 0;
     device->frameStats.virtualShadowPages = 0;
@@ -2192,6 +2210,15 @@ void RetireWaterTargets(LuxForgeDevice* device) {
     RetireTarget(device, device->waterDepth);
 }
 
+void RetireTemporal(LuxForgeDevice* device) {
+    auto& temporal = device->temporal;
+    for (unsigned i = 0; i < 2; ++i) {
+        RetireTarget(device, temporal.color[i]);
+        RetireTarget(device, temporal.depth[i]);
+    }
+    temporal.frame = 0;
+}
+
 void ReleaseEnvironment(LuxForgeDevice* device, uint32_t id) {
     auto& slot = device->environments[id];
     for (Texture* map : slot.maps)
@@ -2227,6 +2254,9 @@ void CollectSceneGarbage(LuxForgeDevice* device, bool everything) {
 void BeginSceneFrame(LuxForgeDevice* device) {
     device->scenePasses = 0;
     const uint64_t last = device->frameNumber; // last submitted frame
+    if (device->temporal.color[0].target && last >= device->temporal.frame &&
+        last - device->temporal.frame >= LuxForgeDevice::kSceneIdleFrames)
+        RetireTemporal(device);
     if (device->shadow.target && device->shadow.lastUsedFrame < last &&
         (device->lastShadowlessFrame == last ||
          last - device->shadow.lastUsedFrame >= LuxForgeDevice::kSceneIdleFrames)) {
@@ -2501,6 +2531,17 @@ bool InitScene(LuxForgeDevice* device) {
 }
 
 void ShutdownScene(LuxForgeDevice* device) {
+    auto& temporal = device->temporal;
+    RetireTemporal(device);
+    if (temporal.set)
+        removeDescriptorSet(device->renderer, temporal.set);
+    if (temporal.pipeline)
+        removePipeline(device->renderer, temporal.pipeline);
+    if (temporal.shader)
+        removeShader(device->renderer, temporal.shader);
+    if (temporal.constants)
+        removeResource(temporal.constants);
+    temporal = {};
     ShutdownFog(device);
     ShutdownRadianceCascades(device);
     ShutdownRestir(device);
@@ -2680,6 +2721,7 @@ void DestroyEnvironment(LuxForgeDevice* device, uint32_t id) {
         device->environments.begin(), device->environments.end(),
         [](const auto& environment) { return environment.maps[0] && !environment.pendingDelete; });
     if (!hasOwner) {
+        RetireTemporal(device);
         RetireWaterTargets(device);
         RetireTarget(device, device->hdr);
         RetireTarget(device, device->sceneDepth);
@@ -2711,7 +2753,8 @@ bool SceneDrawUsable(const LuxForgeDevice* device, const LuxForgeSceneDraw& draw
         return &device->buffers[id];
     };
     for (const auto texture :
-         {draw.normalTexture, draw.metallicTexture, draw.roughnessTexture, draw.occlusionTexture})
+         {draw.normalTexture, draw.metallicTexture, draw.roughnessTexture, draw.occlusionTexture,
+          draw.terrainColor, draw.terrainNormal, draw.terrainRoughness})
         if (texture &&
             (texture > LuxForgeDevice::kMaxTextures || !device->textures[texture].texture))
             return false;
@@ -2821,14 +2864,17 @@ void DrawColorMeshes(LuxForgeDevice* device, Cmd* cmd, const std::vector<SceneMe
 }
 
 void WriteSceneMaterial(LuxForgeDevice* device, uint32_t materialIndex,
-                        const std::array<uint32_t, 5>& ids) {
-    Texture* textures[5] = {};
-    DescriptorData params[5] = {};
-    const uint32_t bindings[5] = {SRT_RES_IDX(LuxSceneSrt, PerBatch, gTexture),
+                        const std::array<uint32_t, 8>& ids) {
+    Texture* textures[8] = {};
+    DescriptorData params[8] = {};
+    const uint32_t bindings[8] = {SRT_RES_IDX(LuxSceneSrt, PerBatch, gTexture),
                                   SRT_RES_IDX(LuxSceneSrt, PerBatch, gNormalTexture),
                                   SRT_RES_IDX(LuxSceneSrt, PerBatch, gMetallicTexture),
                                   SRT_RES_IDX(LuxSceneSrt, PerBatch, gRoughnessTexture),
-                                  SRT_RES_IDX(LuxSceneSrt, PerBatch, gOcclusionTexture)};
+                                  SRT_RES_IDX(LuxSceneSrt, PerBatch, gOcclusionTexture),
+                                  SRT_RES_IDX(LuxSceneSrt, PerBatch, gTerrainColor),
+                                  SRT_RES_IDX(LuxSceneSrt, PerBatch, gTerrainNormal),
+                                  SRT_RES_IDX(LuxSceneSrt, PerBatch, gTerrainRoughness)};
     for (uint32_t map = 0; map < ids.size(); ++map) {
         textures[map] = device->textures[ids[map] ? ids[map] : device->whiteTexture].texture;
         params[map].mIndex = bindings[map];
@@ -2837,26 +2883,28 @@ void WriteSceneMaterial(LuxForgeDevice* device, uint32_t materialIndex,
     updateDescriptorSet(
         device->renderer, materialIndex % LuxForgeDevice::kMaterialBankSize,
         device->materialSets[device->frameSlot][materialIndex / LuxForgeDevice::kMaterialBankSize],
-        5, params);
+        static_cast<uint32_t>(ids.size()), params);
 }
 
 #include "LuxFog.inl"
 #include "LuxRadianceCascades.inl"
 #include "LuxRestir.inl"
+#include "LuxTemporal.inl"
 #include "LuxVirtualShadow.inl"
 
-int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxForgeSceneDraw* draws,
+int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxForgeSceneDraw* draws,
                 uint32_t drawCount, uint32_t* drawn) {
     if (drawn)
         *drawn = 0;
     if (!device || !device->frameOpen)
         return device ? Fail(device, "renderScene outside a frame") : 0;
-    if (!scene || (drawCount && !draws))
+    if (!input || (drawCount && !draws))
         return Fail(device, "renderScene needs a scene and its draws");
     if (!InitScene(device))
         return 0;
     if (device->scenePasses >= LuxForgeDevice::kMaxScenePasses)
         return Fail(device, "Too many 3D scene passes in one frame");
+    const LuxForgeScene* scene = input;
     if (!IsLiveEnvironment(device, scene->environmentMap))
         return Fail(device, "renderScene with an unknown or destroyed environment");
     const uint32_t resolution = scene->shadowResolution;
@@ -2867,6 +2915,7 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
                                device->hdr.target->mHeight != device->height)) {
         RetireTarget(device, device->hdr);
         RetireTarget(device, device->sceneDepth);
+        RetireTemporal(device);
         RetireWaterTargets(device);
     }
     if (!device->hdr.target &&
@@ -2941,6 +2990,22 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
 
     const uint64_t thisFrame = device->frameNumber + 1;
     const uint32_t pass = device->scenePasses++;
+    const bool temporal =
+        scene->temporalView && pass == 0 && colorEnd == waterEnd && PrepareTemporal(device);
+    std::array<float, 2> jitter{};
+    LuxForgeScene jittered;
+    if (temporal) {
+        jittered = *scene;
+        const unsigned sample = unsigned((thisFrame - 1) % 8) + 1;
+        jitter = {(RadicalInverse(sample, 2) - 0.5f) * 2.f / device->width,
+                  (RadicalInverse(sample, 3) - 0.5f) * 2.f / device->height};
+        for (unsigned col = 0; col < 4; ++col) {
+            auto* column = jittered.viewProjection + col * 4;
+            column[0] += jitter[0] * column[3];
+            column[1] += jitter[1] * column[3];
+        }
+        scene = &jittered;
+    }
     if (!shadows)
         device->lastShadowlessFrame = thisFrame;
 
@@ -3023,7 +3088,7 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
     // Per-object constants: one LuxDraw block serves the shadow and the HDR pass.
     const uint32_t firstDraw = frame.draws;
     uint32_t materialIndex = firstDraw;
-    std::array<uint32_t, 5> lastMaps{};
+    std::array<uint32_t, 8> lastMaps{};
     for (size_t i = 0; i < visible.size(); ++i) {
         auto& mesh = visible[i];
         const auto& draw = *mesh.draw;
@@ -3046,7 +3111,9 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
         block[42] = draw.alphaCutoff;
         block[43] =
             static_cast<float>((draw.normalTexture ? 1 : 0) | (draw.metallicTexture ? 2 : 0) |
-                               (draw.roughnessTexture ? 4 : 0) | (draw.occlusionTexture ? 8 : 0));
+                               (draw.roughnessTexture ? 4 : 0) | (draw.occlusionTexture ? 8 : 0) |
+                               (draw.terrainColor ? 16 : 0) | (draw.terrainNormal ? 32 : 0) |
+                               (draw.terrainRoughness ? 64 : 0));
         block[44] = draw.normalScale;
         block[45] = draw.occlusionStrength;
         block[46] = static_cast<float>(draw.sampling & 3u);
@@ -3057,9 +3124,9 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
         block[53] = static_cast<float>(baseTexture->mHeight);
         block[54] = (draw.sampling & 4u) ? 1.f : 0.f;
         block[55] = 0.f;
-        const std::array<uint32_t, 5> maps = {draw.texture, draw.normalTexture,
-                                              draw.metallicTexture, draw.roughnessTexture,
-                                              draw.occlusionTexture};
+        const std::array<uint32_t, 8> maps = {
+            draw.texture,          draw.normalTexture, draw.metallicTexture, draw.roughnessTexture,
+            draw.occlusionTexture, draw.terrainColor,  draw.terrainNormal,   draw.terrainRoughness};
         // Consecutive meshes with the same maps can bind one immutable descriptor entry.
         // Object parameters and the map-presence mask still come from each draw's block.
         if (i == 0 || maps != lastMaps) {
@@ -3235,8 +3302,20 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* scene, const LuxFor
         device->waterHdr.lastUsedFrame = device->waterDepth.lastUsedFrame = thisFrame;
     }
 
+    Texture* resolved = nullptr;
+    if (temporal) {
+        auto& currentColor = water ? device->waterHdr : device->hdr;
+        auto& currentDepth = water ? device->waterDepth : device->sceneDepth;
+        resolved =
+            ResolveTemporal(device, cmd, *scene, currentColor, currentDepth, jitter, thisFrame);
+        textures[5] = resolved;
+        updateDescriptorSet(device->renderer, toneEntry, device->sceneSet, commonDescriptors,
+                            params);
+    }
+
     // Tone mapping onto the swap chain (keeps its contents and the main depth buffer).
-    if (!RenderFog(device, *scene, pass, water, shadows, fogRays, shadowPlan.packed.data())) {
+    if (!RenderFog(device, *scene, pass, water, shadows, fogRays, shadowPlan.packed.data(),
+                   resolved)) {
         BindPass(device, false, nullptr);
         BindPipeline(device, cmd, device->pipelineTone);
         BindDescriptors(device, cmd, toneEntry, device->sceneSet);

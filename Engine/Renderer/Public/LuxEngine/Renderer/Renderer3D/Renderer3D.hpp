@@ -26,6 +26,14 @@ struct WaterMaterial3D {
     float indexOfRefraction = 1.333f;
 };
 
+// Secondary PBR layer for opaque custom meshes. Vertex3D::color.a selects the
+// layer weight, and both layers use the mesh UVs. RGB vertex tint is shared.
+struct TerrainLayer3D {
+    std::string baseColorTexture;
+    std::string normalTexture;
+    std::string roughnessTexture;
+};
+
 struct Material3D {
     Vec4 albedoColor{1.0f, 1.0f, 1.0f, 1.0f};
     float metallic = 0.0f;
@@ -42,6 +50,7 @@ struct Material3D {
     float alphaCutoff = 0.001f;
     bool doubleSided = true;
     std::optional<WaterMaterial3D> water;
+    std::optional<TerrainLayer3D> terrainLayer;
 };
 
 struct MaterialTextures3D {

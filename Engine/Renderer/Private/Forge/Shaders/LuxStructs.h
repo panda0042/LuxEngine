@@ -29,7 +29,7 @@ STRUCT(LuxLights) {
 STRUCT(LuxSceneData) {
     DATA(float4, camera, None);      // xyz: position, w: exposure
     DATA(float4, environment, None); // rgb: ambient colour, w: intensity
-    DATA(float4, options, None);     // x: rotation (radians), y: IBL, z: ACES, w: sky
+    DATA(float4, options, None);     // x: rotation (radians), y: IBL, z: flags (ACES 1, edge AA 2), w: sky
     DATA(float4, right, None);       // w: perspective depth coefficient A
     DATA(float4, up, None);          // w: perspective depth coefficient B
     DATA(float4, forward, None);

@@ -572,7 +572,7 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     }
     auto normalSampling = material.textureSampling;
     normalSampling.normalMap = true;
-    std::array<Ref<GpuTexture>, 4> maps;
+    std::array<Ref<GpuTexture>, 6> maps;
     const auto map = [this, &maps](size_t index, const std::string& path,
                                    TextureSampling sampling) {
         maps[index] = ResolveBaseColorTexture(path, sampling, TextureColorSpace::Linear);
@@ -585,6 +585,21 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
                                  ? textures.roughness->handle_
                                  : map(2, material.roughnessTexture, material.textureSampling);
     const uint64 occlusion = map(3, material.occlusionTexture, material.textureSampling);
+    Ref<GpuTexture> terrainBase;
+    uint64 terrainColor = 0, terrainNormal = 0, terrainRoughness = 0;
+    Vec4 albedo = material.albedoColor;
+    if (material.terrainLayer && material.alphaMode == MaterialAlphaMode::Opaque &&
+        !material.water) {
+        const auto& layer = *material.terrainLayer;
+        terrainBase = ResolveBaseColorTexture(layer.baseColorTexture, material.textureSampling,
+                                              TextureColorSpace::Srgb);
+        if (terrainBase) {
+            terrainColor = terrainBase->handle_;
+            terrainNormal = map(4, layer.normalTexture, normalSampling);
+            terrainRoughness = map(5, layer.roughnessTexture, material.textureSampling);
+            albedo.w = 1;
+        }
+    }
     const bool alphaCoverage = texture && texture->alphaMaskCutoff_ > 0 &&
                                texture->alphaMaskCutoff_ == AlphaMaskCutoff(material);
     const uint32 sampling =
@@ -619,7 +634,7 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
                                  texture ? texture->handle_ : 0,
                                  mesh.indexCount_,
                                  model,
-                                 material.albedoColor,
+                                 albedo,
                                  material.metallic,
                                  material.roughness,
                                  static_cast<uint32>(material.alphaMode),
@@ -634,7 +649,10 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
                                  sampling,
                                  shadowOnly,
                                  water,
-                                 shadowPageMask}))
+                                 shadowPageMask,
+                                 terrainColor,
+                                 terrainNormal,
+                                 terrainRoughness}))
         return;
     ++impl_->stats.meshCount;
     ++impl_->stats.drawCalls;
@@ -755,7 +773,7 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
     const bool requiresUv = !material.baseColorTexture.empty() || !material.normalTexture.empty() ||
                             !material.metallicTexture.empty() ||
                             !material.roughnessTexture.empty() ||
-                            !material.occlusionTexture.empty();
+                            !material.occlusionTexture.empty() || material.terrainLayer.has_value();
     if (modelSubmesh >= 0) {
         std::string error;
         auto model = ModelAsset::LoadFbx(path, error);
@@ -934,6 +952,7 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
         drawable.metallicTexture.clear();
         drawable.roughnessTexture.clear();
         drawable.occlusionTexture.clear();
+        drawable.terrainLayer.reset();
     }
     impl_->frameMeshes.push_back(cached.mesh);
     DrawMesh(*cached.mesh, transform, drawable);

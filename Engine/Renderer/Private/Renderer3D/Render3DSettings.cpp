@@ -81,7 +81,8 @@ bool IsDefaultRender3DSettings(const Render3DSettings& s) {
             v.fog.anisotropy, v.fog.rayTracedShadows, v.rayTracing.restirDirect,
             v.rayTracing.restirIndirect, v.virtualShadows, v.waterReflection.environmentPath,
             v.waterReflection.rotation, v.waterReflection.intensity, v.waterReflection.faceSize,
-            v.radianceCascades.strength, v.radianceCascades.spacing);
+            v.radianceCascades.strength, v.radianceCascades.spacing, v.screenSpaceAntialiasing,
+            v.temporalAntialiasing);
     };
     return fields(s) == fields(d);
 }

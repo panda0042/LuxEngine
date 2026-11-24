@@ -34,7 +34,7 @@ cmake --build build --target LuxEditor LuxForgeBackendTests
 ctest --test-dir build -L forge --output-on-failure
 ```
 
-`LUX_ENABLE_FORGE`나 `LUX_RENDER_BACKEND`를 선택할 필요가 없다. 렌더러 파일이 없거나 엔진과 ABI가 맞지 않으면 초기화 오류를 반환한다. ABI 버전은 현재 `18`이며 엔진과 렌더러를 함께 다시 빌드해야 한다.
+`LUX_ENABLE_FORGE`나 `LUX_RENDER_BACKEND`를 선택할 필요가 없다. 렌더러 파일이 없거나 엔진과 ABI가 맞지 않으면 초기화 오류를 반환한다. ABI 버전은 현재 `20`이며 엔진과 렌더러를 함께 다시 빌드해야 한다.
 
 ## 프레임과 자원 수명
 
@@ -91,3 +91,13 @@ python3 tools/CaptureRenderDoc.py --build-dir out -- scene3d
 ```
 
 필요하면 `--icd`로 Vulkan 드라이버 JSON, `--exe`로 다른 실행 파일을 지정한다. 게임에는 `--frames`처럼 종료 조건을 전달한다. 결과 디렉터리에는 단계별 로그, `.rdc`와 재생 결과 `result.json`이 남는다. 이 도구는 GPU 장치 손실·물리·Windows UI의 검증을 대신하지 않는다.
+
+### 화면 공간 에지 안티앨리어싱
+
+Render3DSettings::screenSpaceAntialiasing을 켜면 HDR 합성의 SDR 톤 매핑 결과에 대비 적응형 에지 필터를 적용한다. 주변 네 픽셀의 휘도를 비교하고, 대비가 큰 방향의 픽셀을 혼합한다. 화면 밖 샘플 좌표를 제한하고 HDR 렌더링 영역 밖의 투명 픽셀은 혼합에서 제외한다. 합성 이후 UI는 원래 해상도로 그린다. 기본값은 꺼짐이며 씬 JSON에서는 screen_space_antialiasing으로 저장된다. Frontier County에서 H로 비교할 수 있다.
+
+### 지형 재질 블렌딩과 TAA
+
+Material3D::terrainLayer는 불투명 커스텀 Mesh3D에서 두 번째 베이스 컬러, 접선 공간 노멀 및 거칠기 지도를 지정한다. Vertex3D::color.a가 보조 층의 가중치다. 두 층은 같은 UV와 RGB 정점 색을 사용한다. 베이스 컬러는 선형화한 후 혼합하고 노멀은 공통 접선 공간에서 보간한다.
+
+Render3DSettings::temporalAntialiasing은 프레임의 첫 3D 패스에 Halton 서브픽셀 지터를 적용한다. HDR 합성 이후와 안개·톤 매핑 이전 사이에서 깊이 기반 카메라 리프로젝션과 이웃 색 범위 제한을 실행한다. 히스토리는 뷰 교체, 카메라 컷, 프레임 단절, 크기 변경, 하늘 환경 교체에 따라 초기화된다. 블렌드 재질이 있는 패스와 후속 3D 패스는 기본 경로를 쓴다. 현재 카메라와 깊이로 움직임을 추정하므로 개별 오브젝트 모션 벡터는 후속 확장 범위다. UI는 합성 후 그대로 렌더링된다.
