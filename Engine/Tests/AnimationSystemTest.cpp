@@ -40,6 +40,23 @@ AnimationClip Clip(double x) {
 void Curves() {
     auto track = Track(AnimationProperty::Position, 0, 10);
     Check(Near(track.Sample(.25)[0], 2.5), "linear channel");
+    const auto extreme = Track(AnimationProperty::Position, -1e308, 1e308);
+    Check(extreme.Sample(.5)[0] == 0 && std::isfinite(extreme.Sample(.75)[0]),
+          "linear interpolation has finite results between extreme finite keys");
+    AnimationClip legacyExtreme;
+    legacyExtreme.AddKeyframe({0, {-1e308, 0, 0}});
+    legacyExtreme.AddKeyframe({1, {1e308, 0, 0}});
+    Check(legacyExtreme.Sample(.5).position.x == 0,
+          "legacy keyframes also interpolate extreme finite positions");
+    Scene animated;
+    auto entity = animated.CreateEntity("Extreme animated position");
+    auto& component = entity.AddComponent<AnimationComponent>();
+    component.clip.tracks = {extreme};
+    animated.OnUpdate(.5);
+    std::string serialized;
+    Check(entity.GetComponent<TransformComponent>().position.x == 0 &&
+              animated.SerializeToString(serialized),
+          "a scene stays saveable after sampling extreme finite position keys");
     track.keys.front().interpolation = AnimationInterpolation::Step;
     Check(track.Sample(.9)[0] == 0, "step channel");
     track.keys.front().interpolation = AnimationInterpolation::Cubic;
@@ -82,6 +99,13 @@ void Curves() {
           "events across multiple loops");
     playback.speed = -1;
     Check(playback.Advance(1, 1, AnimationWrap::Loop, events).size() == 2, "reverse events");
+    const std::vector<AnimationEvent> endpointsAtBoundary{{0, "start", ""}, {1, "end", ""}};
+    playback = {.25, -1, true};
+    const auto reverseBoundary = playback.Advance(.25, 1, AnimationWrap::Loop, endpointsAtBoundary);
+    Check(reverseBoundary.size() == 2 && reverseBoundary[0].name == "start" &&
+              reverseBoundary[1].name == "end" &&
+              playback.Advance(.25, 1, AnimationWrap::Loop, endpointsAtBoundary).empty(),
+          "reverse landing on a loop boundary emits both endpoint events exactly once");
     playback = {0, 1, true};
     Check(playback.Advance(2, 1, AnimationWrap::PingPong, events).size() == 4,
           "ping pong events in both directions");

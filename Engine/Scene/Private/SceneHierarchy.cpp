@@ -19,7 +19,11 @@ bool Finite(const TransformComponent& value) {
 }
 
 double Length(Vec3 value) {
-    return std::sqrt(value.Dot(value));
+    return std::hypot(value.x, value.y, value.z);
+}
+
+Vec3 Divide(Vec3 value, double scale) {
+    return {value.x / scale, value.y / scale, value.z / scale};
 }
 
 bool Decompose(const Mat4& matrix, TransformComponent& value, bool requireTrs) {
@@ -27,13 +31,15 @@ bool Decompose(const Mat4& matrix, TransformComponent& value, bool requireTrs) {
     value.position = {m[12], m[13], m[14]};
     Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
     value.scale = {Length(x), Length(y), Length(z)};
+    if (!Finite(value.position) || !Finite(value.scale))
+        return false;
     constexpr double epsilon = 1e-6f;
     const bool planar = x.z == 0 && y.z == 0 && z.x == 0 && z.y == 0;
     const bool flat = value.scale.z < epsilon && std::abs(x.z) <= epsilon * value.scale.x &&
                       std::abs(y.z) <= epsilon * value.scale.y &&
                       std::hypot(z.x, z.y) <= epsilon * value.scale.z;
     if ((planar || flat) && value.scale.x > 0 && value.scale.y > 0) {
-        const Vec3 axisX = x * (1 / value.scale.x), axisY = y * (1 / value.scale.y);
+        const Vec3 axisX = Divide(x, value.scale.x), axisY = Divide(y, value.scale.y);
         const double area = axisX.x * axisY.y - axisX.y * axisY.x;
         if (std::abs(area) > epsilon && (!requireTrs || std::abs(axisX.Dot(axisY)) <= 1e-4)) {
             const double sign = area < 0 ? -1 : 1;
@@ -43,15 +49,17 @@ bool Decompose(const Mat4& matrix, TransformComponent& value, bool requireTrs) {
             return Finite(value);
         }
     }
-    if (value.scale.x < epsilon || value.scale.y < epsilon || value.scale.z < epsilon) {
+    if (value.scale.x == 0 || value.scale.y == 0 || value.scale.z == 0) {
         value.rotation = {};
         return !requireTrs && Finite(value);
     }
-    if (x.Dot(y.Cross(z)) < 0)
+    x = Divide(x, value.scale.x);
+    y = Divide(y, value.scale.y);
+    z = Divide(z, value.scale.z);
+    if (x.Dot(y.Cross(z)) < 0) {
         value.scale.x = -value.scale.x;
-    x = x * (1 / value.scale.x);
-    y = y * (1 / value.scale.y);
-    z = z * (1 / value.scale.z);
+        x = x * -1;
+    }
     // A rotated child below a non-uniformly scaled parent can contain shear. Keep-world edits
     // reject a non-TRS result rather than silently moving or stretching the object.
     if (requireTrs &&
@@ -70,25 +78,33 @@ bool Decompose(const Mat4& matrix, TransformComponent& value, bool requireTrs) {
 
 bool InverseAffine(const Mat4& input, Mat4& result) {
     const auto* m = input.elements;
-    const double a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6],
-                 i = m[10];
-    const double determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    const Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
+    const Vec3 size{Length(x), Length(y), Length(z)};
+    if (!Finite(size) || size.x == 0 || size.y == 0 || size.z == 0)
+        return false;
+    const auto axisX = Divide(x, size.x), axisY = Divide(y, size.y), axisZ = Divide(z, size.z);
+    const auto normalX = axisY.Cross(axisZ), normalY = axisZ.Cross(axisX),
+               normalZ = axisX.Cross(axisY);
+    const double determinant = axisX.Dot(normalX);
     if (!std::isfinite(determinant) || std::abs(determinant) < 1e-12)
         return false;
-    const double scale = 1 / determinant;
+    const auto rowX = Divide(Divide(normalX, determinant), size.x);
+    const auto rowY = Divide(Divide(normalY, determinant), size.y);
+    const auto rowZ = Divide(Divide(normalZ, determinant), size.z);
+    const Vec3 translation{m[12], m[13], m[14]};
     auto* out = result.elements;
-    out[0] = static_cast<double>((e * i - f * h) * scale);
-    out[4] = static_cast<double>((c * h - b * i) * scale);
-    out[8] = static_cast<double>((b * f - c * e) * scale);
-    out[1] = static_cast<double>((f * g - d * i) * scale);
-    out[5] = static_cast<double>((a * i - c * g) * scale);
-    out[9] = static_cast<double>((c * d - a * f) * scale);
-    out[2] = static_cast<double>((d * h - e * g) * scale);
-    out[6] = static_cast<double>((b * g - a * h) * scale);
-    out[10] = static_cast<double>((a * e - b * d) * scale);
-    out[12] = -(out[0] * m[12] + out[4] * m[13] + out[8] * m[14]);
-    out[13] = -(out[1] * m[12] + out[5] * m[13] + out[9] * m[14]);
-    out[14] = -(out[2] * m[12] + out[6] * m[13] + out[10] * m[14]);
+    out[0] = rowX.x;
+    out[4] = rowX.y;
+    out[8] = rowX.z;
+    out[12] = -rowX.Dot(translation);
+    out[1] = rowY.x;
+    out[5] = rowY.y;
+    out[9] = rowY.z;
+    out[13] = -rowY.Dot(translation);
+    out[2] = rowZ.x;
+    out[6] = rowZ.y;
+    out[10] = rowZ.z;
+    out[14] = -rowZ.Dot(translation);
     return std::all_of(std::begin(result.elements), std::end(result.elements),
                        [](double v) { return std::isfinite(v); });
 }
@@ -269,11 +285,12 @@ bool Scene::SetWorldTransform(uint32 id, const TransformComponent& value, bool p
             return false;
         collapsedDepth = true;
     }
-    const auto current = GetWorldTransform(id);
+    TransformComponent current;
     const auto same = [](const Vec3& a, const Vec3& b) {
         return a.x == b.x && a.y == b.y && a.z == b.z;
     };
-    if (same(value.rotation, current.rotation) && same(value.scale, current.scale)) {
+    if (Decompose(GetWorldMatrix(id), current, false) && same(value.rotation, current.rotation) &&
+        same(value.scale, current.scale)) {
         // Translation does not require decomposing a sheared linear matrix. Preserve the
         // original local rotation/scale and transform only the requested world position.
         const auto* m = inverse.elements;

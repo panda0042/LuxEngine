@@ -104,6 +104,12 @@ class OceanSpectrum;
 
 class LUX_API Mesh3D {
 public:
+    Mesh3D() = default;
+    Mesh3D(const Mesh3D&) = delete;
+    Mesh3D& operator=(const Mesh3D&) = delete;
+    Mesh3D(Mesh3D&&) noexcept = default;
+    Mesh3D& operator=(Mesh3D&&) noexcept = default;
+
     bool Upload(GpuDevice* device, std::span<const Vec3> positions,
                 std::span<const uint32> indices);
     bool Upload(GpuDevice* device, std::span<const Vertex3D> vertices,
@@ -121,8 +127,8 @@ public:
 
 private:
     friend class Renderer3D;
-    GpuBuffer vertices_;
-    GpuBuffer indices_;
+    Ref<GpuBuffer> vertices_;
+    Ref<GpuBuffer> indices_;
     uint32 indexCount_ = 0;
     bool ocean_ = false;
     Vec3 origin_;

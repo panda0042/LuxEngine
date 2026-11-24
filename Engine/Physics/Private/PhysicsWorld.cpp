@@ -33,6 +33,7 @@
 namespace LuxEngine {
 namespace {
 constexpr size_t MaxBodies = 16384;
+constexpr float MaxLinearVelocity = 200000.f;
 
 void JoltTrace(const char* format, ...) {
     char buffer[2048];
@@ -226,7 +227,7 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input, do
             continue;
         }
         if (!id || !Valid(description.position, 1e15) || !Valid(description.rotation) ||
-            !Valid(description.velocity) || !Valid(description.size, 10000) ||
+            !Valid(description.velocity, MaxLinearVelocity) || !Valid(description.size, 10000) ||
             !Valid(description.offset) || description.size.x < MinBodyExtent ||
             description.size.y < MinBodyExtent || description.size.z < MinBodyExtent ||
             !std::isfinite(description.mass) || description.mass < .001f ||
@@ -292,7 +293,7 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input, do
             settings.mLinearVelocity = Vector(description.velocity);
             settings.mGravityFactor = description.gravityScale;
             settings.mLinearDamping = settings.mAngularDamping = 0;
-            settings.mMaxLinearVelocity = 200000.f;
+            settings.mMaxLinearVelocity = MaxLinearVelocity;
             if (motion == JPH::EMotionType::Dynamic && !description.trigger)
                 settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
             settings.mAllowSleeping = false;

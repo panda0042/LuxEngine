@@ -227,6 +227,24 @@ void Hierarchy() {
               Near(scene.GetWorldTransform(child.GetId()).position.x, -8),
           "world manipulation updates local transform");
 
+    auto small = scene.CreateEntity("Small parent");
+    auto& smallTransform = small.GetComponent<TransformComponent>();
+    smallTransform.scale = {1e-5, 1e-5, 1e-5};
+    smallTransform.rotation = {.3, -.2, .7};
+    const auto beforeSmall = scene.GetWorldMatrix(child.GetId());
+    Check(scene.SetParent(child.GetId(), small.GetId()), "small uniform parent is invertible");
+    CheckMatrix(beforeSmall, scene.GetWorldMatrix(child.GetId()),
+                "small parent preserves the full world transform");
+    moved.position = {4, 5, 6};
+    Check(scene.SetWorldTransform(child.GetId(), moved), "world edit under a small parent");
+    CheckMatrix(moved.GetTransform(), scene.GetWorldMatrix(child.GetId()),
+                "world edit through a small parent reaches the requested transform");
+    Check(scene.SetParent(child.GetId(), other.GetId()), "child detaches from the small parent");
+    smallTransform.scale.y = 0;
+    const auto beforeSingular = Data(scene);
+    Check(!scene.SetParent(child.GetId(), small.GetId()) && Data(scene) == beforeSingular,
+          "a collapsed parent is rejected without changing the scene");
+
     auto sheared = scene.CreateEntity("비균일 부모"), rotated = scene.CreateEntity("회전 자식");
     sheared.GetComponent<TransformComponent>().scale = {3, 1, 1};
     rotated.GetComponent<TransformComponent>().rotation.z = .7f;

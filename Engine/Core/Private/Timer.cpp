@@ -1,26 +1,22 @@
 #include <LuxEngine/Core/Timer.hpp>
-#include <SDL3/SDL_timer.h>
 #include <algorithm>
 #include <cmath>
 
 namespace LuxEngine {
 
-Timer::Timer() {
-    Reset();
-}
+Timer::Timer() : start_(std::chrono::steady_clock::now()) {}
 
 void Timer::Reset() {
-    startTicksNs_ = SDL_GetTicksNS();
+    start_ = std::chrono::steady_clock::now();
 }
 
 double Timer::ElapsedSeconds() const {
-    const uint64 now = SDL_GetTicksNS();
-    return static_cast<double>(now - startTicksNs_) / 1'000'000'000.0;
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count();
 }
 
 double Timer::ElapsedMilliseconds() const {
-    const uint64 now = SDL_GetTicksNS();
-    return static_cast<double>(now - startTicksNs_) / 1'000'000.0;
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_)
+        .count();
 }
 
 void FixedStepAccumulator::AddElapsed(double seconds) {

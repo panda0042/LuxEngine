@@ -37,6 +37,8 @@ private:
     friend class GpuDevice;
     friend class Mesh3D;
     friend class Renderer3D;
+    bool InitializeFromBackend(const std::shared_ptr<Rhi::RenderBackend>& owner, BufferType type,
+                               uint32 sizeBytes);
     std::weak_ptr<Rhi::RenderBackend> owner_;
     uint64 handle_ = 0;
     BufferType type_ = BufferType::Vertex;

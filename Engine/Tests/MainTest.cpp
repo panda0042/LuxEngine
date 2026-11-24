@@ -296,6 +296,13 @@ void Core() {
     Timer timer;
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
     Check(timer.ElapsedSeconds() > 0, "timer");
+    SDL_Delay(20);
+    timer.Reset();
+    const auto beforeQuit = timer.ElapsedMilliseconds();
+    SDL_Quit();
+    const auto afterQuit = timer.ElapsedMilliseconds();
+    Check(afterQuit >= beforeQuit && afterQuit < beforeQuit + 5000,
+          "timer continues across an SDL shutdown without wrapping");
     Check(Near(Vec3(1, 0, 0).Cross({0, 1, 0}).z, 1), "cross product");
     WindowCloseEvent event;
     EventDispatcher dispatcher(event);
@@ -4186,7 +4193,6 @@ void ModernFailures() {
 void ModernLifetimes() {
     GpuDeviceConfig config;
     config.framesInFlight = 3;
-    Graphics graphics(config, 128, 96);
     Render3DSettings settings;
     settings.mode = Render3DMode::Pbr;
     settings.imageBasedLighting = false;
@@ -4195,6 +4201,35 @@ void ModernLifetimes() {
     PerspectiveCamera camera(ToRadians(60), 128.f / 96, .1f, 20);
     camera.SetPosition({2, 2, 4});
     camera.SetTarget({0, 0, 0});
+    const std::array<Vec3, 3> positions{{{-1, -1, 0}, {1, -1, 0}, {0, 1, 0}}};
+    const std::array<uint32, 3> indices{0, 1, 2};
+    Renderer3D::Context survivingContext;
+    survivingContext.BeginScene(camera, settings, 1);
+    survivingContext.DrawMesh(positions, indices, Mat4{}, {});
+    survivingContext.EndScene();
+    Check(survivingContext.GetStats().drawCalls == 0, "raw mesh draw needs a device");
+    {
+        auto previous = std::make_unique<Graphics>(config, 128, 96);
+        survivingContext.Init(&previous->gpu);
+        Check(previous->Begin(), "frame begins on the original device");
+        survivingContext.BeginScene(camera, settings, 1);
+        previous.reset();
+        Check(!survivingContext.IsDeviceValid(), "standalone context sees device destruction");
+        survivingContext.DrawMesh(positions, indices, Mat4{}, {});
+        survivingContext.EndScene();
+        Check(survivingContext.GetStats().drawCalls == 0, "raw mesh draw after device destruction");
+    }
+    Graphics graphics(config, 128, 96);
+    survivingContext.Init(&graphics.gpu);
+    const auto recovered = graphics.Capture([&] {
+        graphics.gpu.Clear(0, 0, 0, 1);
+        survivingContext.BeginScene(camera, settings, 1);
+        survivingContext.DrawMesh(positions, indices, Mat4{}, {});
+        survivingContext.EndScene();
+    });
+    Check(survivingContext.GetStats().drawCalls == 1 && Pixel(recovered, .5f, .5f)[0] > 10,
+          "standalone context draws raw geometry after reconnecting to a new device");
+    survivingContext.Shutdown();
     auto empty = [&] { graphics.Capture([&] { graphics.gpu.Clear(0, 0, 0, 1); }); };
     // The device retains its scene constant buffers across CPU contexts. Include that
     // one-time allocation in the baseline, then require exact reclamation of each context.

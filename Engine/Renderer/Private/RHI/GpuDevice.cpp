@@ -71,6 +71,7 @@ void GpuDevice::Shutdown() {
     Renderer3D::DetachDevice(this);
     if (!backend_)
         return;
+    backend_->ReleaseFrameGeometry();
     backend_->Shutdown();
     backend_.reset();
 }
@@ -149,7 +150,11 @@ bool GpuDevice::DrawIndexed(const GpuBuffer& vertices, const GpuBuffer& indices,
 }
 
 bool GpuDevice::EndFrame() {
-    return backend_ && backend_->EndFrame();
+    if (!backend_)
+        return false;
+    const bool submitted = backend_->EndFrame();
+    backend_->ReleaseFrameGeometry();
+    return submitted;
 }
 
 bool GpuDevice::SetVSync(bool enabled) {

@@ -466,6 +466,61 @@ void FlatColliderContact(bool parented) {
     Check(scene.GetCollisionEvents2D().size() == 1 && scene.GetLastPhysicsError2D().empty(),
           "a rotated flat collider makes the same contact with or without a parent");
 }
+
+void OverflowingColliderDoesNotStopSimulation() {
+    Scene authored;
+    auto parent = authored.CreateEntity("Large parent");
+    auto child = authored.CreateEntity("Overflowing collider");
+    auto healthy = authored.CreateEntity("Healthy dynamic body");
+    parent.GetComponent<TransformComponent>().position.x = 1e308;
+    child.GetComponent<TransformComponent>().position.x = 1e308;
+    child.AddComponent<BoxCollider3DComponent>();
+    healthy.GetComponent<TransformComponent>().position.y = 5;
+    healthy.AddComponent<BoxCollider3DComponent>();
+    healthy.AddComponent<Rigidbody3DComponent>().type = BodyType::Dynamic;
+    Check(authored.SetParent(child.GetId(), parent.GetId(), false), "overflow hierarchy links");
+    std::string data;
+    Scene loaded;
+    Check(authored.SerializeToString(data) && loaded.DeserializeFromString(data),
+          "finite local coordinates survive the scene round trip");
+    const auto step = loaded.GetSettings().fixedStep;
+    loaded.OnUpdate(step);
+    Check(loaded.GetLastPhysicsError3D().find("non-finite world transform") != std::string::npos &&
+              loaded.GetWorldTransform(healthy.GetId()).position.y < 5,
+          "overflowing collider is diagnosed while other bodies keep simulating");
+
+    loaded.GetComponent<TransformComponent>(parent.GetId()).position.x = 10;
+    loaded.GetComponent<TransformComponent>(child.GetId()).position.x = 1;
+    loaded.OnUpdate(step);
+    RaycastHit3D hit;
+    Check(loaded.GetLastPhysicsError3D().empty() &&
+              loaded.Raycast3D({11, 2, 0}, {0, -1, 0}, 5, hit) && hit.entityId == child.GetId(),
+          "a corrected collider rejoins the simulation");
+}
+
+void FastBodyStaysInSimulation() {
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.overrideGravity = true;
+    settings.gravity3D = {0, -100000, 0};
+    Check(scene.SetSettings(settings), "rapid acceleration settings");
+    const auto entity = scene.CreateEntity("Fast rigid body");
+    scene.AddComponent<BoxCollider3DComponent>(entity.GetId());
+    auto& body = scene.AddComponent<Rigidbody3DComponent>(entity.GetId());
+    body.type = BodyType::Dynamic;
+    body.gravityScale = 100;
+    scene.OnUpdate(settings.fixedStep);
+    Check(body.velocity.y < -100000, "solver generates a speed above the old validation limit");
+
+    const auto first = scene.GetWorldTransform(entity.GetId()).position.y;
+    scene.OnUpdate(settings.fixedStep);
+    const auto second = scene.GetWorldTransform(entity.GetId()).position.y;
+    RaycastHit3D hit;
+    Check(second < first && scene.GetLastPhysicsError3D().empty() &&
+              scene.Raycast3D({0, second + 2, 0}, {0, -1, 0}, 5, hit) &&
+              hit.entityId == entity.GetId(),
+          "a fast body keeps moving and remains queryable after synchronization");
+}
 } // namespace
 
 int main() {
@@ -484,6 +539,8 @@ int main() {
         PlanarOffsetIgnoresDepthReflection();
         FlatColliderContact(false);
         FlatColliderContact(true);
+        OverflowingColliderDoesNotStopSimulation();
+        FastBodyStaysInSimulation();
         std::cout << "Jolt queries, diagnostics, CCD, triggers and live body edits passed\n";
         return 0;
     } catch (const std::exception& error) {

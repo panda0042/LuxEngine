@@ -31,14 +31,19 @@ GpuBuffer& GpuBuffer::operator=(GpuBuffer&& other) noexcept {
 }
 
 bool GpuBuffer::Initialize(GpuDevice* device, BufferType type, uint32 sizeBytes) {
+    return InitializeFromBackend(device ? device->backend_ : nullptr, type, sizeBytes);
+}
+
+bool GpuBuffer::InitializeFromBackend(const std::shared_ptr<Rhi::RenderBackend>& owner,
+                                      BufferType type, uint32 sizeBytes) {
     Release();
-    if (!device || !device->IsReady() || sizeBytes == 0)
+    if (!owner || !owner->Usable() || sizeBytes == 0)
         return false;
     uint64 handle = 0;
-    if (!device->backend_->CreateBuffer(type, sizeBytes, handle))
+    if (!owner->CreateBuffer(type, sizeBytes, handle))
         return false;
     handle_ = handle;
-    owner_ = device->backend_;
+    owner_ = owner;
     type_ = type;
     sizeBytes_ = sizeBytes;
     return true;

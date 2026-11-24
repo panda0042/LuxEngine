@@ -1,3 +1,5 @@
+#include <LuxEngine/Assets/AssetManager.hpp>
+#include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/Core/Log.hpp>
 #include <LuxEngine/ECS/ECS.hpp>
 #include <LuxEngine/Physics/PhysicsEngine.hpp>
@@ -12,6 +14,7 @@
 #include <locale>
 #include <numeric>
 #include <sstream>
+#include <unordered_map>
 
 namespace LuxEngine {
 namespace {
@@ -62,63 +65,133 @@ Vec3 CameraUp(Vec3 forward, Vec3 preferred) {
     }
     return Unit(Unit(right, {1, 0, 0}).Cross(forward), {0, 1, 0});
 }
-} // namespace
 
-ScenePlayerCameraView ResolveScenePlayerCamera(Scene& scene, const ScenePlayerView& fallback) {
-    for (const auto id : scene.GetComponentEntityIds<CameraComponent>()) {
-        const auto& camera = scene.GetComponent<CameraComponent>(id);
-        if (!camera.isPrimary || !camera.isPerspective || !std::isfinite(camera.fov) ||
-            camera.fov <= 0 || camera.fov >= 180 || !std::isfinite(camera.nearClip) ||
-            !std::isfinite(camera.farClip) || camera.nearClip <= 0 ||
-            camera.farClip <= camera.nearClip || !scene.HasComponent<TransformComponent>(id))
-            continue;
-        try {
-            Mat4::Perspective(ToRadians(camera.fov), 1.0f, camera.nearClip, camera.farClip);
-        } catch (const std::invalid_argument&) {
-            continue;
-        }
-        const auto matrix = scene.GetWorldMatrix(id);
-        const auto* m = matrix.elements;
-        const Vec3 position{m[12], m[13], m[14]};
-        if (!Finite(position))
-            continue;
-        const Vec3 forward = Unit({-m[8], -m[9], -m[10]}, {0, 0, -1});
-        const Vec3 up = CameraUp(forward, {m[4], m[5], m[6]});
-        // At very large coordinates, adding a unit direction can round back to the eye itself.
-        const double distance =
-            std::max<double>({1.0f, std::abs(position.x) * .00001f, std::abs(position.y) * .00001f,
-                              std::abs(position.z) * .00001f});
-        const Vec3 target = position + forward * distance;
-        const double separation = (target - position).Dot(target - position);
-        if (!Finite(target) || !std::isfinite(separation) || separation <= 0)
-            continue;
-        return {position, target, up, camera.fov, camera.nearClip, camera.farClip};
+struct Bounds {
+    Vec3 minimum;
+    Vec3 maximum;
+
+    void Include(Vec3 point) {
+        minimum = {std::min(minimum.x, point.x), std::min(minimum.y, point.y),
+                   std::min(minimum.z, point.z)};
+        maximum = {std::max(maximum.x, point.x), std::max(maximum.y, point.y),
+                   std::max(maximum.z, point.z)};
     }
+};
 
+constexpr Bounds UnitBounds{{-.5, -.5, -.5}, {.5, .5, .5}};
+
+using Models = std::unordered_map<std::string, Ref<ModelAsset>>;
+
+Bounds MeshBounds(const Scene& scene, const MeshRendererComponent& mesh, Models& models) {
+    if (mesh.meshPath.empty())
+        return UnitBounds;
+    const auto path = scene.ResolveAssetPath(mesh.meshPath);
+    if (mesh.modelSubmesh >= 0) {
+        const auto [entry, inserted] = models.try_emplace(path);
+        auto& model = entry->second;
+        if (inserted) {
+            std::string error;
+            model = ModelAsset::LoadFbx(path, error);
+        }
+        const auto index = static_cast<size_t>(mesh.modelSubmesh);
+        if (model && index < model->submeshes.size()) {
+            const auto& part = model->submeshes[index];
+            return {part.boundsMin, part.boundsMax};
+        }
+        return UnitBounds;
+    }
+    Bounds bounds;
+    return AssetManager::GetMeshBounds(path, bounds.minimum, bounds.maximum) ? bounds : UnitBounds;
+}
+
+std::optional<Bounds> TransformBounds(const Mat4& matrix, const Bounds& local) {
+    const auto first = matrix.TransformPoint(local.minimum);
+    Bounds world{first, first};
+    for (const auto x : {local.minimum.x, local.maximum.x})
+        for (const auto y : {local.minimum.y, local.maximum.y})
+            for (const auto z : {local.minimum.z, local.maximum.z}) {
+                const auto point = matrix.TransformPoint({x, y, z});
+                if (!Finite(point))
+                    return std::nullopt;
+                world.Include(point);
+            }
+    return world;
+}
+
+std::optional<ScenePlayerCameraView>
+PerspectiveCameraView(const Scene& scene, uint32 id, const CameraComponent& camera, double aspect) {
+    Mat4 projection;
+    try {
+        projection =
+            Mat4::Perspective(ToRadians(camera.fov), aspect, camera.nearClip, camera.farClip);
+    } catch (const std::invalid_argument&) {
+        return std::nullopt;
+    }
+    const auto matrix = scene.GetWorldMatrix(id);
+    const auto* m = matrix.elements;
+    const Vec3 position{m[12], m[13], m[14]};
+    if (!Finite(position))
+        return std::nullopt;
+    const Vec3 forward = Unit({-m[8], -m[9], -m[10]}, {0, 0, -1});
+    const Vec3 up = CameraUp(forward, {m[4], m[5], m[6]});
+    // At very large coordinates, adding a unit direction can round back to the eye itself.
+    const double distance = std::max({1., std::abs(position.x) * 1e-5, std::abs(position.y) * 1e-5,
+                                      std::abs(position.z) * 1e-5});
+    const Vec3 target = position + forward * distance;
+    const auto delta = target - position;
+    const double separation = delta.Dot(delta);
+    if (!Finite(target) || !std::isfinite(separation) || separation <= 0)
+        return std::nullopt;
+    const auto viewProjection = projection * Mat4::LookAt(position, target, up);
+    if (!std::all_of(std::begin(viewProjection.elements), std::end(viewProjection.elements),
+                     [](double value) { return std::isfinite(value); }))
+        return std::nullopt;
+    return ScenePlayerCameraView{position, target, up, camera.fov, camera.nearClip, camera.farClip};
+}
+
+ScenePlayerCameraView FallbackPerspectiveView(const Scene& scene, const ScenePlayerView& fallback) {
     double minimumZ = std::numeric_limits<double>::infinity();
     double maximumZ = -minimumZ;
+    Models models;
     for (const auto id : scene.GetComponentEntityIds<MeshRendererComponent>()) {
         if (!scene.HasComponent<TransformComponent>(id))
             continue;
         const auto matrix = scene.GetWorldMatrix(id);
-        const auto* m = matrix.elements;
-        const auto extent = .5 * (std::abs(m[2]) + std::abs(m[6]) + std::abs(m[10]));
-        if (std::isfinite(m[14] - extent) && std::isfinite(m[14] + extent)) {
-            minimumZ = std::min(minimumZ, m[14] - extent);
-            maximumZ = std::max(maximumZ, m[14] + extent);
+        const auto local = MeshBounds(scene, scene.GetComponent<MeshRendererComponent>(id), models);
+        if (const auto bounds = TransformBounds(matrix, local)) {
+            minimumZ = std::min(minimumZ, bounds->minimum.z);
+            maximumZ = std::max(maximumZ, bounds->maximum.z);
         }
     }
     const auto center = minimumZ <= maximumZ ? std::midpoint(minimumZ, maximumZ) : 0.;
     const auto extent = minimumZ <= maximumZ ? maximumZ - center : 0.;
-    const auto distance = std::max(5., fallback.halfHeight * 2) + extent;
+    const auto retreat = std::max(5., fallback.halfHeight * 2);
+    const auto distance = retreat + extent;
+    const auto elevation = 3. * (retreat / distance);
     ScenePlayerCameraView result;
-    result.position = {fallback.centerX, fallback.centerY + 3, center + distance};
+    result.position = {fallback.centerX, fallback.centerY + elevation, center + distance};
     result.target = {fallback.centerX, fallback.centerY, center};
-    result.farClip = std::max(result.farClip, std::hypot(distance, 3.) + extent +
+    result.farClip = std::max(result.farClip, std::hypot(distance, elevation) + extent +
                                                   std::abs(fallback.halfHeight) * 2);
     if (!Finite(result.position) || !Finite(result.target) || !std::isfinite(result.farClip))
         return {};
     return result;
+}
+
+ScenePlayerCameraView ResolvePerspectiveView(const Scene& scene, double aspect,
+                                             const ScenePlayerView& fallback) {
+    for (const auto id : scene.GetComponentEntityIds<CameraComponent>()) {
+        const auto& camera = scene.GetComponent<CameraComponent>(id);
+        if (camera.isPrimary && camera.isPerspective && scene.HasComponent<TransformComponent>(id))
+            if (const auto view = PerspectiveCameraView(scene, id, camera, aspect))
+                return *view;
+    }
+    return FallbackPerspectiveView(scene, fallback);
+}
+} // namespace
+
+ScenePlayerCameraView ResolveScenePlayerCamera(Scene& scene, const ScenePlayerView& fallback) {
+    return ResolvePerspectiveView(scene, 1, fallback);
 }
 
 ScenePlayerCameras ResolveScenePlayerCameras(Scene& scene, double aspect,
@@ -126,20 +199,19 @@ ScenePlayerCameras ResolveScenePlayerCameras(Scene& scene, double aspect,
     ScenePlayerCameras result;
     auto view = fallback;
     double rotation = 0;
-    bool foundCamera = false;
+    std::optional<ScenePlayerCameraView> perspective;
     for (const auto id : scene.GetComponentEntityIds<CameraComponent>()) {
         const auto& camera = scene.GetComponent<CameraComponent>(id);
         if (!camera.isPrimary || !scene.HasComponent<TransformComponent>(id))
             continue;
         if (camera.isPerspective) {
-            try {
-                Mat4::Perspective(ToRadians(camera.fov), aspect, camera.nearClip, camera.farClip);
-            } catch (const std::invalid_argument&) {
+            perspective = PerspectiveCameraView(scene, id, camera, aspect);
+            if (!perspective)
                 continue;
-            }
             result.perspective = true;
         } else {
-            if (!std::isfinite(camera.orthoSize) || camera.orthoSize <= 0)
+            if (!std::isfinite(camera.orthoSize) || camera.orthoSize <= 0 ||
+                !std::isfinite(camera.orthoSize * aspect))
                 continue;
             const auto matrix = scene.GetWorldMatrix(id);
             double angle = 0;
@@ -157,17 +229,18 @@ ScenePlayerCameras ResolveScenePlayerCameras(Scene& scene, double aspect,
             view = {matrix.elements[12], matrix.elements[13], camera.orthoSize};
             rotation = angle;
         }
-        foundCamera = true;
         result.cameraEntity = id;
         break;
     }
-    if (!foundCamera)
+    if (!result.cameraEntity)
         result.perspective = !scene.GetComponentEntityIds<MeshRendererComponent>().empty();
     const double halfWidth = view.halfHeight * aspect;
     result.camera2D.SetProjection(-halfWidth, halfWidth, -view.halfHeight, view.halfHeight);
     result.camera2D.SetPosition({view.centerX, view.centerY, 0});
     result.camera2D.SetRotation(rotation);
-    const auto primary = ResolveScenePlayerCamera(scene, view);
+    const auto primary = perspective           ? *perspective
+                         : result.cameraEntity ? ResolvePerspectiveView(scene, aspect, view)
+                                               : FallbackPerspectiveView(scene, view);
     result.camera3D.SetPerspective(ToRadians(primary.fovDegrees), aspect, primary.nearClip,
                                    primary.farClip);
     result.camera3D.SetPosition(primary.position);
@@ -252,55 +325,57 @@ ScenePlayerView FitSceneView(Scene& scene) {
 ScenePlayerView FitSceneView(Scene& scene, double aspect) {
     if (!std::isfinite(aspect) || aspect <= 0)
         aspect = 16.0 / 9.0;
-    double minX = std::numeric_limits<double>::max(), minY = minX;
-    double maxX = std::numeric_limits<double>::lowest(), maxY = maxX;
+    std::optional<Bounds> bounds;
+    Models models;
     for (Entity entity : scene.GetEntities()) {
         if (!entity.HasComponent<TransformComponent>())
             continue;
         const auto matrix = scene.GetWorldMatrix(entity.GetId());
-        double localX0 = -.5f, localX1 = .5f, localY0 = -.5f, localY1 = .5f;
-        if (entity.HasComponent<TilemapComponent>()) {
-            const auto& map = entity.GetComponent<TilemapComponent>();
-            localX0 = localY0 = 0;
-            localX1 = map.width * map.tileSize;
-            localY1 = map.height * map.tileSize;
-        }
-        double x0 = std::numeric_limits<double>::max(), y0 = x0;
-        double x1 = std::numeric_limits<double>::lowest(), y1 = x1;
-        for (const double x : {localX0, localX1})
-            for (const double y : {localY0, localY1})
-                for (const double z : {-.5f, .5f}) {
-                    const auto* m = matrix.elements;
-                    const double worldX = m[0] * x + m[4] * y + m[8] * z + m[12];
-                    const double worldY = m[1] * x + m[5] * y + m[9] * z + m[13];
-                    x0 = std::min(x0, worldX);
-                    x1 = std::max(x1, worldX);
-                    y0 = std::min(y0, worldY);
-                    y1 = std::max(y1, worldY);
-                }
-        if (!std::isfinite(x0) || !std::isfinite(x1) || !std::isfinite(y0) || !std::isfinite(y1))
-            continue;
-        minX = std::min(minX, x0);
-        maxX = std::max(maxX, x1);
-        minY = std::min(minY, y0);
-        maxY = std::max(maxY, y1);
+        const auto* mesh = entity.TryGetComponent<MeshRendererComponent>();
+        const auto* map = entity.TryGetComponent<TilemapComponent>();
+        const auto include = [&](const Bounds& local) {
+            if (const auto world = TransformBounds(matrix, local)) {
+                if (bounds) {
+                    bounds->Include(world->minimum);
+                    bounds->Include(world->maximum);
+                } else
+                    bounds = world;
+            }
+        };
+        if (mesh)
+            include(MeshBounds(scene, *mesh, models));
+        if (map)
+            include({{0, 0, -.5}, {map->width * map->tileSize, map->height * map->tileSize, .5}});
+        if ((!mesh && !map) || entity.HasComponent<SpriteRendererComponent>())
+            include(UnitBounds);
     }
-    ScenePlayerView view;
-    if (minX > maxX)
-        return view;
-    view.centerX = (minX + maxX) * 0.5f;
-    view.centerY = (minY + maxY) * 0.5f;
-    view.halfHeight = std::max({(maxY - minY) * 0.5, (maxX - minX) * 0.5 / aspect, 1.0}) * 1.1;
-    return view;
+    if (!bounds)
+        return {};
+    const auto& [minimum, maximum] = *bounds;
+    const auto halfWidth = maximum.x * .5 - minimum.x * .5;
+    const auto halfHeight = maximum.y * .5 - minimum.y * .5;
+    const auto fitted = std::max({halfHeight, halfWidth / aspect, 1.}) * 1.1;
+    if (!std::isfinite(fitted) || !std::isfinite(fitted * aspect))
+        return {};
+    return {std::midpoint(minimum.x, maximum.x), std::midpoint(minimum.y, maximum.y), fitted};
 }
 
 Vec3 ResolveSceneStreamingObserver(Scene& scene, const ScenePlayerView& view, uint32 playerId) {
-    if (scene.HasComponent<TransformComponent>(playerId))
-        return scene.GetWorldTransform(playerId).position;
+    const auto position = [&](uint32 id) -> std::optional<Vec3> {
+        if (!scene.HasComponent<TransformComponent>(id))
+            return std::nullopt;
+        const auto matrix = scene.GetWorldMatrix(id);
+        const Vec3 world{matrix.elements[12], matrix.elements[13], matrix.elements[14]};
+        if (!Finite(world))
+            return std::nullopt;
+        return world;
+    };
+    if (const auto observer = position(playerId))
+        return *observer;
     for (const auto id : scene.GetComponentEntityIds<TagComponent>())
-        if (IsPlayerTag(scene.GetComponent<TagComponent>(id).tag) &&
-            scene.HasComponent<TransformComponent>(id))
-            return scene.GetWorldTransform(id).position;
+        if (id != playerId && IsPlayerTag(scene.GetComponent<TagComponent>(id).tag))
+            if (const auto observer = position(id))
+                return *observer;
     const auto cameras = ResolveScenePlayerCameras(scene, 1, view);
     if (!cameras.cameraEntity)
         return {view.centerX, view.centerY, 0};
@@ -403,7 +478,12 @@ void ScenePlayerControls::Apply(Entity player, double step) const {
             body->velocity.y = 7;
     } else if (const double length = std::hypot(horizontal, vertical); length > 0) {
         auto& scene = *player.GetScene();
-        auto transform = scene.GetWorldTransform(player.GetId());
+        TransformComponent transform;
+        try {
+            transform = scene.GetWorldTransform(player.GetId());
+        } catch (const std::logic_error&) {
+            return;
+        }
         transform.position.x += horizontal * 4 * step / length;
         transform.position.y += vertical * 4 * step / length;
         scene.SetWorldTransform(player.GetId(), transform);
@@ -419,6 +499,7 @@ bool UpdateSceneSimulation(Scene& scene, ScriptRuntime& scripts, double step) {
 
 void ScenePlayer::OnInit() {
     presentedFrames_ = 0;
+    runtimeFailed_ = false;
     Renderer2D::Init(&GetGpuDevice());
     Renderer3D::Init(&GetGpuDevice());
     PhysicsEngine::Init();
@@ -528,6 +609,7 @@ uint64 ScenePlayer::GetPresentedFrameCount() const noexcept {
 }
 
 void ScenePlayer::OnShutdown() {
+    loaded_ = false;
     controls_.Unbind();
     scripts_->Shutdown();
     Input::ClearBindings();

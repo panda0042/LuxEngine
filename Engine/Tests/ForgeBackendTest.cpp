@@ -2903,6 +2903,56 @@ void SceneSubmission() {
           "a material run only binds its shared texture descriptors once per pass");
     Check(session.gpu.GetCounters().validationErrors == 0,
           "reusing draw state creates no GPU validation errors");
+
+    settings.shadows = false;
+    settings.environmentColor = {1, 1, 1};
+    camera.SetPosition({0, 0, 3});
+    std::array<Vertex3D, 3> vertices{quad[0], quad[1], quad[2]};
+    const std::array<uint32, 3> triangle{0, 1, 2};
+    Mesh3D dynamic;
+    Check(dynamic.Upload(&session.gpu, vertices, triangle), "dynamic triangle uploaded");
+    vertices[0].position.x = 0;
+    for (const bool editAfterDraw : {false, true, false}) {
+        GpuFrameCapture capture;
+        Check(CaptureFrame(session, capture,
+                           [&] {
+                               session.gpu.Clear(0, 0, 0, 1);
+                               context.BeginScene(camera, settings, 1);
+                               context.DrawMesh(dynamic, Mat4{}, {}, &redMap);
+                               const bool updated =
+                                   !editAfterDraw || dynamic.UpdateVertices(vertices);
+                               context.EndScene();
+                               return updated;
+                           }),
+              "dynamic triangle frame captured");
+        Check(At(capture, .59f, .62f)[0] > 100,
+              "dynamic mesh vertices and the queued draw use the same local origin");
+    }
+    for (auto& vertex : vertices)
+        vertex.position.x += 1e12;
+    GpuFrameCapture oldLocation, newLocation;
+    Check(CaptureFrame(session, oldLocation,
+                       [&] {
+                           session.gpu.Clear(0, 0, 0, 1);
+                           context.BeginScene(camera, settings, 1);
+                           context.DrawMesh(dynamic, Mat4{}, {}, &redMap);
+                           context.EndScene();
+                           return dynamic.UpdateVertices(vertices);
+                       }) &&
+              At(oldLocation, .59f, .62f)[0] > 100,
+          "recorded geometry remains intact when an update rebases the mesh before presentation");
+    camera.SetPosition({1e12, 0, 3});
+    camera.SetTarget({1e12, 0, 0});
+    Check(CaptureFrame(session, newLocation,
+                       [&] {
+                           session.gpu.Clear(0, 0, 0, 1);
+                           context.BeginScene(camera, settings, 1);
+                           context.DrawMesh(dynamic, Mat4{}, {}, &redMap);
+                           context.EndScene();
+                           return true;
+                       }) &&
+              At(newLocation, .59f, .62f)[0] > 100,
+          "rebased vertices keep their precision at a distant camera");
 }
 
 void WaterComposite() {
@@ -3011,6 +3061,22 @@ void WaterComposite() {
           "opaque geometry in front of water retains its color and depth");
     Check(baseSide[1] > baseSide[0] + 40 && bentSide[0] > bentSide[1] + 30,
           "slope refracts the opaque scene across a color boundary");
+
+    const auto backgroundRed = Vec4{1, 0, 0, 1};
+    const auto backgroundBlue = Vec4{0, 0, 1, 1};
+    camera.SetPosition({0, 0, -1});
+    const auto transmittedRed = read(draw(&mesh, {}, -1, backgroundRed, false, false));
+    const auto transmittedBlue = read(draw(&mesh, {}, -1, backgroundBlue, false, false));
+    Check(transmittedRed[0] > transmittedRed[2] + 40 &&
+              transmittedBlue[2] > transmittedBlue[0] + 40,
+          "an underwater ray below the critical angle transmits the background color");
+    camera.SetPosition({2.5, 0, -1});
+    const auto reflectedRed = read(draw(&mesh, {}, -1, backgroundRed, false, false));
+    const auto reflectedBlue = read(draw(&mesh, {}, -1, backgroundBlue, false, false));
+    Check(reflectedRed == reflectedBlue && reflectedRed[0] > 100 &&
+              reflectedRed[0] == reflectedRed[2],
+          "total internal reflection excludes the background without ray queries");
+    camera.SetPosition({0, 0, 3});
 
     settings.environmentColor = {0, 0, 0};
     settings.sun = {{0, 0, -1}, {1, 1, 1}, .5f};

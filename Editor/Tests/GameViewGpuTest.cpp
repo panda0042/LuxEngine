@@ -67,6 +67,41 @@ void SoftwareTilemapLayering() {
     CheckSpriteAboveTilemap(view.grab().toImage());
 }
 
+void SoftwareSpriteTexture() {
+    LuxUI::TemporaryDir assets;
+    Check(assets.isValid(), "the software sprite asset directory exists");
+    const auto path = assets.filePath(LUX_UI_TEXT("sprite-atlas.png"));
+    LuxUI::Image atlas(4, 2, LuxUI::Image::Format_RGBA8888);
+    atlas.fill(LuxUI::Color(255, 0, 0));
+    for (int y = 0; y < atlas.height(); ++y)
+        for (int x = 2; x < atlas.width(); ++x)
+            atlas.setPixelColor(x, y, LuxUI::Color(0, 0, 255));
+    Check(atlas.save(path, "PNG"), "the software sprite atlas saves");
+
+    Scene scene;
+    scene.CreateEntity("Camera").AddComponent<CameraComponent>().orthoSize = 2;
+    auto sprite = scene.CreateEntity("Selected atlas frame");
+    auto& properties = sprite.AddComponent<SpriteRendererComponent>();
+    properties.texturePath = path.toUtf8().toStdString();
+    properties.columns = 2;
+    properties.frame = 1;
+    auto settings = scene.GetSettings();
+    settings.exposure = .5;
+    Check(scene.SetSettings(settings), "software sprite exposure configures");
+    GameViewport view;
+    view.resize(320, 160);
+    view.SetScene(&scene);
+    const auto image = view.grab().toImage();
+    const auto pixel = image.pixelColor(image.width() / 2, image.height() / 2);
+    Check(!image.isNull() && pixel.red() < 3 && pixel.green() < 3 && pixel.blue() >= 125 &&
+              pixel.blue() <= 130,
+          "software Game View selects the atlas frame and applies exposure");
+    properties.frame = 2;
+    const auto invalid = view.grab().toImage();
+    Check(!Blue(invalid, invalid.width() / 2, invalid.height() / 2),
+          "software Game View skips an out-of-range atlas frame");
+}
+
 size_t RedPixels(const LuxUI::Image& image) {
     size_t count = 0;
     for (int y = 0; y < image.height(); ++y)
@@ -363,6 +398,7 @@ int main(int argc, char** argv) {
     try {
         if (app.arguments().contains(LUX_UI_TEXT("--software"))) {
             SoftwareTilemapLayering();
+            SoftwareSpriteTexture();
             return 0;
         }
         qunsetenv("LUX_EDITOR_SOFTWARE_VIEWPORT");

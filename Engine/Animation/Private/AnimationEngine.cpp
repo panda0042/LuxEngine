@@ -44,13 +44,17 @@ TransformComponent AnimationClip::Sample(double time, bool wrapTime) const {
     const double segmentDuration = kf1.time - kf0.time;
     const double rawFactor = segmentDuration > 0 ? (clampedTime - kf0.time) / segmentDuration : 0;
     const double factor = std::clamp(rawFactor, 0.0, 1.0);
+    const auto interpolate = [factor](Vec3 a, Vec3 b) {
+        return Vec3{std::lerp(a.x, b.x, factor), std::lerp(a.y, b.y, factor),
+                    std::lerp(a.z, b.z, factor)};
+    };
 
-    result.position = kf0.position + (kf1.position - kf0.position) * factor;
+    result.position = interpolate(kf0.position, kf1.position);
     const auto rotation = BlendAnimationValue(
         AnimationProperty::Rotation, {kf0.rotation.x, kf0.rotation.y, kf0.rotation.z, 0},
         {kf1.rotation.x, kf1.rotation.y, kf1.rotation.z, 0}, factor);
     result.rotation = {rotation[0], rotation[1], rotation[2]};
-    result.scale = kf0.scale + (kf1.scale - kf0.scale) * factor;
+    result.scale = interpolate(kf0.scale, kf1.scale);
     return result;
 }
 
