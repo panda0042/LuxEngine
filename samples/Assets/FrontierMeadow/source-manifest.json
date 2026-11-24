@@ -1,0 +1,67 @@
+{
+  "name": "FrontierMeadow",
+  "title": "Leafy Grass",
+  "source": "https://polyhaven.com/a/leafy_grass",
+  "authors": {
+    "Charlotte Baglioni": "All"
+  },
+  "license": "CC0-1.0",
+  "files": [
+    {
+      "path": "License.txt",
+      "bytes": 111,
+      "sha256": "ef10aae351f2e11c377fa5459592c101122d3e67d1f71c86cc1ad23023c786e6"
+    },
+    {
+      "path": "albedo.jpg",
+      "bytes": 555142,
+      "sha256": "b8a564ab180f13a54737ff2b44263590aa0c2e1af339704c1cd52782913a6158",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "sRGB",
+      "original": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/leafy_grass/leafy_grass_diff_8k.jpg",
+        "width": 8192,
+        "height": 8192,
+        "format": "JPEG",
+        "bytes": 66821411,
+        "md5": "690f8eb69aec046a9f52b5ed755d3d89",
+        "sha256": "1a4da4c1f7f616aa4053934211561c1d40dc1844391a9d71e2086a365131e9c9"
+      }
+    },
+    {
+      "path": "normal.png",
+      "bytes": 2719945,
+      "sha256": "45a4780b1edec79b5125c18e44092131e5805a7a30569d837327a61545c77b54",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "Linear tangent-space OpenGL",
+      "original": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/leafy_grass/leafy_grass_nor_gl_8k.jpg",
+        "width": 8192,
+        "height": 8192,
+        "format": "JPEG",
+        "bytes": 79700327,
+        "md5": "df4b495dff47332f270a8febc3154544",
+        "sha256": "adfea2171d653e62171c06dbc1eb86264eae72bcc1d508bd08523ca4ee71dd0f"
+      }
+    },
+    {
+      "path": "roughness.png",
+      "bytes": 542541,
+      "sha256": "9cec9f12a76577b5803239c5bef1a41ffdc99f27cd4718199b3f47cf3a9be168",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "Linear",
+      "original": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/leafy_grass/leafy_grass_rough_8k.jpg",
+        "width": 8192,
+        "height": 8192,
+        "format": "JPEG",
+        "bytes": 31805627,
+        "md5": "f74c8ad676a73a351598e5e115cfde08",
+        "sha256": "3516079c5ea9402389a793ec2f241919e515851b12f2d5121ac8ea5b008f57b0"
+      }
+    }
+  ]
+}

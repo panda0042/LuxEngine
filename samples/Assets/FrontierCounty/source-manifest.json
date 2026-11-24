@@ -1,0 +1,31 @@
+{
+  "name": "FrontierCounty",
+  "source": "https://polyhaven.com/a/rocky_gravel",
+  "license": "CC0-1.0",
+  "credits": {
+    "Dario Barresi": "Processing",
+    "Dimitrios Savva": "Photography"
+  },
+  "files": [
+    {
+      "path": "License.txt",
+      "bytes": 295,
+      "sha256": "1754da102afb4df5acdb98c3acab88566887a354e0e83210c317d8420483fb14"
+    },
+    {
+      "path": "gravel_albedo.jpg",
+      "bytes": 618295,
+      "sha256": "86aeceb3c4b0a4c4f3fe72e16cbe8edaee1e75823d76381df899cf0845aeb421"
+    },
+    {
+      "path": "gravel_normal.png",
+      "bytes": 2723979,
+      "sha256": "e2ff72c654dc954038319da9ce05c30593c85d839477f62da21aa864575a582b"
+    },
+    {
+      "path": "gravel_roughness.png",
+      "bytes": 517342,
+      "sha256": "c1bc83ae47a54db92dbda27f29ed6e1eb51c344faec72285fe8d705c5e6c15bd"
+    }
+  ]
+}

@@ -1,0 +1,178 @@
+{
+  "name": "FrontierPeople",
+  "author": "tevy",
+  "source": "https://tevy.dev/models",
+  "license": "CC0-1.0",
+  "sources": [
+    {
+      "name": "Dog Walker",
+      "source": "https://tevy.dev/models/dog-walker",
+      "original": {
+        "lod": 1,
+        "path": "/models/dog-walker/v1/lod1.glb",
+        "bytes": 600648,
+        "sha256": "a5408cf77434f9a74b112bc4924f07e1f86191edfac7f11eb4bb29b7d28b0ef4",
+        "triangles": 8999,
+        "url": "https://tevy.dev/models/dog-walker/v1/lod1.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "dog-walker/albedo.png",
+        "dog-walker/model.fbx",
+        "dog-walker/motion.fbx",
+        "dog-walker/normal.png",
+        "dog-walker/roughness.png"
+      ]
+    },
+    {
+      "name": "Hiker",
+      "source": "https://tevy.dev/models/hiker",
+      "original": {
+        "lod": 1,
+        "path": "/models/hiker/v1/lod1.glb",
+        "bytes": 614708,
+        "sha256": "bbf5f07bf23991a967cd29ef6c692d852047f1fc0d6860f689108e8e485b2f6e",
+        "triangles": 8999,
+        "url": "https://tevy.dev/models/hiker/v1/lod1.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "hiker/albedo.png",
+        "hiker/model.fbx",
+        "hiker/normal.png",
+        "hiker/roughness.png"
+      ]
+    },
+    {
+      "name": "Road Worker",
+      "source": "https://tevy.dev/models/road-worker",
+      "original": {
+        "lod": 1,
+        "path": "/models/road-worker/v1/lod1.glb",
+        "bytes": 628044,
+        "sha256": "a7b66ac6b58404ad4d076b25dd77412191ef2462c6f5f06e72eb9cd854d4d17b",
+        "triangles": 8999,
+        "url": "https://tevy.dev/models/road-worker/v1/lod1.glb",
+        "format": "GLB"
+      },
+      "files": [
+        "road-worker/albedo.png",
+        "road-worker/model.fbx",
+        "road-worker/normal.png",
+        "road-worker/roughness.png"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "License.txt",
+      "bytes": 95,
+      "sha256": "18b34c9b8693b3e3b4e7bb8c9eb97ec6ca0250f6925ddc29f72cae20f3bff508"
+    },
+    {
+      "path": "dog-walker/albedo.png",
+      "bytes": 320357,
+      "sha256": "1eac9e21d6d625d9e0d641427d6dc3104c73978cebb847978b96bcd863a76848",
+      "format": "PNG",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "dog-walker/model.fbx",
+      "bytes": 1133900,
+      "sha256": "89363cdbce8e0ed5799921cf8a787a12c5986bd5377659361e3cf914c0d8cdd1",
+      "format": "FBX"
+    },
+    {
+      "path": "dog-walker/motion.fbx",
+      "bytes": 655388,
+      "sha256": "795310d601355dcde6da57ca18732b4c4beb80203a056cb0010a33932d58dcff",
+      "format": "FBX"
+    },
+    {
+      "path": "dog-walker/normal.png",
+      "bytes": 160375,
+      "sha256": "d09674c4d8be9e3c2f9d7005f2b6e20a36bc45039c985fcbc21b83fe6f07a799",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "dog-walker/roughness.png",
+      "bytes": 31847,
+      "sha256": "dae43103a23bf07b136e807887995e84e93eb4512860c1ad380deada8a7e9bc9",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "hiker/albedo.png",
+      "bytes": 293369,
+      "sha256": "1a44227c4d06ccc7b079014f8c779fd491194f5252bf1550597100777b566feb",
+      "format": "PNG",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "hiker/model.fbx",
+      "bytes": 1149548,
+      "sha256": "7923ac360b30eb334ab5ecce62e02caeb90150351ec1592b4a01c17bf0ff7116",
+      "format": "FBX"
+    },
+    {
+      "path": "hiker/normal.png",
+      "bytes": 166327,
+      "sha256": "d27811b4241beba28b2c3c56c23f6964e99a9d5b8188d2596b23f13a9ef610fb",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "hiker/roughness.png",
+      "bytes": 31879,
+      "sha256": "2ce580f1454f9f94f4086b052771ceebb9917281905dc1758414adb78f7f2820",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "road-worker/albedo.png",
+      "bytes": 312650,
+      "sha256": "4e21c050e2d240bae1dda6b8bdff8951782dc53abcead6eae8602799269c6934",
+      "format": "PNG",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "road-worker/model.fbx",
+      "bytes": 1152300,
+      "sha256": "f4ad996f8c7faf5eafef97f2223429b3077b5e7e8663b3e5768417a659934e29",
+      "format": "FBX"
+    },
+    {
+      "path": "road-worker/normal.png",
+      "bytes": 166096,
+      "sha256": "fb9c1fe24595f67e7d2f1a935ecef667834bd0184d0a7da80231af3a6fad144e",
+      "format": "PNG",
+      "width": 512,
+      "height": 512,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "road-worker/roughness.png",
+      "bytes": 34047,
+      "sha256": "fe252d9b197fcdd29e309dbb643e0460c7701f54e4d51cdf7ad94b351be2d266",
+      "format": "PNG",
+      "width": 256,
+      "height": 256,
+      "colorSpace": "Linear"
+    }
+  ]
+}

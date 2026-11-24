@@ -1,0 +1,68 @@
+{
+  "name": "FrontierAsphalt",
+  "title": "Asphalt 01",
+  "source": "https://polyhaven.com/a/asphalt_01",
+  "authors": {
+    "Dario Barresi": "Processing ",
+    "Charlotte Baglioni": "Photography"
+  },
+  "license": "CC0-1.0",
+  "files": [
+    {
+      "path": "License.txt",
+      "bytes": 128,
+      "sha256": "6673a8b2261f520e4355fd02ecd98c8829a9428d7126cd729a09169814303049"
+    },
+    {
+      "path": "albedo.jpg",
+      "bytes": 289147,
+      "sha256": "902b5b704382808315c9547157001a92a07dcb648cfb6a5786c3c3f7f7f8e038",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "sRGB",
+      "original": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/asphalt_01/asphalt_01_diff_8k.jpg",
+        "width": 8192,
+        "height": 8192,
+        "format": "JPEG",
+        "bytes": 49924809,
+        "md5": "a6be55424be17ac4a843819ed3e33600",
+        "sha256": "99c26a75c631afc03a26ec93ae1a4e909db66474c05ee67d374a69b88171a9c3"
+      }
+    },
+    {
+      "path": "normal.png",
+      "bytes": 2450127,
+      "sha256": "d0a08c58a666f792fa71caea0396a75040b84c09a6ece55ae3e6413d961405a5",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "Linear tangent-space OpenGL",
+      "original": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/asphalt_01/asphalt_01_nor_gl_8k.jpg",
+        "width": 8192,
+        "height": 8192,
+        "format": "JPEG",
+        "bytes": 49682024,
+        "md5": "6dcf83619e077d7d29886b38efc92fbc",
+        "sha256": "f1d5a1abbb5bed17f4893b03a1878e7f0ce794e3722888d04ba303f48375a74e"
+      }
+    },
+    {
+      "path": "roughness.png",
+      "bytes": 373169,
+      "sha256": "5e4cf76ddc68858a49c3bc1f0a15a765df524e0dd966c201b37136ba8174d039",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "Linear",
+      "original": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/asphalt_01/asphalt_01_rough_8k.jpg",
+        "width": 8192,
+        "height": 8192,
+        "format": "JPEG",
+        "bytes": 23517718,
+        "md5": "870496fbaaa1218405e388deb45ae00f",
+        "sha256": "4cd9aada0217ec7dc1192146e75fff6749d9a96e6961e10050098d2e3d723d82"
+      }
+    }
+  ]
+}
