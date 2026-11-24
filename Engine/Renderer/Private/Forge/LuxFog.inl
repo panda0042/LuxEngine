@@ -166,7 +166,7 @@ void FillFogConstants(LuxForgeDevice* device, const LuxForgeScene& scene, bool s
     fog.composite[0] = 1.f / device->width;
     fog.composite[1] = 1.f / device->height;
     fog.composite[2] = scene.camera[3];
-    fog.composite[3] = scene.options[2];
+    fog.composite[3] = float(uint32_t(scene.options[2]) & 1u);
 
     const auto* lights = reinterpret_cast<const float*>(
         static_cast<const uint8_t*>(device->lightBuffers[device->frameSlot]->pCpuMappedAddress) +
@@ -180,7 +180,7 @@ void FillFogConstants(LuxForgeDevice* device, const LuxForgeScene& scene, bool s
 
 bool RenderFog(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass, bool water,
                bool shadows, [[maybe_unused]] AccelerationStructure* rayScene = nullptr,
-               const uint32_t* virtualShadowPages = nullptr) {
+               const uint32_t* virtualShadowPages = nullptr, Texture* resolved = nullptr) {
     if (!(scene.fogColorDensity[3] > 0) || !(scene.fogOptions[0] > 0) || !InitFog(device))
         return false;
     auto& fog = *device->fog;
@@ -234,7 +234,8 @@ bool RenderFog(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass
     composite[0].ppBuffers = &fog.constants;
     composite[0].pRanges = &range;
     composite[1].mIndex = SRT_RES_IDX(LuxFogCompositeSrt, Persistent, gFogHdr);
-    composite[1].ppTextures = &color.target->pTexture;
+    Texture* source = resolved ? resolved : color.target->pTexture;
+    composite[1].ppTextures = &source;
     composite[2].mIndex = SRT_RES_IDX(LuxFogCompositeSrt, Persistent, gFogDepth);
     composite[2].ppTextures = &depth.target->pTexture;
     composite[3].mIndex = SRT_RES_IDX(LuxFogCompositeSrt, Persistent, gFogVolume);

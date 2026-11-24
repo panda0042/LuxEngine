@@ -55,6 +55,7 @@ public:
     bool SetSize(uint32 width, uint32 height);
     bool IsMinimized() const;
     bool HasFocus() const;
+    bool SetRelativeMouseMode(bool enabled);
     float GetDisplayScale() const;
 
     void SetFullscreen(bool fullscreen);

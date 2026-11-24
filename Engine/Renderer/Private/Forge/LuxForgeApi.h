@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 19u
+#define LUX_FORGE_API_VERSION 20u
 
 #if defined(_WIN32)
 #if defined(LUX_FORGE_BUILD)
@@ -91,6 +91,7 @@ typedef struct LuxForgeStats {
     uint32_t volumetricFogPasses;
     uint32_t rayVolumetricFogPasses;
     uint32_t waterReflectionPasses;
+    uint32_t temporalResolvePasses, temporalHistoryPasses;
     uint32_t restirPasses;
     uint32_t radianceCascadePasses;
     uint32_t virtualShadowPages;
@@ -152,6 +153,7 @@ typedef struct LuxForgeSceneDraw {
     uint32_t shadowOnly;
     float water[4];
     uint32_t shadowPageMask;
+    uint32_t terrainColor, terrainNormal, terrainRoughness;
 } LuxForgeSceneDraw;
 
 // One HDR scene pass (port of the Vulkan backend's Scene3DRenderer). The vec4 fields and the
@@ -161,7 +163,7 @@ typedef struct LuxForgeScene {
     float viewProjection[16];
     float camera[4];      // xyz: position, w: exposure
     float environment[4]; // rgb: ambient colour, w: intensity
-    float options[4];     // x: rotation (radians), y: image-based lighting, z: ACES, w: sky
+    float options[4];     // x: rotation (radians), y: image-based lighting, z: flags (ACES 1, edge AA 2), w: sky
     float right[4];
     float up[4];
     float forward[4];
@@ -178,6 +180,8 @@ typedef struct LuxForgeScene {
     float cascadeOptions[4];  // strength, finest spacing, reserved, reserved
     float cascadeOrigin[4];   // offset from camera to the snapped probe lattice
     uint32_t virtualShadows;
+    uint64_t temporalView; // zero disables history; independent contexts have distinct IDs
+    double temporalOrigin[3];
 } LuxForgeScene;
 
 typedef struct LuxForgeApi {

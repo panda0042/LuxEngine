@@ -49,3 +49,9 @@ Entity.Animator.Speed = 1.0;
 현재 제작 범위는 클립·트랙·곡선·스프라이트·FBX·Animator·게임 실행까지다. IK, 리타게팅, 리깅 제작, 가중 Bezier 시간 핸들, 2D 스킨 메시 제작, GPU 스키닝 최적화는 별도 확장 범위다. 기존 씬 변환 클립 탭은 이전 형식 편집용이며 새 기능은 에셋 편집기에서 사용한다.
 
 검증은 이번 애니메이션과 64비트 좌표·렌더링 경로에 한정한다. 기존 전체 GPU 스트레스와 원격 CI는 실행하지 않는다.
+
+## 별도 FBX 모션 파일의 런타임 재생
+
+C++ 런타임에서 메시가 포함된 FBX는 ModelAsset::LoadFbx로, 별도로 배포된 모션 FBX는 ModelAsset::LoadFbxAnimation으로 읽는다. 모델에서 EvaluateAnimation(source, seconds, clip, pose, error)를 호출하면 원본 리그에서 클립 상대 시간을 평가해 스킨 메시를 포함한 ModelPose를 얻는다. 클립 번호와 길이는 모션 파일의 animations 목록에서 얻을 수 있다.
+
+두 FBX는 동일한 리그에서 내보내야 한다. 스킨 본을 이름과 부모 경로로 연결하며 본이 빠지거나 같은 경로가 중복되면 오류를 반환한다. 서로 다른 리그의 리타게팅과 외부 모프 트랙은 지원 범위에 포함되지 않는다. Frontier County의 Characters.cpp에서 별도 Idle·Walk 모션을 리깅된 메시와 조합하는 예를 볼 수 있다.

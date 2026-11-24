@@ -31,6 +31,7 @@ struct SceneDrawDesc {
     bool shadowOnly = false;
     Vec4 water{0, 0, 0, 0}; // RGB absorption and refractive index. W=0 disables water.
     uint32 shadowPageMask = 0xffffu;
+    uint64 terrainColor = 0, terrainNormal = 0, terrainRoughness = 0;
 };
 
 // HDR scene path (PBR, shadows, image-based lighting) owned by a backend.

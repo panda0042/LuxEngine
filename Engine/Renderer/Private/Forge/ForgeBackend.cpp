@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -220,6 +221,8 @@ void ForgeBackend::UpdateFrameStats() {
     frameStats_.volumetricFogPasses = stats.volumetricFogPasses;
     frameStats_.rayVolumetricFogPasses = stats.rayVolumetricFogPasses;
     frameStats_.waterReflectionPasses = stats.waterReflectionPasses;
+    frameStats_.temporalResolvePasses = stats.temporalResolvePasses;
+    frameStats_.temporalHistoryPasses = stats.temporalHistoryPasses;
     frameStats_.restirPasses = stats.restirPasses;
     frameStats_.radianceCascadePasses = stats.radianceCascadePasses;
     frameStats_.virtualShadowPages = stats.virtualShadowPages;
@@ -557,6 +560,8 @@ struct SceneEnvironment {
     double preparationMs = 0;
 };
 
+std::atomic<uint64> nextTemporalView{1};
+
 LuxForgeEnvironmentImage ToForge(const EnvironmentImage& image) {
     return {image.size, image.levels, image.layers, image.pixels.data(),
             static_cast<uint64_t>(image.pixels.size())};
@@ -587,8 +592,9 @@ public:
             !backend_->buffers_.count(draw.indexBuffer) ||
             (draw.texture && !backend_->textures_.count(draw.texture)))
             return false;
-        for (const auto handle : {draw.normalTexture, draw.metallicTexture, draw.roughnessTexture,
-                                  draw.occlusionTexture})
+        for (const auto handle :
+             {draw.normalTexture, draw.metallicTexture, draw.roughnessTexture,
+              draw.occlusionTexture, draw.terrainColor, draw.terrainNormal, draw.terrainRoughness})
             if (handle && !backend_->textures_.count(handle))
                 return false;
         LuxForgeSceneDraw d = {};
@@ -612,6 +618,9 @@ public:
         d.sampling = draw.sampling;
         d.shadowOnly = draw.shadowOnly ? 1 : 0;
         d.shadowPageMask = draw.shadowPageMask;
+        d.terrainColor = static_cast<uint32_t>(draw.terrainColor);
+        d.terrainNormal = static_cast<uint32_t>(draw.terrainNormal);
+        d.terrainRoughness = static_cast<uint32_t>(draw.terrainRoughness);
         Copy4(d.water, draw.water);
         draws_.push_back(d);
         models_.push_back(draw.model);
@@ -668,6 +677,12 @@ public:
 
         LuxForgeScene scene = {};
         CopyMatrix(scene.viewProjection, viewProjection);
+        if (settings.temporalAntialiasing) {
+            scene.temporalView = temporalView_;
+            scene.temporalOrigin[0] = origin.x;
+            scene.temporalOrigin[1] = origin.y;
+            scene.temporalOrigin[2] = origin.z;
+        }
         for (size_t index = 0; index < draws_.size(); ++index)
             CopyMatrix(draws_[index].model, Mat4::Translate(origin * -1.0) * models_[index]);
         Copy4(scene.camera, {0, 0, 0, exposure});
@@ -677,7 +692,8 @@ public:
                static_cast<float>(settings.environmentColor.z), settings.environmentIntensity});
         scene.options[0] = settings.environmentRotation * std::numbers::pi_v<float> / 180;
         scene.options[1] = settings.imageBasedLighting && active ? 1.f : 0.f;
-        scene.options[2] = settings.toneMapping ? 1.f : 0.f;
+        scene.options[2] =
+            (settings.toneMapping ? 1.f : 0.f) + (settings.screenSpaceAntialiasing ? 2.f : 0.f);
         scene.options[3] = settings.showSkybox && active ? 1.f : 0.f;
         const auto& view = camera.GetViewMatrix().elements;
         const auto& projection = camera.GetProjectionMatrix().elements;
@@ -845,6 +861,7 @@ private:
 
     ForgeBackend* backend_;
     std::weak_ptr<ForgeLibrary> library_;
+    const uint64 temporalView_ = nextTemporalView.fetch_add(1, std::memory_order_relaxed);
     std::vector<LuxForgeSceneDraw> draws_;
     std::vector<Mat4> models_;
     uint32_t neutral_ = 0;

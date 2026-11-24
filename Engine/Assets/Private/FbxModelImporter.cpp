@@ -9,6 +9,7 @@
 #include <limits>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 
 namespace LuxEngine {
@@ -429,6 +430,7 @@ void ReadNodeMesh(const ufbx_node& node, ModelAsset& model, std::vector<SubmeshS
 struct ModelAsset::Impl {
     ScenePtr scene;
     std::vector<SubmeshSource> sources;
+    ModelPose ReadPose(const ModelAsset& model, const ufbx_scene& scene, bool evaluated) const;
     mutable std::mutex poseMutex;
     mutable int32 cachedClip = -2;
     mutable double cachedTime = 0.0;
@@ -439,13 +441,23 @@ Ref<ModelAsset> ModelAsset::LoadFbx(const std::string& filepath, std::string& er
     return ReadFbx(filepath, error, false, -1, false);
 }
 
+Ref<ModelAsset> ModelAsset::LoadFbxAnimation(const std::string& filepath, std::string& error) {
+    auto model = ReadFbx(filepath, error, false, -1, false, true);
+    if (model && model->animations.empty()) {
+        error = "FBX 파일에 애니메이션 클립이 없습니다.";
+        return nullptr;
+    }
+    return model;
+}
+
 Ref<ModelAsset> ModelAsset::ReloadFbx(const std::string& filepath, std::string& error,
                                       int32 requiredSubmesh, bool requireUv) {
     return ReadFbx(filepath, error, true, requiredSubmesh, requireUv);
 }
 
 Ref<ModelAsset> ModelAsset::ReadFbx(const std::string& filepath, std::string& error, bool reload,
-                                    int32 requiredSubmesh, bool requireUv) {
+                                    int32 requiredSubmesh, bool requireUv,
+                                    bool allowAnimationOnly) {
     error.clear();
     try {
         Require(ValidPath(filepath), "FBX 파일 경로가 비어 있거나 유효한 UTF-8 경로가 아닙니다.");
@@ -466,7 +478,8 @@ Ref<ModelAsset> ModelAsset::ReadFbx(const std::string& filepath, std::string& er
             const auto found = modelCache.find(cacheKey);
             if (!reload && found != modelCache.end() && found->second.size == size &&
                 found->second.modified == modified)
-                if (auto cached = found->second.model.lock())
+                if (auto cached = found->second.model.lock();
+                    cached && (allowAnimationOnly || !cached->submeshes.empty()))
                     return cached;
         }
         const auto bytes = ReadSnapshot(path);
@@ -536,7 +549,8 @@ Ref<ModelAsset> ModelAsset::ReadFbx(const std::string& filepath, std::string& er
         std::sort(model->warnings.begin(), model->warnings.end());
         model->warnings.erase(std::unique(model->warnings.begin(), model->warnings.end()),
                               model->warnings.end());
-        Require(!model->submeshes.empty(), "FBX 파일에 렌더링할 다각형 메시가 없습니다.");
+        Require(!model->submeshes.empty() || (allowAnimationOnly && !model->animations.empty()),
+                "FBX 파일에 렌더링할 다각형 메시지가 없습니다.");
         if (requiredSubmesh >= 0) {
             const auto index = static_cast<size_t>(requiredSubmesh);
             Require(index < model->submeshes.size(),
@@ -563,6 +577,95 @@ Ref<ModelAsset> ModelAsset::ReadFbx(const std::string& filepath, std::string& er
     }
 }
 
+ModelPose ModelAsset::Impl::ReadPose(const ModelAsset& model, const ufbx_scene& scene,
+                                     bool evaluated) const {
+    Require(scene.nodes.count == model.nodes.size(),
+            "FBX 노드 메타데이터와 원본 계층이 일치하지 않습니다.");
+    ModelPose result;
+    result.nodeLocalTransforms.reserve(model.nodes.size());
+    result.nodeWorldTransforms.reserve(model.nodes.size());
+    for (const auto* node : scene.nodes) {
+        result.nodeLocalTransforms.push_back(Transform(*node));
+        result.nodeWorldTransforms.push_back(Matrix(node->node_to_world));
+    }
+    result.submeshes.reserve(model.submeshes.size());
+    for (size_t index = 0; index < model.submeshes.size(); ++index) {
+        const auto& mapping = sources.at(index);
+        Require(mapping.node < scene.nodes.count,
+                "FBX 서브메시의 노드 인덱스가 올바르지 않습니다.");
+        const auto* node = scene.nodes.data[mapping.node];
+        const auto& mesh = *node->mesh;
+        auto vertices = model.submeshes[index].vertices;
+        if (evaluated || model.submeshes[index].skinned || model.submeshes[index].morphTargets) {
+            ufbx_matrix transform = node->geometry_to_node;
+            if (!mesh.skinned_is_local) {
+                Invertible(node->node_to_world);
+                transform = ufbx_matrix_invert(&node->node_to_world);
+            }
+            const auto normalMatrix = ufbx_matrix_for_normals(&transform);
+            for (size_t vertex = 0; vertex < vertices.size(); ++vertex) {
+                const auto corner = mapping.corners.at(vertex);
+                vertices[vertex].position = Vector(ufbx_transform_position(
+                    &transform, AttributeValue(mesh.skinned_position, corner)));
+                const auto animatedNormal = AttributeValue(mesh.skinned_normal, corner);
+                const auto transformed = ufbx_transform_direction(&normalMatrix, animatedNormal);
+                const double length = std::hypot(transformed.x, transformed.y, transformed.z);
+                Require(std::isfinite(length), "FBX 스킨 법선이 유효하지 않습니다.");
+                // A sparse skin or opposing deformations can leave a zero normal.
+                // The imported vertex already carries a valid node-local bind normal.
+                if (length > 1e-30)
+                    vertices[vertex].normal = Vector(
+                        {transformed.x / length, transformed.y / length, transformed.z / length});
+            }
+        }
+        std::vector<Vec3> inputs;
+        inputs.reserve(vertices.size());
+        for (size_t vertex = 0; vertex < vertices.size(); ++vertex) {
+            const auto corner = mapping.corners.at(vertex);
+            const auto control = mesh.vertex_indices.data[corner];
+            ufbx_vec3 offset{};
+            for (const auto* blend : mesh.blend_deformers) {
+                const auto value = ufbx_get_blend_vertex_offset(blend, control);
+                offset.x += value.x;
+                offset.y += value.y;
+                offset.z += value.z;
+            }
+            const auto deformed = ufbx_transform_direction(&node->geometry_to_node, offset);
+            inputs.push_back(model.submeshes[index].vertices[vertex].position + Vector(deformed));
+        }
+        result.deformationPositions.push_back(std::move(inputs));
+        result.submeshes.push_back(std::move(vertices));
+    }
+    return result;
+}
+
+namespace {
+ScenePtr EvaluateScene(const ufbx_scene& source, const ufbx_anim* animation, double time) {
+    ufbx_evaluate_opts options{};
+    options.temp_allocator.memory_limit = MaxParserBytes;
+    options.result_allocator.memory_limit = MaxParserBytes;
+    options.temp_allocator.allocation_limit = 1'000'000;
+    options.result_allocator.allocation_limit = 1'000'000;
+    options.evaluate_skinning = true;
+    ufbx_error parserError{};
+    ScenePtr result(ufbx_evaluate_scene(&source, animation, time, &options, &parserError),
+                    ufbx_free_scene);
+    if (!result) {
+        std::array<char, 2048> detail{};
+        ufbx_format_error(detail.data(), detail.size(), &parserError);
+        throw std::runtime_error(std::string("FBX 애니메이션을 평가할 수 없습니다: ") +
+                                 detail.data());
+    }
+    return result;
+}
+
+std::string_view NodeName(const ufbx_node& node) {
+    if (node.name.length == 0)
+        return {};
+    return {node.name.data, node.name.length};
+}
+} // namespace
+
 bool ModelAsset::Evaluate(double seconds, int32 clip, ModelPose& output, std::string& error) const {
     error.clear();
     try {
@@ -584,80 +687,88 @@ bool ModelAsset::Evaluate(double seconds, int32 clip, ModelPose& output, std::st
         ScenePtr evaluated;
         const ufbx_scene* scene = &sourceScene;
         if (clip >= 0) {
-            ufbx_evaluate_opts options{};
-            options.temp_allocator.memory_limit = MaxParserBytes;
-            options.result_allocator.memory_limit = MaxParserBytes;
-            options.temp_allocator.allocation_limit = 1'000'000;
-            options.result_allocator.allocation_limit = 1'000'000;
-            options.evaluate_skinning = true;
-            const auto* animation = clip >= 0 ? sourceScene.anim_stacks.data[clip]->anim : nullptr;
-            const double time = animations[clip].start + clipTime;
-            ufbx_error parserError{};
-            evaluated =
-                ScenePtr(ufbx_evaluate_scene(&sourceScene, animation, time, &options, &parserError),
-                         ufbx_free_scene);
-            if (!evaluated) {
-                std::array<char, 2048> detail{};
-                ufbx_format_error(detail.data(), detail.size(), &parserError);
-                throw std::runtime_error(std::string("FBX 애니메이션을 평가할 수 없습니다: ") +
-                                         detail.data());
-            }
+            const auto* animation = sourceScene.anim_stacks.data[clip]->anim;
+            evaluated = EvaluateScene(sourceScene, animation, animations[clip].start + clipTime);
             scene = evaluated.get();
         }
-        Require(scene->nodes.count == nodes.size(),
-                "FBX 노드 메타데이터와 원본 계층이 일치하지 않습니다.");
-        ModelPose result;
-        result.nodeLocalTransforms.reserve(nodes.size());
-        result.nodeWorldTransforms.reserve(nodes.size());
-        for (const auto* node : scene->nodes) {
-            result.nodeLocalTransforms.push_back(Transform(*node));
-            result.nodeWorldTransforms.push_back(Matrix(node->node_to_world));
-        }
-        result.submeshes.reserve(submeshes.size());
-        for (size_t index = 0; index < submeshes.size(); ++index) {
-            const auto& mapping = impl_->sources.at(index);
-            Require(mapping.node < scene->nodes.count,
-                    "FBX 서브메시의 노드 인덱스가 올바르지 않습니다.");
-            const auto* node = scene->nodes.data[mapping.node];
-            const auto& mesh = *node->mesh;
-            auto vertices = submeshes[index].vertices;
-            if (evaluated || submeshes[index].skinned || submeshes[index].morphTargets) {
-                ufbx_matrix transform = node->geometry_to_node;
-                if (!mesh.skinned_is_local) {
-                    Invertible(node->node_to_world);
-                    transform = ufbx_matrix_invert(&node->node_to_world);
-                }
-                const auto normalMatrix = ufbx_matrix_for_normals(&transform);
-                for (size_t vertex = 0; vertex < vertices.size(); ++vertex) {
-                    const auto corner = mapping.corners.at(vertex);
-                    vertices[vertex].position = Vector(ufbx_transform_position(
-                        &transform, AttributeValue(mesh.skinned_position, corner)));
-                    vertices[vertex].normal =
-                        Normal(normalMatrix, AttributeValue(mesh.skinned_normal, corner));
-                }
-            }
-            std::vector<Vec3> inputs;
-            inputs.reserve(vertices.size());
-            for (size_t vertex = 0; vertex < vertices.size(); ++vertex) {
-                const auto corner = mapping.corners.at(vertex);
-                const auto control = mesh.vertex_indices.data[corner];
-                ufbx_vec3 offset{};
-                for (const auto* blend : mesh.blend_deformers) {
-                    const auto value = ufbx_get_blend_vertex_offset(blend, control);
-                    offset.x += value.x;
-                    offset.y += value.y;
-                    offset.z += value.z;
-                }
-                const auto deformed = ufbx_transform_direction(&node->geometry_to_node, offset);
-                inputs.push_back(submeshes[index].vertices[vertex].position + Vector(deformed));
-            }
-            result.deformationPositions.push_back(std::move(inputs));
-            result.submeshes.push_back(std::move(vertices));
-        }
+        auto result = impl_->ReadPose(*this, *scene, bool(evaluated));
         impl_->cachedPose = result;
         impl_->cachedClip = clip;
         impl_->cachedTime = clipTime;
         output = std::move(result);
+        return true;
+    } catch (const std::exception& exception) {
+        error = exception.what();
+        return false;
+    }
+}
+
+bool ModelAsset::EvaluateAnimation(const ModelAsset& source, double seconds, int32 clip,
+                                   ModelPose& output, std::string& error) const {
+    if (&source == this)
+        return Evaluate(seconds, clip, output, error);
+    error.clear();
+    try {
+        Require(impl_ && impl_->scene && source.impl_ && source.impl_->scene,
+                "FBX 모델 또는 애니메이션이 로딩되지 않았습니다.");
+        const auto& target = *impl_->scene;
+        const auto& animation = *source.impl_->scene;
+        Require(std::isfinite(seconds) && clip >= 0 &&
+                    static_cast<size_t>(clip) < animation.anim_stacks.count,
+                "외부 FBX 애니메이션 시간·클립 인덱스가 올바르지 않습니다.");
+        Require(!submeshes.empty(), "외부 FBX 애니메이션을 적용할 메시가 없습니다.");
+        const auto& stack = *animation.anim_stacks.data[clip];
+        const double time =
+            std::clamp(seconds, 0., stack.time_end - stack.time_begin) + stack.time_begin;
+
+        std::vector<bool> required(target.nodes.count, false);
+        bool skinned = false;
+        for (const auto& part : submeshes) {
+            for (const auto& bone : part.bones) {
+                Require(bone.node < target.nodes.count, "FBX 본 인덱스가 올바르지 않습니다.");
+                skinned = true;
+                for (const auto* node = target.nodes.data[bone.node];
+                     node && !required[node->typed_id]; node = node->parent)
+                    required[node->typed_id] = true;
+            }
+        }
+        Require(skinned, "외부 FBX 애니메이션을 적용할 스킨 본이 없습니다.");
+
+        using Match = std::pair<const ufbx_node*, const ufbx_node*>;
+        std::vector<Match> pending{{target.root_node, animation.root_node}};
+        std::vector<ufbx_transform_override> transforms;
+        for (size_t i = 0; i < pending.size(); ++i) {
+            const auto [destination, origin] = pending[i];
+            if (destination != target.root_node)
+                transforms.push_back(
+                    {destination->typed_id, ufbx_evaluate_transform(stack.anim, origin, time)});
+            std::unordered_map<std::string_view, const ufbx_node*> siblings;
+            for (const auto* child : origin->children) {
+                auto [entry, inserted] = siblings.try_emplace(NodeName(*child), child);
+                if (!inserted)
+                    entry->second = nullptr;
+            }
+            for (const auto* child : destination->children) {
+                if (!required[child->typed_id])
+                    continue;
+                const auto name = NodeName(*child);
+                const auto found = siblings.find(name);
+                if (found == siblings.end() || !found->second)
+                    throw std::runtime_error("외부 FBX에서 고유한 본 경로를 찾을 수 없습니다: " +
+                                             std::string(name));
+                pending.emplace_back(child, found->second);
+                found->second = nullptr;
+            }
+        }
+
+        ufbx_anim_opts options{};
+        options.transform_overrides = {transforms.data(), transforms.size()};
+        options.result_allocator.memory_limit = MaxParserBytes;
+        using AnimPtr = std::unique_ptr<ufbx_anim, decltype(&ufbx_free_anim)>;
+        AnimPtr pose(ufbx_create_anim(&target, &options, nullptr), ufbx_free_anim);
+        Require(bool(pose), "외부 FBX 본 변환을 적용할 수 없습니다.");
+        const auto scene = EvaluateScene(target, pose.get(), 0);
+        output = impl_->ReadPose(*this, *scene, true);
         return true;
     } catch (const std::exception& exception) {
         error = exception.what();

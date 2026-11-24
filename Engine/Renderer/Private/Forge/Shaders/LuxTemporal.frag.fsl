@@ -1,0 +1,92 @@
+STRUCT(LuxTemporalData)
+{
+    DATA(float4x4, previousViewProjection, None);
+    DATA(float4, right, None);   // w: perspective coefficient A
+    DATA(float4, up, None);      // w: perspective coefficient B
+    DATA(float4, forward, None);
+    DATA(float4, viewport, None); // width, height and current NDC jitter
+    DATA(float4, history, None);  // x: history valid
+};
+#include "LuxTemporal.srt.h"
+
+STRUCT(FullscreenOutput)
+{
+    DATA(float4, position, SV_Position);
+    DATA(float2, uv, TEXCOORD0);
+};
+STRUCT(TemporalOutput)
+{
+    DATA(float4, color, SV_Target0);
+    DATA(float, depth, SV_Target1);
+};
+
+ROOT_SIGNATURE(DefaultRootSignature)
+TemporalOutput PS_MAIN(FullscreenOutput In)
+{
+    INIT_MAIN;
+    const int2 pixel = int2(In.position.xy);
+    const int2 size = int2(gTemporal.viewport.xy);
+    const float hardwareDepth = LoadTex2D(gCurrentDepth, NO_SAMPLER, pixel, 0).r;
+    const float4 current = LoadTex2D(gCurrentColor, NO_SAMPLER, pixel, 0);
+    const float eyeDepth = hardwareDepth < 1.0f && current.a >= 0.999f
+        ? -gTemporal.up.w / max(-gTemporal.right.w - hardwareDepth, 1e-7f)
+        : 0.0f;
+    TemporalOutput Out;
+    Out.color = current;
+    Out.depth = eyeDepth;
+    if (eyeDepth <= 0.0f || gTemporal.history.x < 0.5f)
+        RETURN(Out);
+
+    const float2 ndc = In.uv * 2.0f - 1.0f - gTemporal.viewport.zw;
+    const float3 position = eyeDepth * (gTemporal.forward.xyz + ndc.x * gTemporal.right.xyz +
+                                        ndc.y * gTemporal.up.xyz);
+    const float4 clip = mul(gTemporal.previousViewProjection, float4(position, 1.0f));
+    if (clip.w <= 0.0f)
+        RETURN(Out);
+    const float2 previousUv = clip.xy / clip.w * float2(0.5f, -0.5f) + 0.5f;
+    const float2 previous = previousUv * gTemporal.viewport.xy - 0.5f;
+    if (previous.x < 0.0f || previous.y < 0.0f ||
+        previous.x > gTemporal.viewport.x - 1.0f || previous.y > gTemporal.viewport.y - 1.0f)
+        RETURN(Out);
+
+    // Bilinear history, excluding samples from the wrong surface or uncovered pixels.
+    const int2 base = int2(floor(previous));
+    const float2 f = previous - float2(base);
+    const float epsilon = max(0.045f, clip.w * 0.012f);
+    float3 accumulated = float3(0.0f, 0.0f, 0.0f);
+    float confidence = 0.0f;
+    UNROLL for (int j = 0; j < 2; ++j)
+    {
+        UNROLL for (int i = 0; i < 2; ++i)
+        {
+            const int2 p = min(base + int2(i, j), size - 1);
+            const float d = LoadTex2D(gPreviousDepth, NO_SAMPLER, p, 0).r;
+            if (d > 0.0f && abs(d - clip.w) < epsilon)
+            {
+                const float weight = (i == 0 ? 1.0f - f.x : f.x) * (j == 0 ? 1.0f - f.y : f.y);
+                accumulated += LoadTex2D(gPreviousColor, NO_SAMPLER, p, 0).rgb * weight;
+                confidence += weight;
+            }
+        }
+    }
+    if (confidence < 0.25f)
+        RETURN(Out);
+
+    float3 low = current.rgb, high = current.rgb;
+    UNROLL for (int y = -1; y <= 1; ++y)
+    {
+        UNROLL for (int x = -1; x <= 1; ++x)
+        {
+            const float3 neighbor = LoadTex2D(gCurrentColor, NO_SAMPLER,
+                                           clamp(pixel + int2(x, y), int2(0, 0), size - 1), 0).rgb;
+            low = min(low, neighbor);
+            high = max(high, neighbor);
+        }
+    }
+    const float3 history = clamp(accumulated / confidence, low, high);
+    const float delta = length(current.rgb - history) / max(0.2f, length(current.rgb));
+    const float motion = length(previousUv * gTemporal.viewport.xy - In.position.xy);
+    const float weight = confidence * lerp(0.85f, 0.22f, saturate(max(delta, motion * 0.035f)));
+    Out.color.rgb = lerp(current.rgb, history, weight);
+    RETURN(Out);
+}

@@ -82,6 +82,7 @@ bool Application::Initialize() {
     props.title = spec_.name;
     props.width = spec_.width;
     props.height = spec_.height;
+    props.resizable = spec_.resizable;
     props.vulkan = true;
 
     if (!window_->Initialize(props)) {

@@ -112,6 +112,8 @@ struct ModelPoseLayer {
 class LUX_API ModelAsset {
 public:
     static Ref<ModelAsset> LoadFbx(const std::string& filepath, std::string& error);
+    // Load a clip-only FBX as an animation source. A normal FBX model may also supply clips.
+    static Ref<ModelAsset> LoadFbxAnimation(const std::string& filepath, std::string& error);
     static Ref<ModelAsset> ReloadFbx(const std::string& filepath, std::string& error,
                                      int32 requiredSubmesh = -1, bool requireUv = false);
     ~ModelAsset();
@@ -119,6 +121,11 @@ public:
     // Seconds are clip-relative and clamped. clip == -1 evaluates the default/rest scene.
     // CPU evaluation includes node animation, skinning and morph targets; no GPU is required.
     bool Evaluate(double seconds, int32 clip, ModelPose& output, std::string& error) const;
+
+    // Apply a skeletal stack from a separate FBX exported from the same rig. Bone paths must
+    // match uniquely, including parents. External morph tracks and rig retargeting are unsupported.
+    bool EvaluateAnimation(const ModelAsset& source, double seconds, int32 clip, ModelPose& output,
+                           std::string& error) const;
 
     bool MixPoses(const std::vector<ModelPoseLayer>& layers, ModelPose& output, std::string& error,
                   const std::vector<ModelPoseOverride>& overrides = {}) const;
@@ -137,7 +144,8 @@ private:
     friend class Scene;
     bool NodeMatchesMask(size_t node, const std::vector<std::string>& mask) const;
     static Ref<ModelAsset> ReadFbx(const std::string& filepath, std::string& error, bool reload,
-                                   int32 requiredSubmesh, bool requireUv);
+                                   int32 requiredSubmesh, bool requireUv,
+                                   bool allowAnimationOnly = false);
     struct Impl;
     ModelAsset();
     std::shared_ptr<Impl> impl_;

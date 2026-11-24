@@ -316,6 +316,11 @@ bool Scene::SerializeToString(std::string& output) {
         render["image_based_lighting"] = ToJson(settings_.render3D.imageBasedLighting);
         render["skybox"] = ToJson(settings_.render3D.showSkybox);
         render["tone_mapping"] = ToJson(settings_.render3D.toneMapping);
+        if (settings_.render3D.screenSpaceAntialiasing)
+            render["screen_space_antialiasing"] =
+                ToJson(settings_.render3D.screenSpaceAntialiasing);
+        if (settings_.render3D.temporalAntialiasing)
+            render["temporal_antialiasing"] = true;
         render["shadows"] = ToJson(settings_.render3D.shadows);
         render["shadow_resolution"] = ToJson(settings_.render3D.shadowResolution);
         render["shadow_range"] = ToJson(settings_.render3D.shadowRange);
@@ -560,6 +565,10 @@ bool Scene::DeserializeJson(const std::string& data) {
         ReadJsonValue(render.at("image_based_lighting"), settings.render3D.imageBasedLighting);
         ReadJsonValue(render.at("skybox"), settings.render3D.showSkybox);
         ReadJsonValue(render.at("tone_mapping"), settings.render3D.toneMapping);
+        if (const auto value = render.find("screen_space_antialiasing"); value != render.end())
+            ReadJsonValue(*value, settings.render3D.screenSpaceAntialiasing);
+        if (const auto value = render.find("temporal_antialiasing"); value != render.end())
+            ReadJsonValue(*value, settings.render3D.temporalAntialiasing);
         ReadJsonValue(render.at("shadows"), settings.render3D.shadows);
         ReadJsonValue(render.at("shadow_resolution"), settings.render3D.shadowResolution);
         ReadJsonValue(render.at("shadow_range"), settings.render3D.shadowRange);
