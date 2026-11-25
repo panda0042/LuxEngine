@@ -6,6 +6,12 @@
 #include <iomanip>
 #include <numeric>
 #include <stdexcept>
+#if defined(_WIN32)
+#define NOMINMAX
+#include <windows.h>
+
+#include <psapi.h>
+#endif
 
 namespace Frontier {
 namespace {
@@ -17,7 +23,11 @@ double Milliseconds(Clock::duration elapsed) {
 }
 
 uint64 ProcessMemory() {
-#if defined(__linux__)
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS memory{};
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory)))
+        return uint64(memory.WorkingSetSize);
+#elif defined(__linux__)
     std::ifstream status("/proc/self/status");
     std::string key, line;
     while (status >> key) {
@@ -65,7 +75,8 @@ FrameSample& Benchmark::BeginFrame() {
     return current_;
 }
 
-bool Benchmark::EndFrame(const LuxEngine::GpuDevice& gpu, unsigned width, unsigned height) {
+bool Benchmark::EndFrame(const LuxEngine::GpuDevice& gpu, unsigned width, unsigned height,
+                         bool ready) {
     const auto now = Clock::now();
     current_.cpuSubmitMs = Milliseconds(now - started_);
     if (lastPresent_ != Clock::time_point{})
@@ -81,13 +92,16 @@ bool Benchmark::EndFrame(const LuxEngine::GpuDevice& gpu, unsigned width, unsign
         lastGpuTimingFrame_ = frame.gpuTimingFrame;
     }
     current_.gpuWaitMs = frame.cpuWaitMs;
+    current_.uploadCpuMs = frame.uploadCpuMs;
+    current_.uploadWaitMs = frame.uploadWaitMs;
     current_.trackedGpuBytes = memory.allocationBytes;
     current_.deviceLocalBytes = gpu.GetInfo().memoryBudget ? memory.deviceLocalUsage : 0;
     current_.budgetBytes = gpu.GetInfo().memoryBudget ? memory.deviceLocalBudget : 0;
     current_.uploadBytes = frame.uploadBytes;
     current_.draws = frame.drawCalls;
     current_.dispatches = frame.computeDispatches;
-    if (++seen_ > warmup_ && count_ && current_.presentIntervalMs > 0) {
+    ++seen_;
+    if (ready && ++readyFrames_ > warmup_ && count_ && current_.presentIntervalMs > 0) {
         if (samples_.empty()) {
             measuredWidth_ = width;
             measuredHeight_ = height;
@@ -101,7 +115,8 @@ bool Benchmark::EndFrame(const LuxEngine::GpuDevice& gpu, unsigned width, unsign
 }
 
 void Benchmark::Write(const std::filesystem::path& prefix, std::string_view scenario,
-                      std::string_view device, std::string_view preset, unsigned seed) const {
+                      const LuxEngine::GpuDeviceInfo& device, std::string_view preset,
+                      unsigned seed) const {
     if (!prefix.parent_path().empty())
         std::filesystem::create_directories(prefix.parent_path());
     auto csvPath = prefix;
@@ -118,7 +133,9 @@ void Benchmark::Write(const std::filesystem::path& prefix, std::string_view scen
            "rss_bytes,tracked_gpu_bytes,device_local_bytes,device_local_budget_bytes,upload_bytes,"
            "draw_calls,dispatches,"
            "physics_bodies,loaded_chunks,pending_chunks,visible_range_tree_meshes,generated_chunks,"
-           "evicted_chunks,last_chunk_build_ms\n";
+           "evicted_chunks,last_chunk_build_ms,upload_cpu_ms,upload_wait_ms,world_stream_ms,"
+           "ground_cover_stream_ms,terrain_mesh_uploads,ground_cover_batch_uploads,"
+           "ground_cover_tiles_pending\n";
     std::vector<double> ordered;
     unsigned gpuSamples = 0;
     double sumGPU = 0;
@@ -149,7 +166,10 @@ void Benchmark::Write(const std::filesystem::path& prefix, std::string_view scen
             csv << s.budgetBytes;
         csv << ',' << s.uploadBytes << ',' << s.draws << ',' << s.dispatches << ',' << s.bodies
             << ',' << s.chunks.loaded << ',' << s.chunks.pending << ',' << s.chunks.trees << ','
-            << s.chunks.built << ',' << s.chunks.evicted << ',' << s.chunks.lastBuildMs << '\n';
+            << s.chunks.built << ',' << s.chunks.evicted << ',' << s.chunks.lastBuildMs << ','
+            << s.uploadCpuMs << ',' << s.uploadWaitMs << ',' << s.worldStreamMs << ','
+            << s.groundCoverStreamMs << ',' << s.chunks.uploadedMeshes << ','
+            << s.groundCoverBatches << ',' << s.groundCoverPending << '\n';
     }
     std::ranges::sort(ordered, std::greater{});
     const auto low = [&](double fraction) {
@@ -166,12 +186,15 @@ void Benchmark::Write(const std::filesystem::path& prefix, std::string_view scen
     json << "{\n  \"scenario\": ";
     String(json, scenario);
     json << ",\n  \"device\": ";
-    String(json, device);
+    String(json, device.deviceName);
+    json << ",\n  \"renderer\": ";
+    String(json, device.deviceType);
     json << ",\n  \"preset\": ";
     String(json, preset);
     json << ",\n  \"seed\": " << seed << ",\n  \"width\": " << measuredWidth_
-         << ",\n  \"height\": " << measuredHeight_ << ",\n  \"warmup_frames\": " << warmup_
-         << ",\n  \"measured_frames\": " << samples_.size()
+         << ",\n  \"height\": " << measuredHeight_
+         << ",\n  \"startup_frames\": " << seen_ - readyFrames_
+         << ",\n  \"warmup_frames\": " << warmup_ << ",\n  \"measured_frames\": " << samples_.size()
          << ",\n  \"average_fps\": " << 1000. / average
          << ",\n  \"one_percent_low_fps\": " << low(.01)
          << ",\n  \"point_one_percent_low_fps\": " << low(.001)

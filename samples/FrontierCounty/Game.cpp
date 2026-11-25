@@ -11,6 +11,8 @@ namespace {
 using namespace LuxEngine;
 
 constexpr Vec2 TruckSpawn{10, 1.85};
+constexpr Vec3 TruckSize{1.88, .70, 4.5};
+constexpr double PlayerClearance = .25;
 constexpr std::array WeatherProfiles{
     std::array{0.f, .0015f, 0.f},  std::array{.31f, .002f, 0.f},  std::array{.72f, .003f, .04f},
     std::array{.58f, .034f, .03f}, std::array{.67f, .006f, .62f}, std::array{.84f, .016f, 1.f},
@@ -63,11 +65,24 @@ double Floor(Vec2 point, unsigned seed) {
 Game::Game(unsigned seed, double daySeconds) : seed_(seed), daySeconds_(daySeconds) {}
 
 void Game::Start(World& world) {
+    fixed_.clear();
     scene_ = std::make_unique<Scene>();
-    truck_ = AddBox(*scene_, "County pickup", OnGround(TruckSpawn, seed_, .85), {1.88, .70, 4.5},
-                    BodyType::Dynamic, float(VehicleMass));
-    ResetPhysics(world);
+    ResetTruck(OnGround(TruckSpawn, seed_, .85), 0);
     StartAt(Spawn, false);
+    ResetPhysics(world);
+}
+
+void Game::ResetTruck(Vec3 position, double heading) {
+    if (truck_)
+        scene_->DestroyEntity(truck_);
+    truck_ = AddBox(*scene_, "County pickup", position, TruckSize, BodyType::Dynamic,
+                    float(VehicleMass));
+    auto& truckPose = truck_.GetComponent<TransformComponent>();
+    truckPose.rotation = {0, -heading, 0};
+    previousTruck_ = truckPose;
+    truckYaw_ = heading;
+    if (driving_)
+        cameraReady_ = false;
 }
 
 void Game::ResetPhysics(World& world) {
@@ -84,38 +99,42 @@ void Game::ResetPhysics(World& world) {
 
 void Game::StartAt(Vec2 place, bool drive) {
     driving_ = drive;
-    player_ = OnGround(Limit(place), seed_, .02);
+    place = Limit(place);
+    player_ = {place.x, Floor(place, seed_) + .02, place.y};
     playerVelocity_ = {};
     up_ = 0;
+    previousLook_ = {yaw_, pitch_};
     cameraReady_ = false;
-    if (drive) {
-        truck_.GetComponent<TransformComponent>().position = player_ + Vec3{0, .82, 0};
-        scene_->SetVelocity3D(truck_.GetId(), {});
-        truckYaw_ = 1.49;
-    }
+    if (drive)
+        ResetTruck(player_ + Vec3{0, .82, 0}, 1.49);
 }
 
 void Game::Face(Vec2 target) {
     const auto direction = target - Horizontal(Player());
     yaw_ = std::atan2(direction.x, -direction.y);
+    previousLook_ = {yaw_, pitch_};
     cameraReady_ = false;
 }
 
 void Game::Step(const Controls& input, World& world, double dt) {
     if (paused_)
         return;
+    previousTruck_ = truck_.GetComponent<TransformComponent>();
+    previousLook_ = {yaw_, pitch_};
     elapsed_ += dt;
     hour_ = std::fmod(hour_ + dt * (24 / daySeconds_), 24.);
     AdvanceWeather(dt);
     if (input.weather)
         SetWeather(Weather((unsigned(weather_) + 1) % unsigned(Weather::Count)));
-    if (input.camera)
+    if (input.camera) {
         firstPerson_ = !firstPerson_;
+        cameraReady_ = false;
+    }
     if (collisionRevision_ != world.GetStats().built ||
         collisionChunk_ != ChunkAt(Horizontal(Player())))
         ResetPhysics(world);
     if (input.interact)
-        Interact();
+        Interact(world);
     constexpr double radiansPerPixel = .0026;
     yaw_ = std::remainder(yaw_ + input.mouseX * radiansPerPixel, 2 * std::numbers::pi);
     pitch_ = std::clamp(pitch_ - input.mouseY * radiansPerPixel, -.9, .72);
@@ -129,7 +148,29 @@ void Game::Step(const Controls& input, World& world, double dt) {
     scene_->OnUpdate(dt);
     if (!scene_->GetLastPhysicsError3D().empty())
         throw std::runtime_error(scene_->GetLastPhysicsError3D());
+    const auto& truckPose = truck_.GetComponent<TransformComponent>();
+    const auto forward = truckPose.GetTransform().TransformDirection({0, 0, -1});
+    if (std::hypot(forward.x, forward.z) > .001)
+        truckYaw_ = std::atan2(forward.x, -forward.z);
     UpdatePeople(dt);
+}
+
+bool Game::BlockedByBuilding(Vec2 from, Vec2 to, double feet) const {
+    const Vec2 halfPath = (to - from) * .5;
+    const Vec2 middle = from + halfPath;
+    const double pathX = std::abs(halfPath.x), pathZ = std::abs(halfPath.y);
+    for (const auto& obstacle : obstacles_) {
+        if (feet >= obstacle.center.y + obstacle.size.y * .5)
+            continue;
+        const Vec2 offset = middle - Horizontal(obstacle.center);
+        const double halfX = obstacle.size.x * .5 + PlayerClearance;
+        const double halfZ = obstacle.size.z * .5 + PlayerClearance;
+        if (std::abs(offset.x) < halfX + pathX && std::abs(offset.y) < halfZ + pathZ &&
+            std::abs(offset.x * halfPath.y - offset.y * halfPath.x) <=
+                halfX * pathZ + halfZ * pathX)
+            return true;
+    }
+    return false;
 }
 
 void Game::MovePlayer(const Controls& input, double dt) {
@@ -144,16 +185,13 @@ void Game::MovePlayer(const Controls& input, double dt) {
     if (Length(wish) > 1)
         wish = wish.Normalized();
     const Vec2 delta = Horizontal(wish * (speed * dt));
-    auto blocked = [&](Vec2 next) {
-        for (const auto& obstacle : obstacles_) {
-            if (player_.y >= obstacle.center.y + obstacle.size.y / 2)
-                continue;
-            if (std::abs(next.x - obstacle.center.x) < obstacle.size.x * .5 + .25 &&
-                std::abs(next.y - obstacle.center.z) < obstacle.size.z * .5 + .25)
-                return true;
-        }
-        const auto p = Truck();
-        return !driving_ && std::abs(next.x - p.x) < 1.18 && std::abs(next.y - p.z) < 2.5;
+    const auto truck = Truck();
+    const auto truckSide = Side(truckYaw_), truckForward = Forward(truckYaw_);
+    const auto blocked = [&](Vec2 next) {
+        const Vec3 offset{next.x - truck.x, 0, next.y - truck.z};
+        return BlockedByBuilding(next, next, player_.y) ||
+               (std::abs(offset.Dot(truckSide)) < TruckSize.x * .5 + PlayerClearance &&
+                std::abs(offset.Dot(truckForward)) < TruckSize.z * .5 + PlayerClearance);
     };
     auto next = Limit(here + Vec2{delta.x, 0});
     if (blocked(next))
@@ -189,8 +227,7 @@ void Game::Drive(const Controls& input, double dt) {
     const double ground = Height(horizontal, seed_);
     if (horizontal.x <= -WorldHalf || horizontal.x >= WorldHalf || horizontal.y <= -WorldHalf ||
         horizontal.y >= WorldHalf || p.y < std::min(LakeLevel, ground) - 4) {
-        truck_.GetComponent<TransformComponent>().position = OnGround(Limit(horizontal), seed_, .9);
-        scene_->SetVelocity3D(truck_.GetId(), {});
+        ResetTruck(OnGround(Limit(horizontal), seed_, .9), truckYaw_);
         return;
     }
 
@@ -200,10 +237,13 @@ void Game::Drive(const Controls& input, double dt) {
     const double vehicleSteer = input.side;
     const double signedTurn = std::clamp(speed * .29, -.8, .95);
     const double turn = vehicleSteer * signedTurn * grip * dt;
-    truckYaw_ = std::remainder(truckYaw_ + turn, 2 * std::numbers::pi);
-    if (driving_)
+    const double heading = std::remainder(truckYaw_ + turn, 2 * std::numbers::pi);
+    if (turn != 0) {
+        auto& rotation = truck_.GetComponent<TransformComponent>().rotation;
+        rotation = AdditiveRotation({0, -turn, 0}, {}, rotation, 1);
         yaw_ = std::remainder(yaw_ + turn, 2 * std::numbers::pi);
-    const Vec3 forward = Forward(truckYaw_), side = Side(truckYaw_);
+    }
+    const Vec3 forward = Forward(heading), side = Side(heading);
     double suspension = 0;
     for (double axle : {-1.65, 1.65})
         for (double tire : {-.77, .77}) {
@@ -259,10 +299,26 @@ void Game::UpdatePeople(double dt) {
     }
 }
 
-void Game::Interact() {
+void Game::Interact(const World& world) {
     if (driving_) {
-        if (Distance(Velocity(), {}) < 3.2)
-            StartAt(Horizontal(Truck() + Side(truckYaw_) * 2.1), false);
+        Vec3 velocity;
+        if (!scene_->GetVelocity3D(truck_.GetId(), velocity) || Length(velocity) >= 3.2)
+            return;
+        const auto truck = Truck();
+        const auto from = Horizontal(truck);
+        for (const double side : {2.1, -2.1}) {
+            const auto exit = Horizontal(truck + Side(truckYaw_) * side);
+            if (std::abs(exit.x) > WorldHalf - 1 || std::abs(exit.y) > WorldHalf - 1 ||
+                !world.HasChunk(ChunkAt(exit)))
+                continue;
+            const double feet = Floor(exit, seed_);
+            const double truckFloor = truck.y - .82;
+            if (std::abs(feet - truckFloor) > .85 || (InLake(exit) && feet < LakeLevel - .52) ||
+                BlockedByBuilding(from, exit, std::min(feet, truckFloor)))
+                continue;
+            StartAt(exit, false);
+            break;
+        }
         return;
     }
     const auto truck = Truck();
@@ -292,20 +348,85 @@ Vec3 Game::Look() const {
     return Forward(yaw_) * std::cos(pitch_) + Vec3{0, std::sin(pitch_), 0};
 }
 
-Vec3 Game::CameraTarget() const {
-    const auto at = Player() + Vec3{0, driving_ ? .83 : (crouched_ ? .94 : 1.58), 0};
-    return firstPerson_ ? at + Look() * 10 : at + Look() * 3.7;
-}
-
 bool Game::ShowPlayer() const {
     return !driving_ && !firstPerson_;
 }
 
-Vec3 Game::Camera(double dt) {
-    const Vec3 eye = Player() + Vec3{0, driving_ ? .83 : (crouched_ ? .94 : 1.58), 0};
+double Game::VehicleCameraClearance(Vec3 eye, Vec3 offset, Vec3 side) const {
+    constexpr double radius = .24, padding = .21;
+    const std::array probes{Vec3{}, side * radius, side * -radius, Vec3{0, radius, 0},
+                            Vec3{0, -radius, 0}};
+    double clearance = 1;
+    for (const auto probe : probes) {
+        const auto direction = offset + probe;
+        const double distance = Length(direction);
+        RaycastHit3D hit;
+        if (distance > 1e-6 &&
+            scene_->Raycast3D(eye, direction, float(distance), hit, truck_.GetId()))
+            clearance = std::min(clearance, std::max(0., (hit.distance - padding) / distance));
+    }
+    return clearance;
+}
+
+Game::RenderView Game::GetRenderView(double dt, double alpha) {
+    if (paused_)
+        alpha = 1;
+    auto truckPose = truck_.GetComponent<TransformComponent>();
+    if (alpha < 1) {
+        truckPose.position =
+            previousTruck_.position + (truckPose.position - previousTruck_.position) * alpha;
+        truckPose.rotation =
+            alpha == 0 ? previousTruck_.rotation
+                       : SlerpRotation(previousTruck_.rotation, truckPose.rotation, alpha);
+    }
+    double yaw = yaw_, pitch = pitch_;
+    if (driving_ && alpha < 1) {
+        const double delta = std::remainder(yaw_ - previousLook_.x, 2 * std::numbers::pi);
+        yaw = previousLook_.x + delta * alpha;
+        pitch = std::lerp(previousLook_.y, pitch_, alpha);
+    }
+    const bool vehicleChase = driving_ && !firstPerson_;
+    if (vehicleChase) {
+        if (!cameraReady_) {
+            vehicleCameraLook_ = {yaw, pitch};
+        } else if (!paused_) {
+            const double blend = -std::expm1(-dt * 12);
+            const double tau = 2 * std::numbers::pi;
+            const double turn = std::remainder(yaw - vehicleCameraLook_.x, tau);
+            vehicleCameraLook_.x = std::remainder(vehicleCameraLook_.x + turn * blend, tau);
+            vehicleCameraLook_.y = std::lerp(vehicleCameraLook_.y, pitch, blend);
+        }
+        yaw = vehicleCameraLook_.x;
+        pitch = vehicleCameraLook_.y;
+    }
+    const Vec3 look = Forward(yaw) * std::cos(pitch) + Vec3{0, std::sin(pitch), 0};
+    const auto anchor = driving_ ? truckPose.position : player_;
+    const Vec3 eye = anchor + Vec3{0, driving_ ? .83 : (crouched_ ? .94 : 1.58), 0};
+    if (vehicleChase) {
+        auto desired = eye - look * 7.6 + Vec3{0, 1.55, 0};
+        desired.y = std::max(desired.y, Floor(Horizontal(desired), seed_) + .21);
+        const auto offset = desired - eye;
+        const auto side = Side(yaw);
+        const double clearance = VehicleCameraClearance(eye, offset, side);
+        if (!cameraReady_ || clearance < vehicleCameraArm_)
+            vehicleCameraArm_ = clearance;
+        else if (!paused_)
+            vehicleCameraArm_ = std::lerp(vehicleCameraArm_, clearance, -std::expm1(-dt * 7));
+
+        camera_ = eye + offset * vehicleCameraArm_;
+        const double floor = Floor(Horizontal(camera_), seed_) + .21;
+        if (camera_.y < floor) {
+            camera_.y = floor;
+            const auto lifted = camera_ - eye;
+            camera_ = eye + lifted * VehicleCameraClearance(eye, lifted, side);
+        }
+        cameraReady_ = true;
+        return {truckPose, camera_, eye + look * 3.7};
+    }
+
     Vec3 desired = eye;
     if (!firstPerson_) {
-        desired = eye - Look() * (driving_ ? 7.6 : 4.45) + Vec3{0, driving_ ? 1.55 : .55, 0};
+        desired = eye - look * 4.45 + Vec3{0, .55, 0};
         const Vec3 delta = desired - eye;
         RaycastHit3D hit;
         const double length = Length(delta);
@@ -314,11 +435,11 @@ Vec3 Game::Camera(double dt) {
     }
     if (!cameraReady_ || firstPerson_)
         camera_ = desired;
-    else
+    else if (!paused_)
         camera_ += (desired - camera_) * (1 - std::exp(-dt * 15));
     cameraReady_ = true;
     camera_.y = std::max(camera_.y, Floor(Horizontal(camera_), seed_) + .21);
-    return camera_;
+    return {truckPose, camera_, eye + look * (firstPerson_ ? 10 : 3.7)};
 }
 
 std::array<Vec3, 3> Game::Pedestrians() const {

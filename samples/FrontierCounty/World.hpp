@@ -66,6 +66,7 @@ struct MeshData {
     std::vector<LuxEngine::uint32> indices;
     void Quad(Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec4 color);
     void Box(Vec3 center, Vec3 size, Vec4 color);
+    LuxEngine::uint64 UploadBytes() const;
     void Upload(LuxEngine::GpuDevice& device, LuxEngine::Mesh3D& mesh) const;
 };
 
@@ -82,7 +83,7 @@ class World {
 public:
     struct Stats {
         unsigned loaded = 0, pending = 0, trees = 0;
-        unsigned built = 0, evicted = 0;
+        unsigned built = 0, evicted = 0, uploadedMeshes = 0;
         double lastBuildMs = 0;
     };
 
@@ -93,7 +94,7 @@ public:
 
     void Start(unsigned seed, unsigned vegetation, int radius, Vec2 initial,
                LuxEngine::GpuDevice& device);
-    void Stream(Vec2 at, Vec2 velocity, LuxEngine::GpuDevice& device);
+    void Stream(Vec2 at, Vec2 velocity, LuxEngine::GpuDevice& device, bool allowUploads);
     void Draw(LuxEngine::Renderer3D::Context& renderer, const LuxEngine::Material3D& ground,
               const LuxEngine::Material3D& scenery, const LuxEngine::Material3D& foliage,
               const LuxEngine::Material3D& road, Vec3 eye, std::vector<Plant>& nearTrees) const;

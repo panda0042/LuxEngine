@@ -25,6 +25,10 @@ bool Characters::Character::Evaluate(unsigned state, double time, ModelPose& pos
 }
 
 void Characters::Load(const std::filesystem::path& assets) {
+    actors_ = {};
+    poses_.clear();
+    poseBytes_ = 0;
+    poseClock_ = 0;
     constexpr std::array names{"dog-walker", "hiker", "road-worker"};
     for (size_t c = 0; c < characters_.size(); ++c) {
         auto& asset = characters_[c];
@@ -101,10 +105,47 @@ bool Characters::VerifyClips() const {
     return !ModelAsset::LoadFbx(characters_.front().clipSource->sourcePath, error);
 }
 
+Ref<const ModelPose> Characters::SamplePose(size_t outfit, unsigned motion, double time) {
+    const auto key = std::tuple{outfit, motion, time};
+    if (const auto found = poses_.find(key); found != poses_.end()) {
+        found->second.lastUse = ++poseClock_;
+        return found->second.pose;
+    }
+
+    auto pose = CreateRef<ModelPose>();
+    std::string error;
+    if (!characters_[outfit].Evaluate(motion, time, *pose, error))
+        throw std::runtime_error("Character motion: " + error);
+    pose->nodeLocalTransforms = std::vector<ModelTransform>{};
+    pose->deformationPositions = std::vector<std::vector<Vec3>>{};
+    size_t bytes = sizeof(ModelPose) + pose->nodeWorldTransforms.capacity() * sizeof(Mat4) +
+                   pose->submeshes.capacity() * sizeof(std::vector<ModelVertex>);
+    for (auto& vertices : pose->submeshes) {
+        bytes += vertices.capacity() * sizeof(ModelVertex);
+        for (auto& vertex : vertices)
+            vertex.weights = std::vector<ModelWeight>{};
+    }
+
+    constexpr size_t budget = 96ull * 1024 * 1024;
+    constexpr size_t maxSamples = 256;
+    if (bytes <= budget) {
+        while (bytes > budget - poseBytes_ || poses_.size() >= maxSamples) {
+            const auto oldest = std::ranges::min_element(
+                poses_, {}, [](const auto& entry) { return entry.second.lastUse; });
+            poseBytes_ -= oldest->second.bytes;
+            poses_.erase(oldest);
+        }
+        poses_.emplace(key, CachedPose{pose, bytes, ++poseClock_});
+        poseBytes_ += bytes;
+    }
+    return pose;
+}
+
 void Characters::Draw(Renderer3D::Context& renderer, size_t actor, Vec3 position, double yaw,
                       bool crouched, double speed, double clock) {
     constexpr std::array<size_t, 4> outfits{1, 0, 2, 0};
-    const auto& asset = characters_.at(outfits.at(actor));
+    const auto outfit = outfits.at(actor);
+    const auto& asset = characters_.at(outfit);
     auto& state = actors_.at(actor);
     const unsigned motion = unsigned(speed > .14);
     const double duration = asset.clipSource->animations.at(size_t(asset.clips[motion])).duration;
@@ -119,11 +160,7 @@ void Characters::Draw(Renderer3D::Context& renderer, size_t actor, Vec3 position
         std::fmod(state.phase + dt * (motion ? std::clamp(speed / 1.55, .48, 1.75) : 1), duration);
     const double sample = std::floor(state.phase * 24) / 24;
     if (sample != state.sampledTime) {
-        auto pose = CreateRef<ModelPose>();
-        std::string error;
-        if (!asset.Evaluate(motion, sample, *pose, error))
-            throw std::runtime_error("Character motion: " + error);
-        state.pose = std::move(pose);
+        state.pose = SamplePose(outfit, motion, sample);
         ++state.revision;
         state.sampledTime = sample;
     }
