@@ -906,6 +906,23 @@ void Scenes() {
         Check(!scene.Serialize(nonExistentDirPath), "save to non-existent directory fails safely");
         Check(!scene.Serialize(""), "empty path fails safely");
 
+        auto invalidSprite = scene.CreateEntity("invalid sprite atlas");
+        invalidSprite.AddComponent<SpriteRendererComponent>().columns = 0;
+        Scene retainedScene;
+        Check(!scene.Serialize(newScenePath) && bytes(newScenePath) == updatedContent &&
+                  retainedScene.Deserialize(newScenePath),
+              "invalid sprite grid cannot overwrite a readable scene file");
+        scene.DestroyEntity(invalidSprite);
+
+        auto invalidAnimator = scene.CreateEntity("invalid animator parameter");
+        auto& animator = invalidAnimator.AddComponent<AnimatorComponent>();
+        animator.parameters = {
+            {"Speed", AnimationParameterType::Float, std::numeric_limits<double>::quiet_NaN()}};
+        Check(!scene.Serialize(newScenePath) && bytes(newScenePath) == updatedContent &&
+                  retainedScene.Deserialize(newScenePath),
+              "non-finite animator parameters cannot overwrite a readable scene file");
+        scene.DestroyEntity(invalidAnimator);
+
         // 4. Failed save with unsupported component leaves original completely untouched
         {
             auto invalidEnt = scene.CreateEntity("temp_unsupported");

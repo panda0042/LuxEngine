@@ -56,7 +56,7 @@ void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, dou
             const int axisCount = planar_ ? 2 : 3;
             bool supported = true;
             for (int axis = 0; axis < axisCount; ++axis)
-                supported = supported && std::isfinite(lengths[axis]) && lengths[axis] > 1e-8;
+                supported = supported && std::isfinite(lengths[axis]) && lengths[axis] > 0;
             if (supported)
                 for (int a = 0; a < axisCount; ++a)
                     for (int b = a + 1; b < axisCount; ++b) {

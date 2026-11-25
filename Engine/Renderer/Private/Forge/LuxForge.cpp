@@ -1621,6 +1621,8 @@ int DrawTriangles(LuxForgeDevice* device, const LuxForgeVertex* vertices, uint32
     if (frame.draws >= LuxForgeDevice::kMaxDraws)
         return Fail(device, "Too many draw calls in one frame for the Forge backend");
     const uint64_t bytes = static_cast<uint64_t>(vertexCount) * LuxForgeDevice::kVertexStride;
+    if (bytes > device->maxFrameVertexBytes - device->frameStats.vertexBytes)
+        return Fail(device, "Frame vertex data exceeds maxFrameVertexBytes");
     if (!EnsureVertexCapacity(device, frame, bytes))
         return 0;
     std::memcpy(static_cast<uint8_t*>(frame.vertices->pCpuMappedAddress) + frame.vertexUsed,

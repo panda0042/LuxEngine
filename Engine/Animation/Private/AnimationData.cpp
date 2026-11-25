@@ -61,10 +61,11 @@ std::vector<AnimationEvent> AnimationPlayback::Advance(double dt, double duratio
     const double previous = cursor, next = cursor + dt * speed;
     if (!std::isfinite(next) || next == previous)
         return {};
+    const bool forward = next > previous;
     const double low = std::min(previous, next), high = std::max(previous, next);
     const double span = high - low;
     auto emit = [&](double at, const AnimationEvent& event) {
-        if ((next > previous && at > 0 && at <= span) || (next < previous && at >= 0 && at < span))
+        if ((forward && at > 0 && at <= span) || (!forward && at >= 0 && at < span))
             crossed.emplace_back(at, event);
     };
     if (wrap == AnimationWrap::Once) {
@@ -77,24 +78,34 @@ std::vector<AnimationEvent> AnimationPlayback::Advance(double dt, double duratio
         double phase = std::fmod(low, period);
         if (phase < 0)
             phase += period;
-        const double cycles = std::floor(span / period + phase / period);
+        double cycles = std::floor(span / period + phase / period);
+        if ((cycles + 1) * period - phase <= span)
+            ++cycles;
         if (!std::isfinite(cycles) || cycles > 4096)
             throw std::runtime_error("애니메이션 이벤트 순회 범위가 너무 큽니다.");
         const auto count = static_cast<unsigned>(cycles);
-        for (unsigned cycle = 0; cycle <= count; ++cycle)
+        for (unsigned cycle = 0; cycle <= count; ++cycle) {
+            const double start = cycle ? cycle * period - phase : -phase;
+            const double end = (cycle + 1) * period - phase;
             for (const auto& event : events) {
-                const double start = cycle ? cycle * period - phase : -phase;
-                emit(start + event.time, event);
+                emit(wrap == AnimationWrap::Loop && event.time == duration ? end
+                                                                           : start + event.time,
+                     event);
                 if (wrap == AnimationWrap::PingPong && event.time > 0 && event.time < duration)
                     emit(start + period - event.time, event);
             }
-        if (wrap == AnimationWrap::Loop && next < previous && phase == 0)
+        }
+        if (wrap == AnimationWrap::Loop && !forward && phase == 0)
             for (const auto& event : events)
                 if (event.time == duration)
                     emit(0, event);
     }
     std::stable_sort(crossed.begin(), crossed.end(), [&](const auto& a, const auto& b) {
-        return next >= previous ? a.first < b.first : a.first > b.first;
+        if (a.first != b.first)
+            return forward ? a.first < b.first : a.first > b.first;
+        if (wrap == AnimationWrap::Loop)
+            return forward ? a.second.time > b.second.time : a.second.time < b.second.time;
+        return false;
     });
     cursor = wrap == AnimationWrap::Once ? std::clamp(next, 0.0, duration) : next;
     if (wrap == AnimationWrap::Once &&

@@ -162,6 +162,24 @@ void Diagnostics() {
     Check(planar.GetLastPhysicsError2D().empty() &&
               flat.GetComponent<Rigidbody2DComponent>().velocity.y < 0,
           "fixing a mirrored 2D collider restores simulation");
+
+    Scene narrow;
+    auto scaledParent = narrow.CreateEntity("Small scale parent");
+    scaledParent.GetComponent<TransformComponent>().scale = {1e-9, 1, 1};
+    auto narrowBox = narrow.CreateEntity("Narrow world collider");
+    auto& narrowCollider = narrowBox.AddComponent<BoxCollider3DComponent>();
+    narrowCollider.size = {2000, 1, 1};
+    Check(narrow.SetParent(narrowBox.GetId(), scaledParent.GetId(), false),
+          "narrow collider inherits its parent scale");
+    narrow.OnUpdate(narrow.GetSettings().fixedStep);
+    Check(narrow.GetLastPhysicsError3D().empty() &&
+              narrow.Raycast3D({0, 0, 1}, {0, 0, -1}, 3, hit) && hit.entityId == narrowBox.GetId(),
+          "a small scale and a valid resulting world extent produce a collider");
+    narrowCollider.size.x = 500;
+    narrow.OnUpdate(narrow.GetSettings().fixedStep);
+    Check(!narrow.GetLastPhysicsError3D().empty() &&
+              !narrow.Raycast3D({0, 0, 1}, {0, 0, -1}, 3, hit),
+          "resulting world extents below the Jolt minimum still fail");
 }
 
 void MotionAndEdits() {
@@ -511,6 +529,11 @@ void FastBodyStaysInSimulation() {
     body.gravityScale = 100;
     scene.OnUpdate(settings.fixedStep);
     Check(body.velocity.y < -100000, "solver generates a speed above the old validation limit");
+    Vec3 velocity;
+    Check(scene.GetVelocity3D(entity.GetId(), velocity) && velocity.y == body.velocity.y,
+          "scene velocity queries accept the solver's higher speed");
+    Check(!scene.SetVelocity3D(entity.GetId(), velocity) && velocity.y == body.velocity.y,
+          "explicit velocity input retains its existing limit");
 
     const auto first = scene.GetWorldTransform(entity.GetId()).position.y;
     scene.OnUpdate(settings.fixedStep);

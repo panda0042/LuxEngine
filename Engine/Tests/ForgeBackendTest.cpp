@@ -559,7 +559,9 @@ void Drawing() {
     std::printf("[drawing]\n");
     // A decorated Wayland window may be resized to the compositor's minimum title-bar
     // width after creation. Pixel-exact texture tests use an unmapped readback window.
-    Session s(64, 64, {}, true);
+    GpuDeviceConfig config;
+    config.maxFrameVertexBytes = 64ull << 10;
+    Session s(64, 64, config, true);
     if (!s.ok)
         return Check(false, "session for drawing");
     const Mat4 pixels = Mat4::Orthographic(0, 64, 64, 0, -1, 1);
@@ -582,6 +584,22 @@ void Drawing() {
     const auto stats = s.gpu.GetFrameStats();
     Check(stats.drawCalls == 2 && stats.vertexBytes == 12 * sizeof(RenderVertex),
           "frame stats count draws");
+
+    const auto budgetQuad = Quad(0, 0, 1, 1, 0, {1, 1, 1, 1});
+    std::vector<RenderVertex> batch;
+    for (int i = 0; i < 150; ++i)
+        batch.insert(batch.end(), budgetQuad.begin(), budgetQuad.end());
+    Check(Begin(s.window, s.gpu), "frame for the cumulative vertex limit");
+    Check(s.gpu.DrawTriangles(batch, pixels), "first batch fits the vertex budget");
+    Check(!s.gpu.DrawTriangles(batch, pixels) &&
+              s.gpu.GetLastError().find("maxFrameVertexBytes") != std::string::npos,
+          "a second batch cannot exceed the cumulative vertex budget");
+    Check(s.gpu.DrawTriangles(budgetQuad, pixels) && s.gpu.EndFrame() &&
+              s.gpu.GetFrameStats().vertexBytes ==
+                  (batch.size() + budgetQuad.size()) * sizeof(RenderVertex),
+          "a rejected batch preserves the remaining budget and frame submission");
+    Check(Begin(s.window, s.gpu) && s.gpu.DrawTriangles(batch, pixels) && s.gpu.EndFrame(),
+          "a new frame receives a fresh vertex budget");
 
     Check(CaptureFrame(s, c,
                        [&] {

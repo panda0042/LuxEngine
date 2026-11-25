@@ -33,7 +33,6 @@
 namespace LuxEngine {
 namespace {
 constexpr size_t MaxBodies = 16384;
-constexpr float MaxLinearVelocity = 200000.f;
 
 void JoltTrace(const char* format, ...) {
     char buffer[2048];

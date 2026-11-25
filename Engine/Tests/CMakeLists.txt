@@ -262,7 +262,9 @@ add_test(NAME Engine_world64_render COMMAND LuxWorld64RenderTests)
 set_tests_properties(Engine_world64_render PROPERTIES LABELS "gpu;world64" TIMEOUT 60 SKIP_RETURN_CODE 77
     ENVIRONMENT "SDL_AUDIO_DRIVER=dummy" WORKING_DIRECTORY "$<TARGET_FILE_DIR:LuxWorld64RenderTests>")
 
-target_compile_definitions(LuxWorld64RenderTests PRIVATE LUX_FBX_ANIMATED_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/Fixtures/AnimatedTriangle.fbx")
+target_compile_definitions(LuxWorld64RenderTests PRIVATE
+    LUX_FBX_ANIMATED_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/Fixtures/AnimatedTriangle.fbx"
+    LUX_WORLD64_TEXTURE_FIXTURE="${LUX_BASIC_MODEL_SOURCE_DIR}/Textures/colormap.png")
 
 add_executable(LuxOceanSpectrumTests OceanSpectrumTest.cpp)
 target_link_libraries(LuxOceanSpectrumTests PRIVATE LuxEngine::Engine)

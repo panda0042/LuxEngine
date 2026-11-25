@@ -3,6 +3,7 @@
 #include <LuxEngine/Renderer/Renderer2D/Renderer2D.hpp>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -23,6 +24,28 @@ bool SameOwner(const std::weak_ptr<Rhi::RenderBackend>& a,
 bool FiniteColor(const Vec4& color) {
     return std::isfinite(color.x) && std::isfinite(color.y) && std::isfinite(color.z) &&
            std::isfinite(color.w);
+}
+
+constexpr std::array<Vec2, 6> QuadCorners{
+    {{-.5, -.5}, {.5, -.5}, {.5, .5}, {.5, .5}, {-.5, .5}, {-.5, -.5}}};
+
+bool RelativeQuadPositions(const Mat4& transform, Vec3 origin, const Vec2& localCenter,
+                           const Vec2& size, std::array<Vec3, 6>& positions) {
+    for (const auto value : transform.elements)
+        if (!std::isfinite(value))
+            return false;
+    const auto* m = transform.elements;
+    const double x = (m[12] - origin.x) + (m[0] * localCenter.x + m[4] * localCenter.y);
+    const double y = (m[13] - origin.y) + (m[1] * localCenter.x + m[5] * localCenter.y);
+    constexpr double limit = std::numeric_limits<float>::max();
+    for (size_t i = 0; i < QuadCorners.size(); ++i) {
+        const Vec2 corner{QuadCorners[i].x * size.x, QuadCorners[i].y * size.y};
+        positions[i] = {x + (m[0] * corner.x + m[4] * corner.y),
+                        y + (m[1] * corner.x + m[5] * corner.y), 0};
+        if (!(std::abs(positions[i].x) <= limit && std::abs(positions[i].y) <= limit))
+            return false;
+    }
+    return true;
 }
 
 thread_local Renderer2D::Context* t_ActiveContext2D = nullptr;
@@ -175,8 +198,7 @@ void Renderer2D::Context::BeginScene(const OrthographicCamera& camera) {
         throw std::logic_error("2D scene already active");
     impl_->textures.clear();
     impl_->origin = camera.GetPosition();
-    impl_->viewProjection =
-        camera.GetProjectionMatrix() * camera.GetViewMatrix() * Mat4::Translate(impl_->origin);
+    impl_->viewProjection = camera.GetProjectionMatrix() * Mat4::RotateZ(-camera.GetRotation());
     impl_->usedBatches = 0;
     impl_->stats = {};
     impl_->active = true;
@@ -251,24 +273,16 @@ void Renderer2D::Context::DrawQuad(const Vec3& p, const Vec2& size, const Vec4& 
 }
 
 void Renderer2D::Context::DrawQuad(const Mat4& transform, const Vec4& color) {
-    if (!impl_ || !impl_->active)
+    DrawQuad(transform, {}, {1, 1}, color);
+}
+
+void Renderer2D::Context::DrawQuad(const Mat4& transform, const Vec2& localCenter, const Vec2& size,
+                                   const Vec4& color) {
+    if (!impl_ || !impl_->active || !FiniteColor(color))
         return;
-    for (const auto value : transform.elements)
-        if (!std::isfinite(value))
-            return;
-    if (!FiniteColor(color))
-        return;
-    constexpr std::array<Vec2, 6> points{
-        {{-.5f, -.5f}, {.5f, -.5f}, {.5f, .5f}, {.5f, .5f}, {-.5f, .5f}, {-.5f, -.5f}}};
     std::array<Vec3, 6> positions;
-    const auto* m = transform.elements;
-    for (size_t index = 0; index < points.size(); ++index) {
-        const auto point = points[index];
-        positions[index] = {m[0] * point.x + m[4] * point.y + m[12] - impl_->origin.x,
-                            m[1] * point.x + m[5] * point.y + m[13] - impl_->origin.y, 0};
-        if (!std::isfinite(positions[index].x) || !std::isfinite(positions[index].y))
-            return;
-    }
+    if (!RelativeQuadPositions(transform, impl_->origin, localCenter, size, positions))
+        return;
     // 2D Z ordering is applied by Scene before batching; flatten Z as DrawRotatedQuad does.
     auto vertices = impl_->Quad({}, {1, 1}, 0, {}, 0, color);
     for (size_t index = 0; index < vertices.size(); ++index)
@@ -294,6 +308,9 @@ bool Renderer2D::Context::DrawSpriteAsset(const Mat4& transform, const std::stri
     if (!impl_ || !impl_->active || !FiniteColor(tint) || !impl_->LockValidState() || !columns ||
         !rows || columns > 4096 || rows > 4096 || frame >= columns * rows)
         return false;
+    std::array<Vec3, 6> positions;
+    if (!RelativeQuadPositions(transform, impl_->origin, {}, {1, 1}, positions))
+        return false;
     auto texture = AssetManager::LoadTexture(path, impl_->device);
     if (!texture || !texture->IsValid())
         return false;
@@ -301,8 +318,6 @@ bool Renderer2D::Context::DrawSpriteAsset(const Mat4& transform, const std::stri
     if (vertices.empty())
         return false;
     impl_->textures.push_back(texture);
-    constexpr std::array<Vec2, 6> corners{
-        {{-.5, -.5}, {.5, -.5}, {.5, .5}, {.5, .5}, {-.5, .5}, {-.5, -.5}}};
     const uint32 column = frame % columns, row = frame / columns;
     const auto bounds = [](uint32 cell, uint32 count, uint32 size) -> std::pair<float, float> {
         if (count == 1)
@@ -315,12 +330,12 @@ bool Renderer2D::Context::DrawSpriteAsset(const Mat4& transform, const std::stri
     };
     const auto [left, right] = bounds(column, columns, texture->GetWidth());
     const auto [top, bottom] = bounds(row, rows, texture->GetHeight());
-    for (size_t i = 0; i < 6; ++i) {
+    for (size_t i = 0; i < vertices.size(); ++i) {
         auto& vertex = vertices[i];
-        vertex.position = transform.TransformPoint({corners[i].x, corners[i].y, 0}) - impl_->origin;
-        vertex.position.z = 0;
-        vertex.uv = {(double(column) + corners[i].x + .5) / columns,
-                     (double(row) + .5 - corners[i].y) / rows};
+        vertex.position = positions[i];
+        const auto corner = QuadCorners[i];
+        vertex.uv = {(double(column) + corner.x + .5) / columns,
+                     (double(row) + .5 - corner.y) / rows};
         vertex.uvBounds = {left, top, right, bottom};
     }
     return true;
@@ -415,12 +430,17 @@ void Renderer2D::DrawQuad(const Vec3& p, const Vec2& size, const Vec4& color) {
 }
 
 void Renderer2D::DrawQuad(const Mat4& transform, const Vec4& color) {
+    DrawQuad(transform, {}, {1, 1}, color);
+}
+
+void Renderer2D::DrawQuad(const Mat4& transform, const Vec2& localCenter, const Vec2& size,
+                          const Vec4& color) {
     if (t_ActiveContext2D) {
-        t_ActiveContext2D->DrawQuad(transform, color);
+        t_ActiveContext2D->DrawQuad(transform, localCenter, size, color);
         return;
     }
     std::lock_guard<std::recursive_mutex> lock(s_DefaultContext2DMutex);
-    DefaultContext2D().DrawQuad(transform, color);
+    DefaultContext2D().DrawQuad(transform, localCenter, size, color);
 }
 
 void Renderer2D::DrawRotatedQuad(const Vec2& p, const Vec2& size, double angle, const Vec4& color) {

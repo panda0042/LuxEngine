@@ -106,6 +106,23 @@ void Curves() {
               reverseBoundary[1].name == "end" &&
               playback.Advance(.25, 1, AnimationWrap::Loop, endpointsAtBoundary).empty(),
           "reverse landing on a loop boundary emits both endpoint events exactly once");
+    playback = {.25, -1, true};
+    const auto crossing = playback.Advance(.5, 1, AnimationWrap::Loop, endpointsAtBoundary);
+    Check(crossing.size() == 2 && crossing[0].name == reverseBoundary[0].name &&
+              crossing[1].name == reverseBoundary[1].name && playback.cursor == -.25,
+          "a single reverse step crosses a loop seam in the same order as two smaller steps");
+    playback = {.75, 1, true};
+    const auto forwardBoundary = playback.Advance(.5, 1, AnimationWrap::Loop, endpointsAtBoundary);
+    Check(forwardBoundary.size() == 2 && forwardBoundary[0].name == "end" &&
+              forwardBoundary[1].name == "start",
+          "a forward crossing emits the end marker before the new loop starts");
+    playback = {.0074, 1, true};
+    const std::vector<AnimationEvent> decimalEndpoints{{0, "start", ""}, {.1, "end", ""}};
+    const auto decimalBoundary =
+        playback.Advance(.1 - .0074, .1, AnimationWrap::Loop, decimalEndpoints);
+    Check(decimalBoundary.size() == 2 && decimalBoundary[0].name == "end" &&
+              decimalBoundary[1].name == "start",
+          "a rounded cycle count cannot drop an event at the forward boundary");
     playback = {0, 1, true};
     Check(playback.Advance(2, 1, AnimationWrap::PingPong, events).size() == 4,
           "ping pong events in both directions");

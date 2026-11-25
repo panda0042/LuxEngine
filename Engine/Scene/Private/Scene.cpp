@@ -358,8 +358,10 @@ bool Scene::GetVelocity3D(uint32 entity, Vec3& velocity) const {
     if (body->type == BodyType::Static)
         return true;
     if (!std::isfinite(body->velocity.x) || !std::isfinite(body->velocity.y) ||
-        !std::isfinite(body->velocity.z) || std::abs(body->velocity.x) > 100000 ||
-        std::abs(body->velocity.y) > 100000 || std::abs(body->velocity.z) > 100000)
+        !std::isfinite(body->velocity.z) ||
+        std::abs(body->velocity.x) > PhysicsWorld::MaxLinearVelocity ||
+        std::abs(body->velocity.y) > PhysicsWorld::MaxLinearVelocity ||
+        std::abs(body->velocity.z) > PhysicsWorld::MaxLinearVelocity)
         return false;
     velocity = body->velocity;
     return true;
@@ -459,7 +461,7 @@ void Scene::OnRender() {
                 continue;
             const auto matrix = GetWorldMatrix(entity.GetId());
             if (!std::all_of(std::begin(matrix.elements), std::end(matrix.elements),
-                             [](float value) { return std::isfinite(value); }))
+                             [](double value) { return std::isfinite(value); }))
                 continue;
             if (tilemaps && entity.HasComponent<TilemapComponent>()) {
                 const auto& map = entity.GetComponent<TilemapComponent>();
@@ -484,10 +486,9 @@ void Scene::OnRender() {
                         const uint8_t tile = map.Get(x, y);
                         if (tile == 0)
                             continue;
-                        Renderer2D::DrawQuad(
-                            matrix * Mat4::Translate({(x + .5f) * size, (y + .5f) * size, 0}) *
-                                Mat4::Scale({size, size, 1}),
-                            Exposed(TileColor(tile), settings_.exposure));
+                        Renderer2D::DrawQuad(matrix, {(x + .5) * size, (y + .5) * size},
+                                             {size, size},
+                                             Exposed(TileColor(tile), settings_.exposure));
                     }
             }
             if (!tilemaps && entity.HasComponent<SpriteRendererComponent>()) {
@@ -1042,7 +1043,9 @@ bool Scene::ValidateForSerialization() {
                 return false;
         }
         if (const auto* sprite = TryGetComponent<SpriteRendererComponent>(id)) {
-            if (!Finite(sprite->color))
+            if (!Finite(sprite->color) || sprite->columns == 0 || sprite->columns > 4096 ||
+                sprite->rows == 0 || sprite->rows > 4096 ||
+                (!sprite->texturePath.empty() && sprite->frame >= sprite->columns * sprite->rows))
                 return false;
         }
         if (const auto* mesh = TryGetComponent<MeshRendererComponent>(id)) {
@@ -1132,7 +1135,8 @@ bool Scene::ValidateForSerialization() {
                 return false;
         }
         if (const auto* animation = TryGetComponent<AnimationComponent>(id)) {
-            if (animation->clip.name.size() > MaxClipNameLength ||
+            if (!std::isfinite(animation->speed) ||
+                animation->clip.name.size() > MaxClipNameLength ||
                 !IsValidUtf8(animation->clip.name) || !std::isfinite(animation->clip.duration) ||
                 animation->clip.duration <= 0 || animation->clip.keyframes.size() > 4096)
                 return false;
@@ -1143,6 +1147,15 @@ bool Scene::ValidateForSerialization() {
                     return false;
                 previousTime = key.time;
             }
+        }
+        if (const auto* animator = TryGetComponent<AnimatorComponent>(id)) {
+            if (animator->parameters.size() > 256)
+                return false;
+            for (const auto& parameter : animator->parameters)
+                if (parameter.type < AnimationParameterType::Float ||
+                    parameter.type > AnimationParameterType::Trigger ||
+                    !std::isfinite(parameter.value))
+                    return false;
         }
     }
     return true;
