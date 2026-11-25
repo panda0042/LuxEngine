@@ -101,6 +101,8 @@ struct GpuFrameStats {
     uint64 gpuTimingFrame = 0;
     double gpuShadowTimeMs = -1.0;
     uint32 requestedShadowPages = 0;
+    double uploadWaitMs = 0.0;
+    double uploadCpuMs = 0.0;
 };
 
 struct GpuDeviceCounters {

@@ -4,11 +4,16 @@
 #include <LuxEngine/Core/Event.hpp>
 #include <functional>
 #include <string>
+#include <vector>
 
 struct SDL_Window;
 union SDL_Event;
 
 namespace LuxEngine {
+
+namespace Forge {
+class ForgeBackend;
+}
 
 enum class ColorTheme { Light, Dark };
 
@@ -72,15 +77,20 @@ public:
     static constexpr uint32 MaxEventsPerPoll = 4096;
 
 private:
+    friend class Forge::ForgeBackend;
+    using SurfaceRelease = std::function<void()>;
+
     void ProcessEvent(const SDL_Event& event);
     bool ApplySystemTheme();
+    void TrackSurfaceRelease(const Ref<SurfaceRelease>& release);
     ColorTheme colorTheme_ = ColorTheme::Light;
     bool hasWindowIcon_ = false;
-    std::function<bool(bool)> presentCallback_;
+    Ref<std::function<bool(bool)>> presentCallback_;
     SDL_Window* window_ = nullptr;
     WindowProps props_;
     bool isRunning_ = false;
-    EventCallbackFn eventCallback_;
+    Ref<EventCallbackFn> eventCallback_;
+    std::vector<std::weak_ptr<SurfaceRelease>> surfaceReleases_;
 };
 
 } // namespace LuxEngine

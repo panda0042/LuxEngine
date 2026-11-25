@@ -90,7 +90,7 @@ public:
     const Mat4& GetViewProjectionMatrix() const;
 
 private:
-    void RecalculateMatrix();
+    void SetView(const Vec3& position, const Vec3& target, const Vec3& up);
 
     Mat4 projectionMatrix_ = Mat4::Identity();
     Mat4 viewMatrix_ = Mat4::Identity();

@@ -55,6 +55,7 @@ protected:
     virtual void OnShutdown();
 
     virtual double GetFixedUpdateStep() const;
+    double GetRenderInterpolationAlpha() const;
 
 private:
     bool OnWindowClose(WindowCloseEvent& e);

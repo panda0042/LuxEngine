@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -317,6 +318,52 @@ constexpr DescriptorType UniformBufferDescriptor = DESCRIPTOR_TYPE_UNDEFINED;
 constexpr DescriptorType UniformBufferDescriptor = DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 #endif
 
+using Clock = std::chrono::steady_clock;
+
+double ElapsedMs(Clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+}
+
+class ResourceUpload {
+public:
+    explicit ResourceUpload(LuxForgeDevice* device)
+        : stats_(device->frameOpen ? &device->frameStats : nullptr),
+          start_(stats_ ? Clock::now() : Clock::time_point{}) {}
+
+    ~ResourceUpload() {
+        if (stats_)
+            stats_->uploadCpuMs += ElapsedMs(start_);
+    }
+
+    template <class Wait> void WaitFor(Wait wait) const {
+        if (!stats_) {
+            wait();
+            return;
+        }
+        const auto start = Clock::now();
+        wait();
+        const double time = ElapsedMs(start);
+        stats_->cpuWaitMs += time;
+        stats_->uploadWaitMs += time;
+    }
+
+    void Flush(LuxForgeDevice* device) const {
+        FlushResourceUpdateDesc flush = {};
+        flushResourceUpdates(&flush);
+        if (flush.pOutFence)
+            WaitFor([&] { waitForFences(device->renderer, 1, &flush.pOutFence); });
+    }
+
+    void AddBytes(uint64_t bytes) const {
+        if (stats_)
+            stats_->uploadBytes += bytes;
+    }
+
+private:
+    LuxForgeStats* stats_;
+    Clock::time_point start_;
+};
+
 void CollectSceneGarbage(LuxForgeDevice* device, bool everything);
 void ShutdownScene(LuxForgeDevice* device);
 void ShutdownFog(LuxForgeDevice* device);
@@ -625,6 +672,7 @@ uint32_t CreateTextureImpl(LuxForgeDevice* device, uint32_t width, uint32_t heig
         device->lastError = "Too many live textures for the Forge backend";
         return 0;
     }
+    const ResourceUpload upload(device);
     // Textures with a dimension of 1 sample as zero after the resource loader upload (seen
     // on D3D12 / RTX 5070), so store them with that dimension doubled. Duplicated texels sample
     // exactly like the original with clamp-to-edge, for both nearest and linear filtering.
@@ -662,7 +710,7 @@ uint32_t CreateTextureImpl(LuxForgeDevice* device, uint32_t width, uint32_t heig
     load.pDesc = &desc;
     load.ppTexture = &texture;
     addResource(&load, nullptr);
-    waitForAllResourceLoads();
+    upload.WaitFor(waitForAllResourceLoads);
     if (!texture) {
         device->lastError = "Texture creation failed";
         return 0;
@@ -689,10 +737,8 @@ uint32_t CreateTextureImpl(LuxForgeDevice* device, uint32_t width, uint32_t heig
     endUpdateResource(&update);
     // Texture updates are recorded by the resource loader's upload engine and only submitted
     // on flushResourceUpdates; wait for that copy so the texture is ready before first use.
-    FlushResourceUpdateDesc flush = {};
-    flushResourceUpdates(&flush);
-    if (flush.pOutFence)
-        waitForFences(device->renderer, 1, &flush.pOutFence);
+    upload.Flush(device);
+    upload.AddBytes(storageBytes);
 
     const uint32_t id = device->freeTextureIds.back();
     device->freeTextureIds.pop_back();
@@ -1218,11 +1264,18 @@ int BeginFrame(LuxForgeDevice* device) {
         return LUX_FORGE_FRAME_SKIPPED;
 #endif
 
+    device->frameStats.uploadBytes = 0;
+    device->frameStats.cpuWaitMs = 0;
+    device->frameStats.uploadWaitMs = 0;
+    device->frameStats.uploadCpuMs = 0;
     device->element = getNextGpuCmdRingElement(&device->cmdRing, true, 1);
     FenceStatus status = FENCE_STATUS_COMPLETE;
     getFenceStatus(device->renderer, device->element.pFence, &status);
-    if (status == FENCE_STATUS_INCOMPLETE)
+    if (status == FENCE_STATUS_INCOMPLETE) {
+        const auto start = Clock::now();
         waitForFences(device->renderer, 1, &device->element.pFence);
+        device->frameStats.cpuWaitMs = ElapsedMs(start);
+    }
     resetCmdPool(device->renderer, device->element.pCmdPool);
     device->frameSlot = device->cmdRing.mPoolIndex;
     if (device->slotSubmitted[device->frameSlot] > device->completedFrames)
@@ -1700,6 +1753,7 @@ uint32_t CreateBuffer(LuxForgeDevice* device, int type, uint32_t sizeBytes) {
         device->lastError = "Buffer needs a size and a valid type";
         return 0;
     }
+    const ResourceUpload upload(device);
     BufferLoadDesc load = {};
     Buffer* buffer = nullptr;
     load.ppBuffer = &buffer;
@@ -1724,11 +1778,8 @@ uint32_t CreateBuffer(LuxForgeDevice* device, int type, uint32_t sizeBytes) {
     }
     load.mDesc.pName = "LuxForge buffer";
     addResource(&load, nullptr);
-    waitForAllResourceLoads();
-    FlushResourceUpdateDesc flush = {};
-    flushResourceUpdates(&flush);
-    if (flush.pOutFence)
-        waitForFences(device->renderer, 1, &flush.pOutFence);
+    upload.WaitFor(waitForAllResourceLoads);
+    upload.Flush(device);
     if (!buffer) {
         device->lastError = "Buffer allocation failed";
         return 0;
@@ -1785,6 +1836,7 @@ uint32_t CreateOceanBuffer(LuxForgeDevice* device, uint32_t n, const float* mode
         patchLength <= 0 || !std::isfinite(foamThreshold) || !std::isfinite(foamSoftness) ||
         foamSoftness <= 0)
         return Fail(device, "Invalid ocean spectrum settings");
+    const ResourceUpload upload(device);
     if (!InitOceanPipelines(device))
         return Fail(device, "Ocean compute pipelines could not be created");
 
@@ -1833,11 +1885,8 @@ uint32_t CreateOceanBuffer(LuxForgeDevice* device, uint32_t n, const float* mode
     constants.mDesc.pName = "LuxOcean uniforms";
     addResource(&constants, nullptr);
 
-    waitForAllResourceLoads();
-    FlushResourceUpdateDesc flush = {};
-    flushResourceUpdates(&flush);
-    if (flush.pOutFence)
-        waitForFences(device->renderer, 1, &flush.pOutFence);
+    upload.WaitFor(waitForAllResourceLoads);
+    upload.Flush(device);
     if (!ocean.seed || !ocean.rows || !ocean.columns || !slot.buffer || !ocean.constants ||
         !ocean.constants->pCpuMappedAddress) {
         ReleaseBuffer(device, slot);
@@ -1884,6 +1933,7 @@ uint32_t CreateOceanBuffer(LuxForgeDevice* device, uint32_t n, const float* mode
              SRT_RES_IDX(LuxOceanAssembleSrt, Persistent, gInput),
              SRT_RES_IDX(LuxOceanAssembleSrt, Persistent, gOutput));
     }
+    upload.AddBytes(static_cast<uint64_t>(n) * n * 4 * 8);
     return TrackBuffer(device, slot);
 }
 
@@ -1956,13 +2006,14 @@ int UpdateBuffer(LuxForgeDevice* device, uint32_t id, const void* data, uint32_t
         return Fail(device, "Ocean vertices are generated by compute");
     if (!data || sizeBytes == 0 || static_cast<uint64_t>(offsetBytes) + sizeBytes > slot.size)
         return Fail(device, "UpdateBuffer range is outside the buffer");
+    const ResourceUpload upload(device);
     // Frames still reading the buffer must finish before the copy changes it.
     // Like the Vulkan backend, an update made during a frame is visible to that whole frame
     // (the copy runs before the frame is submitted); only already submitted frames are waited for.
     const uint64_t lastSubmittedUse =
         slot.lastUsedFrame < device->frameNumber ? slot.lastUsedFrame : device->frameNumber;
     if (lastSubmittedUse > device->completedFrames) {
-        waitQueueIdle(device->graphicsQueue);
+        upload.WaitFor([&] { waitQueueIdle(device->graphicsQueue); });
         device->completedFrames = device->frameNumber;
     }
     BufferUpdateDesc update = {};
@@ -1978,10 +2029,8 @@ int UpdateBuffer(LuxForgeDevice* device, uint32_t id, const void* data, uint32_t
         return Fail(device, "UpdateBuffer could not map upload memory");
     std::memcpy(update.pMappedData, data, sizeBytes);
     endUpdateResource(&update);
-    FlushResourceUpdateDesc flush = {};
-    flushResourceUpdates(&flush);
-    if (flush.pOutFence)
-        waitForFences(device->renderer, 1, &flush.pOutFence);
+    upload.Flush(device);
+    upload.AddBytes(sizeBytes);
     if (slot.type == LUX_FORGE_BUFFER_VERTEX || slot.type == LUX_FORGE_BUFFER_INDEX)
         UpdateForgeRayBuffer(device->rayTracing, slot.buffer, slot.type, slot.size, data, sizeBytes,
                              offsetBytes, device->frameNumber + (device->frameOpen ? 1 : 0));
@@ -2611,7 +2660,7 @@ bool IsLiveEnvironment(const LuxForgeDevice* device, uint32_t id) {
 }
 
 Texture* UploadEnvironmentImage(LuxForgeDevice* device, const LuxForgeEnvironmentImage& image,
-                                uint64_t& bytes) {
+                                uint64_t& bytes, const ResourceUpload& upload) {
     TextureDesc desc = {};
     desc.mWidth = image.size;
     desc.mHeight = image.size;
@@ -2630,7 +2679,7 @@ Texture* UploadEnvironmentImage(LuxForgeDevice* device, const LuxForgeEnvironmen
     load.pDesc = &desc;
     load.ppTexture = &texture;
     addResource(&load, nullptr);
-    waitForAllResourceLoads();
+    upload.WaitFor(waitForAllResourceLoads);
     if (!texture)
         return nullptr;
     TextureUpdateDesc update = {
@@ -2684,9 +2733,10 @@ uint32_t CreateEnvironment(LuxForgeDevice* device, const LuxForgeEnvironmentImag
         device->lastError = "Too many live environments for the Forge backend";
         return 0;
     }
+    const ResourceUpload upload(device);
     LuxForgeDevice::EnvironmentSlot slot;
     for (uint32_t i = 0; i < 4; ++i) {
-        slot.maps[i] = UploadEnvironmentImage(device, images[i], slot.bytes);
+        slot.maps[i] = UploadEnvironmentImage(device, images[i], slot.bytes, upload);
         if (!slot.maps[i]) {
             for (Texture* map : slot.maps)
                 if (map)
@@ -2695,10 +2745,8 @@ uint32_t CreateEnvironment(LuxForgeDevice* device, const LuxForgeEnvironmentImag
             return 0;
         }
     }
-    FlushResourceUpdateDesc flush = {};
-    flushResourceUpdates(&flush);
-    if (flush.pOutFence)
-        waitForFences(device->renderer, 1, &flush.pOutFence);
+    upload.Flush(device);
+    upload.AddBytes(slot.bytes);
     const uint32_t id = device->freeEnvironmentIds.back();
     device->freeEnvironmentIds.pop_back();
     if (id >= device->environments.size())

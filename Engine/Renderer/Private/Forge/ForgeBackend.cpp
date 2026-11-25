@@ -24,6 +24,8 @@
 
 namespace LuxEngine::Forge {
 namespace {
+const std::string SurfaceLostError = "The rendering window was closed";
+
 std::array<float, 16> GpuMatrix(const Mat4& matrix) {
     std::array<float, 16> result;
     std::transform(std::begin(matrix.elements), std::end(matrix.elements), result.begin(),
@@ -164,7 +166,10 @@ bool ForgeBackend::Initialize(Window& window, const GpuDeviceConfig& config) {
     info_.gpuTimestamps = forgeInfo.gpuTimestamps != 0;
     info_.rayTracing = forgeInfo.rayTracing != 0;
 
+    auto release = CreateRef<std::function<void()>>([this] { ReleaseSurface(); });
+    window.TrackSurfaceRelease(release);
     lib_ = std::move(lib);
+    surfaceRelease_ = std::move(release);
     window_ = &window;
     status_ = GpuStatus::Ready;
     lastError_.clear();
@@ -174,6 +179,7 @@ bool ForgeBackend::Initialize(Window& window, const GpuDeviceConfig& config) {
 }
 
 void ForgeBackend::Shutdown() {
+    surfaceRelease_.reset();
     textures_.clear();
     buffers_.clear();
     lib_.reset();
@@ -182,6 +188,11 @@ void ForgeBackend::Shutdown() {
     resizePending_ = false;
     if (status_ != GpuStatus::Uninitialized)
         status_ = GpuStatus::Uninitialized;
+}
+
+void ForgeBackend::ReleaseSurface() noexcept {
+    Shutdown();
+    status_ = lastFailure_ = GpuStatus::SurfaceLost;
 }
 
 bool ForgeBackend::Usable() const {
@@ -197,7 +208,7 @@ GpuStatus ForgeBackend::GetLastFailure() const {
 }
 
 const std::string& ForgeBackend::GetLastError() const {
-    return lastError_;
+    return status_ == GpuStatus::SurfaceLost ? SurfaceLostError : lastError_;
 }
 
 const GpuDeviceInfo& ForgeBackend::GetInfo() const {
@@ -205,32 +216,39 @@ const GpuDeviceInfo& ForgeBackend::GetInfo() const {
 }
 
 GpuFrameStats ForgeBackend::GetFrameStats() const {
-    return frameStats_;
+    auto frame = frameStats_;
+    if (frameOpen_)
+        CollectFrameStats(frame);
+    return frame;
 }
 
-void ForgeBackend::UpdateFrameStats() {
+void ForgeBackend::CollectFrameStats(GpuFrameStats& frame) const {
     LuxForgeStats stats = {};
     lib_->api->stats(lib_->device, &stats);
-    frameStats_.drawCalls = stats.drawCalls;
-    frameStats_.pipelineBinds = stats.pipelineBinds;
-    frameStats_.descriptorBinds = stats.descriptorBinds;
-    frameStats_.uniformBinds = stats.uniformBinds;
-    frameStats_.computeDispatches = stats.computeDispatches;
-    frameStats_.rayTracedPasses = stats.rayTracedPasses;
-    frameStats_.accelerationStructureBuilds = stats.accelerationStructureBuilds;
-    frameStats_.volumetricFogPasses = stats.volumetricFogPasses;
-    frameStats_.rayVolumetricFogPasses = stats.rayVolumetricFogPasses;
-    frameStats_.waterReflectionPasses = stats.waterReflectionPasses;
-    frameStats_.temporalResolvePasses = stats.temporalResolvePasses;
-    frameStats_.temporalHistoryPasses = stats.temporalHistoryPasses;
-    frameStats_.restirPasses = stats.restirPasses;
-    frameStats_.radianceCascadePasses = stats.radianceCascadePasses;
-    frameStats_.virtualShadowPages = stats.virtualShadowPages;
-    frameStats_.requestedShadowPages = stats.requestedShadowPages;
-    frameStats_.vertexBytes = stats.vertexBytes;
-    frameStats_.gpuTimingFrame = stats.gpuTimingFrame;
-    frameStats_.gpuTimeMs = stats.gpuTimeMs;
-    frameStats_.gpuShadowTimeMs = stats.gpuShadowTimeMs;
+    frame.drawCalls = stats.drawCalls;
+    frame.pipelineBinds = stats.pipelineBinds;
+    frame.descriptorBinds = stats.descriptorBinds;
+    frame.uniformBinds = stats.uniformBinds;
+    frame.computeDispatches = stats.computeDispatches;
+    frame.rayTracedPasses = stats.rayTracedPasses;
+    frame.accelerationStructureBuilds = stats.accelerationStructureBuilds;
+    frame.volumetricFogPasses = stats.volumetricFogPasses;
+    frame.rayVolumetricFogPasses = stats.rayVolumetricFogPasses;
+    frame.waterReflectionPasses = stats.waterReflectionPasses;
+    frame.temporalResolvePasses = stats.temporalResolvePasses;
+    frame.temporalHistoryPasses = stats.temporalHistoryPasses;
+    frame.restirPasses = stats.restirPasses;
+    frame.radianceCascadePasses = stats.radianceCascadePasses;
+    frame.virtualShadowPages = stats.virtualShadowPages;
+    frame.requestedShadowPages = stats.requestedShadowPages;
+    frame.vertexBytes = stats.vertexBytes;
+    frame.uploadBytes = stats.uploadBytes;
+    frame.cpuWaitMs = stats.cpuWaitMs;
+    frame.uploadWaitMs = stats.uploadWaitMs;
+    frame.uploadCpuMs = stats.uploadCpuMs;
+    frame.gpuTimingFrame = stats.gpuTimingFrame;
+    frame.gpuTimeMs = stats.gpuTimeMs;
+    frame.gpuShadowTimeMs = stats.gpuShadowTimeMs;
 }
 
 GpuDeviceCounters ForgeBackend::GetCounters() const {
@@ -325,7 +343,6 @@ bool ForgeBackend::DrawTexturedTriangles(std::span<const RenderVertex> vertices,
             static_cast<uint32_t>(vertices.size()), GpuMatrix(viewProjection).data(),
             static_cast<uint32_t>(texture), depth ? 1 : 0))
         return ForgeFailure();
-    UpdateFrameStats();
     return true;
 }
 
@@ -379,7 +396,6 @@ bool ForgeBackend::DrawIndexed(uint64 vertexBuffer, uint64 indexBuffer, uint32 i
                                 GpuMatrix(viewProjection).data(), GpuMatrix(model).data(), colour,
                                 static_cast<uint32_t>(texture), metallic, roughness, pbr ? 1 : 0))
         return ForgeFailure();
-    UpdateFrameStats();
     return true;
 }
 
@@ -389,9 +405,10 @@ bool ForgeBackend::EndFrame() {
     if (!frameOpen_)
         return Reject("EndFrame called without BeginFrame");
     frameOpen_ = false;
-    if (!lib_->api->endFrame(lib_->device))
+    const bool submitted = lib_->api->endFrame(lib_->device) != 0;
+    CollectFrameStats(frameStats_);
+    if (!submitted)
         return ForgeFailure();
-    UpdateFrameStats();
     ++counters_.framesSubmitted;
     ++counters_.submissions;
     frameStats_.submissions = 1;
@@ -458,6 +475,8 @@ bool ForgeBackend::CreateBuffer(BufferType type, uint32 sizeBytes, uint64& handl
     case BufferType::Storage:
         forgeType = LUX_FORGE_BUFFER_STORAGE;
         break;
+    default:
+        return Reject("Unknown GPU buffer type");
     }
     const uint32_t id = lib_->api->createBuffer(lib_->device, forgeType, sizeBytes);
     if (!id)
@@ -756,7 +775,6 @@ public:
             error = reason;
             return Fallback(origin, viewProjection, exposure);
         }
-        backend_->UpdateFrameStats();
         if (drawn < draws_.size())
             error = "3D object budget reached; excess objects skipped";
         for (const auto& environmentError :

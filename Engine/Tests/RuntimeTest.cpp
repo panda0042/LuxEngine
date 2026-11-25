@@ -354,12 +354,17 @@ void StreamingObserverSkipsInvalidPlayer() {
 void FixedUpdateTime() {
     constexpr double step = 1.0 / 30;
     LuxEngine::FixedStepAccumulator clock;
+    Check(clock.InterpolationAlpha(step) == 0, "render phase starts at zero");
     clock.AddElapsed(step / 2);
     Check(!clock.Consume(step), "a fractional step waits for more elapsed time");
+    Check(clock.InterpolationAlpha(step) == .5, "render phase advances between simulation ticks");
     clock.AddElapsed(step * 3);
+    Check(clock.InterpolationAlpha(step) == 1, "render phase clamps pending full ticks");
     for (int i = 0; i < 3; ++i)
         Check(clock.Consume(step), "a delayed frame performs multiple scene ticks");
     Check(!clock.Consume(step), "the remaining fraction does not advance an extra tick");
+    Check(std::abs(clock.InterpolationAlpha(step) - .5) < 1e-12,
+          "render phase retains the fractional remainder after catch-up ticks");
     clock.AddElapsed(step * .51);
     Check(clock.Consume(step), "substep time is carried across frames");
     clock.AddElapsed(5);
@@ -367,6 +372,10 @@ void FixedUpdateTime() {
         Check(clock.Consume(step), "the catch-up cap still permits timely simulation");
     clock.DropBacklog(step);
     Check(!clock.Consume(step), "excess backlog is dropped after catch-up");
+    Check(clock.InterpolationAlpha(step) == 0, "discarded backlog also resets the render phase");
+    Check(clock.InterpolationAlpha(0) == 1 &&
+              clock.InterpolationAlpha(std::numeric_limits<double>::quiet_NaN()) == 1,
+          "an invalid fixed step uses the current pose");
 }
 
 // Writes a small platformer scene for the LuxPlayer smoke test.

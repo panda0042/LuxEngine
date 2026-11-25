@@ -22,6 +22,7 @@ public:
 
     void AddElapsed(double seconds);
     bool Consume(double step);
+    double InterpolationAlpha(double step) const;
     void DropBacklog(double step);
     void Reset();
 

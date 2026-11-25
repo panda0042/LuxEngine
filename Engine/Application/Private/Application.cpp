@@ -295,4 +295,8 @@ void Application::OnShutdown() {}
 double Application::GetFixedUpdateStep() const {
     return 1.0 / 60.0;
 }
+
+double Application::GetRenderInterpolationAlpha() const {
+    return fixedUpdates_.InterpolationAlpha(GetFixedUpdateStep());
+}
 } // namespace LuxEngine

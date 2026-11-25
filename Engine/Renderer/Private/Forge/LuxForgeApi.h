@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 20u
+#define LUX_FORGE_API_VERSION 21u
 
 #if defined(_WIN32)
 #if defined(LUX_FORGE_BUILD)
@@ -99,6 +99,10 @@ typedef struct LuxForgeStats {
     uint64_t gpuTimingFrame;
     double gpuTimeMs;
     double gpuShadowTimeMs;
+    uint64_t uploadBytes;
+    double cpuWaitMs;
+    double uploadWaitMs;
+    double uploadCpuMs;
 } LuxForgeStats;
 
 typedef struct LuxForgePointLight {
@@ -163,7 +167,8 @@ typedef struct LuxForgeScene {
     float viewProjection[16];
     float camera[4];      // xyz: position, w: exposure
     float environment[4]; // rgb: ambient colour, w: intensity
-    float options[4];     // x: rotation (radians), y: image-based lighting, z: flags (ACES 1, edge AA 2), w: sky
+    float options[4]; // x: rotation (radians), y: image-based lighting, z: flags (ACES 1, edge AA
+                      // 2), w: sky
     float right[4];
     float up[4];
     float forward[4];
