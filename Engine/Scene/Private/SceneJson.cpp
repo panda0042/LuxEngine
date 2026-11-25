@@ -640,12 +640,14 @@ bool Scene::DeserializeJson(const std::string& data) {
                     SpriteRendererComponent component;
                     RequireValidScene(value.is_object());
                     ReadJsonValue(value.at("color"), component.color);
-                    component.texturePath = value.value("texture", std::string{});
-                    component.frame = value.value("frame", 0u);
-                    component.columns = value.value("columns", 1u);
-                    component.rows = value.value("rows", 1u);
-                    RequireValidScene(component.columns > 0 && component.rows > 0 &&
-                                      component.columns <= 4096 && component.rows <= 4096);
+                    if (value.contains("texture"))
+                        ReadJsonValue(value.at("texture"), component.texturePath);
+                    if (value.contains("frame"))
+                        ReadJsonValue(value.at("frame"), component.frame);
+                    if (value.contains("columns"))
+                        ReadJsonValue(value.at("columns"), component.columns);
+                    if (value.contains("rows"))
+                        ReadJsonValue(value.at("rows"), component.rows);
                     entity.AddComponent<SpriteRendererComponent>(std::move(component));
                 } else if (name == "mesh") {
                     MeshRendererComponent component;
@@ -779,9 +781,12 @@ bool Scene::DeserializeJson(const std::string& data) {
                     ReadJsonValue(value.at("loop"), component.clip.loop);
                     ReadJsonValue(value.at("playing"), component.playing);
                     ReadJsonValue(value.at("keyframes"), component.clip.keyframes);
-                    component.assetPath = value.value("asset", std::string{});
-                    component.speed = value.value("speed", 1.0);
-                    component.rootMotion = value.value("root_motion", false);
+                    if (value.contains("asset"))
+                        ReadJsonValue(value.at("asset"), component.assetPath);
+                    if (value.contains("speed"))
+                        ReadJsonValue(value.at("speed"), component.speed);
+                    if (value.contains("root_motion"))
+                        ReadJsonValue(value.at("root_motion"), component.rootMotion);
                     if (value.contains("clip_data")) {
                         std::string error;
                         auto clip =
@@ -792,16 +797,20 @@ bool Scene::DeserializeJson(const std::string& data) {
                     entity.AddComponent<AnimationComponent>(std::move(component));
                 } else if (name == "animator") {
                     AnimatorComponent component;
-                    component.controllerPath = value.at("controller");
-                    component.playing = value.at("playing");
-                    component.rootMotion = value.at("root_motion");
-                    RequireValidScene(value.at("parameters").size() <= 256);
-                    for (const auto& p : value.at("parameters")) {
-                        const int type = p.at("type");
-                        const double number = p.at("value");
-                        RequireValidScene(type >= 0 && type <= 3 && std::isfinite(number));
-                        component.parameters.push_back(
-                            {p.at("name"), AnimationParameterType(type), number});
+                    RequireValidScene(value.is_object());
+                    ReadJsonValue(value.at("controller"), component.controllerPath);
+                    ReadJsonValue(value.at("playing"), component.playing);
+                    ReadJsonValue(value.at("root_motion"), component.rootMotion);
+                    const auto& parameters = value.at("parameters");
+                    RequireValidScene(parameters.is_array() && parameters.size() <= 256);
+                    for (const auto& p : parameters) {
+                        AnimationParameter parameter;
+                        int type = 0;
+                        ReadJsonValue(p.at("name"), parameter.name);
+                        ReadJsonValue(p.at("type"), type);
+                        ReadJsonValue(p.at("value"), parameter.value);
+                        parameter.type = static_cast<AnimationParameterType>(type);
+                        component.parameters.push_back(std::move(parameter));
                     }
                     entity.AddComponent<AnimatorComponent>(std::move(component));
                 } else if (name == "hierarchy") {

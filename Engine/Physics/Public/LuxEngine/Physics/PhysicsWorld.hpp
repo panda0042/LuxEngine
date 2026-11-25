@@ -47,6 +47,7 @@ struct Collision3DEvent {
 class LUX_API PhysicsWorld final {
 public:
     static constexpr double MinBodyExtent = 1e-6;
+    static constexpr float MaxLinearVelocity = 200000.f;
     explicit PhysicsWorld(bool planar = false);
     ~PhysicsWorld();
     PhysicsWorld(const PhysicsWorld&) = delete;

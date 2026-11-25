@@ -23,7 +23,11 @@ void Test() {
     auto& transform = root.GetComponent<TransformComponent>();
     transform.position = {1.25f, -2.5f, 3};
     transform.rotation = {.1f, .2f, .3f};
-    root.AddComponent<SpriteRendererComponent>().color = {.1f, .2f, .3f, .4f};
+    auto& sprite = root.AddComponent<SpriteRendererComponent>();
+    sprite.color = {.1f, .2f, .3f, .4f};
+    sprite.texturePath = "Assets/atlas.png";
+    sprite.columns = sprite.rows = 2;
+    sprite.frame = 3;
     auto& mesh = root.AddComponent<MeshRendererComponent>();
     mesh.meshPath = "Assets/메시.obj";
     mesh.material.baseColorTexture = "Assets/색상.png";
@@ -50,6 +54,9 @@ void Test() {
     auto& animation = root.AddComponent<AnimationComponent>();
     animation.clip.name = "걷기";
     animation.clip.AddKeyframe({.time = .25f, .position = {1, 2, 3}});
+    auto& animator = root.AddComponent<AnimatorComponent>();
+    animator.controllerPath = "Assets/Walk.luxanimator";
+    animator.parameters = {{"Speed", AnimationParameterType::Float, 1.5}};
     auto& reference = root.AddComponent<SceneReferenceComponent>();
     reference.path = "Scenes/원본.lux";
     reference.baseline = "LuxEngineScene 2 0\n";
@@ -137,6 +144,44 @@ void Test() {
         fn(bad);
         reject(bad.dump());
     };
+
+    auto legacySpriteJson = json;
+    legacySpriteJson["entities"][0]["components"]["sprite"] = {{"color", {.1, .2, .3, .4}}};
+    Scene legacySpriteScene;
+    Check(legacySpriteScene.DeserializeFromString(legacySpriteJson.dump()), "legacy sprite loads");
+    const auto& legacySprite =
+        legacySpriteScene.GetComponent<SpriteRendererComponent>(root.GetId());
+    Check(legacySprite.texturePath.empty() && legacySprite.frame == 0 &&
+              legacySprite.columns == 1 && legacySprite.rows == 1,
+          "legacy sprite retains its untextured defaults");
+    for (const auto* key : {"columns", "rows"})
+        for (const auto& invalid : {Json(0), Json(-1), Json(4097), Json(4294967297ull), Json(2.5)})
+            mutate([&](auto& j) { j["entities"][0]["components"]["sprite"][key] = invalid; });
+    for (const auto& invalid : {Json(4), Json(-1), Json(4294967297ull), Json(1.5)})
+        mutate([&](auto& j) { j["entities"][0]["components"]["sprite"]["frame"] = invalid; });
+    sprite.frame = 4;
+    Check(!scene.SerializeToString(second), "out-of-range textured sprite frame cannot be saved");
+    sprite.frame = 3;
+
+    animation.speed = std::numeric_limits<double>::infinity();
+    Check(!scene.SerializeToString(second), "non-finite clip playback speed cannot be saved");
+    animation.speed = 1;
+    animator.parameters.resize(257, animator.parameters.front());
+    Check(!scene.SerializeToString(second), "too many animator parameters cannot be saved");
+    animator.parameters.resize(1);
+    animator.parameters.front().type = static_cast<AnimationParameterType>(4);
+    Check(!scene.SerializeToString(second), "unknown animator parameter type cannot be saved");
+    animator.parameters.front().type = AnimationParameterType::Float;
+    mutate([](auto& j) { j["entities"][0]["components"]["animation"]["speed"] = nullptr; });
+    mutate(
+        [](auto& j) { j["entities"][0]["components"]["animator"]["parameters"] = Json::object(); });
+    for (const auto& invalid : {Json(4), Json(-1), Json(4294967297ull), Json(1.5)})
+        mutate([&](auto& j) {
+            j["entities"][0]["components"]["animator"]["parameters"][0]["type"] = invalid;
+        });
+    mutate([](auto& j) {
+        j["entities"][0]["components"]["animator"]["parameters"][0]["value"] = nullptr;
+    });
 
     for (const auto* key : {"alpha_mode", "alpha_cutoff", "normal_scale", "occlusion_strength"})
         mutate([key](auto& j) { j["entities"][0]["components"]["mesh"][key] = -1; });

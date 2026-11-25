@@ -146,6 +146,58 @@ int main() {
             GpuFrameCapture image;
             if (!gpu.ReadFrameCapture(image) || center(image) < 100)
                 throw std::runtime_error("2D large-world sprite disappeared");
+
+            Scene sprites;
+            auto sprite = sprites.CreateEntity("Camera centered sprite");
+            auto& spriteTransform = sprite.GetComponent<TransformComponent>();
+            spriteTransform.scale = {.14, .14, 1};
+            auto& imageSprite = sprite.AddComponent<SpriteRendererComponent>();
+            imageSprite.color = {1, 0, 0, 1};
+            OrthographicCamera rotated(-.73, .73, -.51, .51);
+            rotated.SetRotation(.31);
+            const auto capture2D = [&](Scene& source, TransformComponent& placement, double origin,
+                                       uint32 expectedQuads) {
+                rotated.SetPosition({origin, origin, 0});
+                placement.position = rotated.GetPosition();
+                if (gpu.BeginFrame() != GpuDevice::FrameStart::Ready || !gpu.Clear(0, 0, 0, 1) ||
+                    !gpu.RequestFrameCapture())
+                    throw std::runtime_error("Rotated 2D frame failed");
+                renderer2d.BeginScene(rotated);
+                Vec2 minimum, maximum;
+                if (!renderer2d.GetVisibleLocalBounds(placement.GetTransform(), minimum, maximum) ||
+                    std::abs(minimum.x + maximum.x) > 1e-9 ||
+                    std::abs(minimum.y + maximum.y) > 1e-9)
+                    throw std::runtime_error("Rotated 2D local bounds shifted away from center");
+                source.OnRender();
+                renderer2d.EndScene();
+                GpuFrameCapture result;
+                if (renderer2d.GetStats().quadCount != expectedQuads ||
+                    renderer2d.GetStats().drawCalls != 1 || !gpu.EndFrame() ||
+                    !gpu.ReadFrameCapture(result))
+                    throw std::runtime_error("Rotated 2D capture failed");
+                return result.rgba;
+            };
+            for (const std::string texture : {"", LUX_WORLD64_TEXTURE_FIXTURE}) {
+                imageSprite.texturePath = texture;
+                const auto reference = capture2D(sprites, spriteTransform, 0, 1);
+                if (capture2D(sprites, spriteTransform, 1e15, 1) != reference)
+                    throw std::runtime_error("Rotated 2D sprite shifted or changed size");
+            }
+
+            Scene grid;
+            auto tilemap = grid.CreateEntity("Small tiles");
+            auto& tileTransform = tilemap.GetComponent<TransformComponent>();
+            auto& cells = tilemap.AddComponent<TilemapComponent>();
+            if (!cells.Resize(4, 2))
+                throw std::runtime_error("Could not create small tilemap");
+            cells.tileSize = .14;
+            for (uint32 y = 0; y < cells.height; ++y)
+                for (uint32 x = 0; x < cells.width; ++x)
+                    cells.Set(x, y, static_cast<uint8_t>(1 + (x + y) % 3));
+            const auto reference = capture2D(grid, tileTransform, 0, 8);
+            if (capture2D(grid, tileTransform, 1e12, 8) != reference ||
+                capture2D(grid, tileTransform, 1e15, 8) != reference)
+                throw std::runtime_error("Tilemap cells shifted under large translation");
         }
 
         {
