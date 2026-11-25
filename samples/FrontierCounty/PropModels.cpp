@@ -97,57 +97,75 @@ void PropModels::Load(GpuDevice& gpu, const std::filesystem::path& assets) {
 
 void PropModels::Draw(Renderer3D::Context& renderer, std::string_view key, Vec3 ground,
                       Vec3 dimensions, double yaw) const {
+    Draw(renderer, key, Mat4::Translate(ground) * Mat4::RotateY(yaw), dimensions);
+}
+
+void PropModels::Draw(Renderer3D::Context& renderer, std::string_view key, const Mat4& placement,
+                      Vec3 dimensions) const {
     const auto model = models_.find(key);
     if (model == models_.end())
         throw std::runtime_error("Unknown prop asset: " + std::string(key));
     const auto& source = model->second;
     const Vec3 scale{dimensions.x / source.dimensions.x, dimensions.y / source.dimensions.y,
                      dimensions.z / source.dimensions.z};
-    const auto transform = Mat4::Translate(ground) * Mat4::RotateY(yaw) * Mat4::Scale(scale) *
-                           Mat4::Translate(source.center * -1);
+    const auto transform = placement * Mat4::Scale(scale) * Mat4::Translate(source.center * -1);
     for (const auto& part : source.parts)
         renderer.DrawMesh(*part.mesh, transform, part.material);
 }
 
-std::vector<PropModels::Part> PropModels::Batch(GpuDevice& gpu, std::string_view key,
-                                                std::span<const Plant> plants, Vec3 origin) const {
-    std::vector<Part> parts;
+std::deque<PropModels::Geometry> PropModels::BuildGroundCover(ChunkKey tile, unsigned seed) const {
+    const auto plants = GroundCover(tile, seed);
+    const Vec3 origin{double(tile.x * CoverTileSize), 0, double(tile.z * CoverTileSize)};
+    std::deque<Geometry> batches;
+    BuildBatches("grass-clump", plants[0], origin, batches);
+    BuildBatches("sedge-tuft", plants[1], origin, batches);
+    return batches;
+}
+
+void PropModels::BuildBatches(std::string_view key, std::span<const Plant> plants, Vec3 origin,
+                              std::deque<Geometry>& batches) const {
     if (plants.empty())
-        return parts;
+        return;
     const auto found = models_.find(key);
     if (found == models_.end())
         throw std::runtime_error("Unknown foliage asset: " + std::string(key));
     const auto& model = found->second;
+    constexpr uint64 ByteBudget = 12ull * 1024 * 1024;
     for (const auto& source : model.batchGeometry) {
-        MeshData data;
-        data.vertices.reserve(plants.size() * source.mesh.vertices.size());
-        data.indices.reserve(plants.size() * source.mesh.indices.size());
-        for (const auto& plant : plants) {
-            const Vec3 scale{plant.dimensions.x / model.dimensions.x,
-                             plant.dimensions.y / model.dimensions.y,
-                             plant.dimensions.z / model.dimensions.z};
-            const auto rotation = Mat4::RotateY(plant.yaw);
-            const auto transform = Mat4::Translate(plant.ground - origin) * rotation *
-                                   Mat4::Scale(scale) * Mat4::Translate(model.center * -1);
-            const uint32 base = uint32(data.vertices.size());
-            for (const auto& vertex : source.mesh.vertices) {
-                const auto normal = vertex.normal;
-                const auto direction =
-                    rotation
-                        .TransformDirection(
-                            {normal.x / scale.x, normal.y / scale.y, normal.z / scale.z})
-                        .Normalized();
-                data.vertices.push_back({transform.TransformPoint(vertex.position), direction,
-                                         vertex.texCoords, vertex.color});
+        const auto bytesPerPlant = source.mesh.UploadBytes();
+        if (!bytesPerPlant)
+            continue;
+        const size_t maxPlants = size_t(std::max<uint64>(1, ByteBudget / bytesPerPlant));
+        for (auto remaining = plants; !remaining.empty();) {
+            const auto batch = remaining.first(std::min(remaining.size(), maxPlants));
+            remaining = remaining.subspan(batch.size());
+            MeshData data;
+            data.vertices.reserve(batch.size() * source.mesh.vertices.size());
+            data.indices.reserve(batch.size() * source.mesh.indices.size());
+            for (const auto& plant : batch) {
+                const Vec3 scale{plant.dimensions.x / model.dimensions.x,
+                                 plant.dimensions.y / model.dimensions.y,
+                                 plant.dimensions.z / model.dimensions.z};
+                const auto rotation = Mat4::RotateY(plant.yaw);
+                const auto transform = Mat4::Translate(plant.ground - origin) * rotation *
+                                       Mat4::Scale(scale) * Mat4::Translate(model.center * -1);
+                const uint32 base = uint32(data.vertices.size());
+                for (const auto& vertex : source.mesh.vertices) {
+                    const auto normal = vertex.normal;
+                    const auto direction =
+                        rotation
+                            .TransformDirection(
+                                {normal.x / scale.x, normal.y / scale.y, normal.z / scale.z})
+                            .Normalized();
+                    data.vertices.push_back({transform.TransformPoint(vertex.position), direction,
+                                             vertex.texCoords, vertex.color});
+                }
+                for (const auto index : source.mesh.indices)
+                    data.indices.push_back(base + index);
             }
-            for (const auto index : source.mesh.indices)
-                data.indices.push_back(base + index);
+            batches.push_back({std::move(data), source.material});
         }
-        auto mesh = std::make_unique<Mesh3D>();
-        data.Upload(gpu, *mesh);
-        parts.push_back({std::move(mesh), source.material});
     }
-    return parts;
 }
 
 void PropModels::Release() {

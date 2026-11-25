@@ -283,6 +283,62 @@ void Core() {
                   stablePerspective.GetViewProjectionMatrix().elements[index] ==
                       previousViewProjection.elements[index],
               "rejected perspective settings preserve the previous projection and camera state");
+
+    const auto unitBasis = [](const Mat4& view) {
+        const auto* m = view.elements;
+        const Vec3 x{m[0], m[4], m[8]}, y{m[1], m[5], m[9]}, z{m[2], m[6], m[10]};
+        return std::abs(x.Dot(x) - 1) < 1e-12 && std::abs(y.Dot(y) - 1) < 1e-12 &&
+               std::abs(z.Dot(z) - 1) < 1e-12 && x.Cross(y).Dot(z) > 1 - 1e-12;
+    };
+    const auto tinyLook = Mat4::LookAt({}, {1e-9, 0, 0}, {0, 1, 0});
+    Check(unitBasis(tinyLook) && tinyLook.elements[2] == -1,
+          "a nearby target keeps its look direction and an orthonormal view basis");
+    Check(unitBasis(Mat4::LookAt({}, {0, 1, 0}, {0, 1, 1e-9})) &&
+              unitBasis(Mat4::LookAt({}, {0, 1, 0}, {0, 1, 0})) &&
+              unitBasis(Mat4::LookAt({}, {}, {})),
+          "nearly parallel, parallel, and degenerate up vectors produce valid view bases");
+    constexpr double maxCoordinate = std::numeric_limits<double>::max();
+    const auto hugeLook = Mat4::LookAt({}, {maxCoordinate, maxCoordinate, 0}, {0, 0, 1});
+    const auto overflowingDelta =
+        Mat4::LookAt({-maxCoordinate, 0, 0}, {maxCoordinate, 0, 0}, {0, 1, 0});
+    Check(unitBasis(hugeLook) && std::abs(hugeLook.elements[2] + std::sqrt(.5)) < 1e-12 &&
+              unitBasis(overflowingDelta) && overflowingDelta.elements[2] == -1 &&
+              overflowingDelta.elements[14] == -maxCoordinate,
+          "view orientation avoids length and subtraction overflow for finite positions");
+
+    PerspectiveCamera defaultCamera;
+    Check(
+        defaultCamera.GetViewMatrix().TransformPoint(defaultCamera.GetPosition()).Dot({0, 0, 1}) ==
+                0 &&
+            defaultCamera.GetViewMatrix().elements[14] == -5,
+        "default camera view matches its initial eye position");
+    stablePerspective.SetTarget({4, 5, 1});
+    const auto savedView = stablePerspective.GetViewMatrix();
+    const auto savedViewProjection = stablePerspective.GetViewProjectionMatrix();
+    const auto savedPosition = stablePerspective.GetPosition();
+    const auto savedTarget = stablePerspective.GetTarget();
+    constexpr double nanCoordinate = std::numeric_limits<double>::quiet_NaN();
+    Throws([&] { stablePerspective.SetPosition({nanCoordinate, 0, 0}); }, "invalid eye rejected");
+    Throws([&] { stablePerspective.SetTarget({0, nanCoordinate, 0}); }, "invalid target rejected");
+    Throws([&] { stablePerspective.SetUp({0, 1, nanCoordinate}); }, "invalid camera up rejected");
+    const auto sameMatrix = [](const Mat4& a, const Mat4& b) {
+        return std::equal(std::begin(a.elements), std::end(a.elements), std::begin(b.elements));
+    };
+    const auto positionChange = savedPosition - stablePerspective.GetPosition();
+    const auto targetChange = savedTarget - stablePerspective.GetTarget();
+    Check(sameMatrix(savedView, stablePerspective.GetViewMatrix()) &&
+              sameMatrix(savedViewProjection, stablePerspective.GetViewProjectionMatrix()) &&
+              positionChange.Dot(positionChange) == 0 && targetChange.Dot(targetChange) == 0,
+          "rejected camera poses leave valid view state intact");
+    defaultCamera.SetPosition({maxCoordinate * .25, 0, 5});
+    defaultCamera.SetTarget({maxCoordinate * .25, 0, 0});
+    const auto savedLargeViewProjection = defaultCamera.GetViewProjectionMatrix();
+    Throws([&] { defaultCamera.SetPerspective(ToRadians(60), 1e-10, .1, 100); },
+           "unrepresentable combined view-projection rejected");
+    Check(sameMatrix(defaultCamera.GetProjectionMatrix(), Mat4::Identity()) &&
+              sameMatrix(defaultCamera.GetViewProjectionMatrix(), savedLargeViewProjection),
+          "unrepresentable combined projection leaves the prior projection intact");
+
     const Mat4 ortho = Mat4::Orthographic(-1, 1, -1, 1, -1, 1);
     Check(Near(project(ortho, {0, 0, 1}), 0.0f) && Near(project(ortho, {0, 0, -1}), 1.0f),
           "orthographic depth maps into Vulkan's 0..1 range");
@@ -320,6 +376,48 @@ void Core() {
     Check(Near(transform.GetTransform().elements[6], 1), "X rotation");
     transform.rotation = {0, ToRadians(90), 0};
     Check(Near(transform.GetTransform().elements[2], -1), "Y rotation");
+    const auto orientation = [](Vec3 rotation) {
+        return Mat4::RotateZ(rotation.z) * Mat4::RotateY(rotation.y) * Mat4::RotateX(rotation.x);
+    };
+    const auto sameRotation = [](const Mat4& a, const Mat4& b) {
+        return std::equal(std::begin(a.elements), std::end(a.elements), std::begin(b.elements),
+                          [](double x, double y) { return std::abs(x - y) < 5e-8; });
+    };
+    constexpr double pi = std::numbers::pi;
+    const Vec3 base{.23, -.015, -.4}, reference{0, 0, .25};
+    const auto compositionBase = orientation(base);
+    for (const double sign : {-1., 1.}) {
+        for (const double offset : {-1e-7, -1e-9, 0., 1e-9, 1e-7}) {
+            const Vec3 pose{.4, sign * pi / 2 + offset, .9};
+            const auto expected = orientation(pose);
+            Check(
+                sameRotation(orientation(SlerpRotation(pose, pose, .5)), expected),
+                "identical tilted orientations are unchanged around both 90-degree singularities");
+            Check(sameRotation(orientation(AdditiveRotation(base, {}, pose, 1)),
+                               compositionBase * expected),
+                  "full-weight additive rotation preserves tilted orientations at 90 degrees");
+            Check(sameRotation(orientation(SlerpRotation({}, pose, 1)), expected) &&
+                      sameRotation(orientation(SlerpRotation(pose, {}, 0)), expected),
+                  "rotation interpolation preserves both singular endpoints");
+        }
+        const Vec3 before{.4, sign * pi / 2 - .02, .9};
+        const Vec3 after{.4, sign * pi / 2 + .02, .9};
+        Check(sameRotation(orientation(SlerpRotation(before, after, .5)),
+                           orientation({.4, sign * pi / 2, .9})),
+              "interpolation crosses a tilted 90-degree orientation continuously");
+    }
+    Check(sameRotation(orientation(SlerpRotation({0, 0, pi - .1}, {0, 0, -pi + .1}, .5)),
+                       Mat4::RotateZ(pi)),
+          "rotation interpolation takes the shortest path across the 180-degree wrap");
+    Check(sameRotation(orientation(SlerpRotation(base, {base.x, base.y, base.z + 2 * pi}, .5)),
+                       compositionBase),
+          "opposite quaternion signs for the same orientation interpolate without cancellation");
+    const Vec3 additiveValue{0, 0, reference.z + 1.2};
+    Check(sameRotation(orientation(AdditiveRotation(base, reference, additiveValue, .5)),
+                       compositionBase * Mat4::RotateZ(.6)) &&
+              sameRotation(orientation(AdditiveRotation(base, reference, additiveValue, 0)),
+                           compositionBase),
+          "additive rotation preserves the base and scales the difference from its reference");
     AnimationClip clip;
     clip.duration = 2;
     clip.loop = false;
@@ -1438,6 +1536,7 @@ void WindowEvents() {
         event.button.windowID = SDL_GetWindowID(handle);
         event.button.button = SDL_BUTTON_LEFT;
         Check(SDL_PushEvent(&event), "bound mouse queued");
+        event = {};
         event.type = SDL_EVENT_KEY_UP;
         event.key.windowID = SDL_GetWindowID(handle);
         event.key.key = SDLK_B;
@@ -1485,6 +1584,48 @@ void WindowEvents() {
         Input::ClearAction("Menu");
         Check(Input::BindAction("Focus", LuxKey::A), "focus action bound");
         Check(Input::BindAction("FocusDrag", LuxMouseButton::Left), "focus mouse action bound");
+        Check(Input::BindAction("AlternateLayout", LuxKey::Q), "alternate layout action bound");
+        event = {};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.windowID = SDL_GetWindowID(handle);
+        event.key.scancode = SDL_SCANCODE_A;
+        event.key.key = SDLK_A;
+        Check(SDL_PushEvent(&event), "physical key down queued");
+        window.PollEvents();
+        Check(Input::IsActionDown("Focus"), "key initially follows the current logical layout");
+        Input::AdvanceFrame();
+        event.key.key = SDLK_Q;
+        event.key.repeat = true;
+        Check(SDL_PushEvent(&event), "same physical key repeat with a different layout queued");
+        window.PollEvents();
+        Check(Input::IsActionDown("Focus") && !Input::IsActionDown("AlternateLayout") &&
+                  !Input::WasActionPressed("Focus"),
+              "a held physical key keeps its initial action across a layout change");
+        event.type = SDL_EVENT_KEY_UP;
+        event.key.repeat = false;
+        Check(SDL_PushEvent(&event), "same physical key release with a different layout queued");
+        window.PollEvents();
+        Check(!Input::IsActionDown("Focus") && Input::WasActionReleased("Focus"),
+              "the physical key releases its original action even after a layout change");
+        Input::AdvanceFrame();
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.key = SDLK_A;
+        Check(SDL_PushEvent(&event), "first physical key for a shared logical action queued");
+        event.key.scancode = SDL_SCANCODE_Q;
+        Check(SDL_PushEvent(&event), "second physical key for a shared logical action queued");
+        event.type = SDL_EVENT_KEY_UP;
+        event.key.scancode = SDL_SCANCODE_A;
+        Check(SDL_PushEvent(&event), "first physical key release queued");
+        window.PollEvents();
+        Check(Input::IsActionDown("Focus") && !Input::WasActionReleased("Focus"),
+              "a second physical key mapping to the same action still holds it");
+        event.key.scancode = SDL_SCANCODE_Q;
+        Check(SDL_PushEvent(&event), "second physical key release queued");
+        window.PollEvents();
+        Check(!Input::IsActionDown("Focus") && Input::WasActionReleased("Focus"),
+              "the last physical key releases the shared logical action");
+        Input::ClearAction("AlternateLayout");
+        Input::AdvanceFrame();
         SDL_FlushEvents(SDL_EVENT_WINDOW_FIRST, SDL_EVENT_WINDOW_LAST);
         int focusGained = 0, focusLost = 0;
         bool releasedBeforeFocusCallback = false;
@@ -1582,6 +1723,49 @@ void WindowEvents() {
             window.PollEvents();
         Check(moves == flood, "flooded events are delivered over later polls");
         window.SetEventCallback({});
+
+        auto captured = CreateRef<int>(7);
+        const std::weak_ptr<int> lifetime = captured;
+        bool survivedReplacement = false;
+        unsigned replacementEvents = 0;
+        Window::EventCallbackFn replacement = [&replacementEvents](Event& e) {
+            if (e.GetEventType() == EventType::MouseMoved)
+                ++replacementEvents;
+        };
+        window.SetEventCallback([&, keep = std::move(captured)](Event& e) {
+            if (!keep || e.GetEventType() != EventType::MouseMoved)
+                return;
+            const auto* weak = &lifetime;
+            auto* survived = &survivedReplacement;
+            window.SetEventCallback(replacement);
+            *survived = !weak->expired();
+        });
+        event = {};
+        event.type = SDL_EVENT_MOUSE_MOTION;
+        event.motion.windowID = SDL_GetWindowID(handle);
+        Check(SDL_PushEvent(&event) && SDL_PushEvent(&event),
+              "self-replacing event callback queued");
+        window.PollEvents();
+        Check(survivedReplacement && lifetime.expired() && replacementEvents == 1,
+              "replacing an event callback keeps its captures alive until dispatch returns");
+        window.SetEventCallback({});
+
+        captured = CreateRef<int>(7);
+        const std::weak_ptr<int> presentLifetime = captured;
+        survivedReplacement = false;
+        window.SetPresentCallback([&, keep = std::move(captured)](bool) {
+            if (!keep)
+                return false;
+            const auto* weak = &presentLifetime;
+            auto* survived = &survivedReplacement;
+            window.SetPresentCallback({});
+            *survived = !weak->expired();
+            return true;
+        });
+        Check(
+            window.SetVSync(false) && !window.IsVSync() && survivedReplacement &&
+                presentLifetime.expired() && !window.SetVSync(true),
+            "a present callback can unregister itself without losing its captures during dispatch");
 
         event = {};
         event.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED;

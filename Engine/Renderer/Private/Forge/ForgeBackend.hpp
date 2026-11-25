@@ -2,6 +2,7 @@
 
 #include "RHI/RenderBackend.hpp"
 
+#include <functional>
 #include <memory>
 #include <unordered_set>
 
@@ -73,11 +74,13 @@ private:
     bool Reject(const std::string& message);
     // Failure reported by LuxForge.dll: device loss is fatal, anything else is a rejection.
     bool ForgeFailure();
-    void UpdateFrameStats();
+    void CollectFrameStats(GpuFrameStats& frame) const;
+    void ReleaseSurface() noexcept;
 
     // Shared so scene renderers can tell (through a weak_ptr) whether the device they were
     // created for still exists.
     std::shared_ptr<ForgeLibrary> lib_;
+    Ref<std::function<void()>> surfaceRelease_;
     Window* window_ = nullptr;
     GpuStatus status_ = GpuStatus::Uninitialized;
     GpuStatus lastFailure_ = GpuStatus::Uninitialized;

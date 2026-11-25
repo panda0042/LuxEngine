@@ -32,6 +32,11 @@ class Game {
 public:
     static constexpr double VehicleMass = 1450;
 
+    struct RenderView {
+        LuxEngine::TransformComponent truck;
+        Vec3 cameraPosition, cameraTarget;
+    };
+
     explicit Game(unsigned seed, double daySeconds);
     void Start(World& world);
     void Step(const Controls& controls, World& world, double dt);
@@ -42,17 +47,12 @@ public:
     Vec3 Player() const;
     Vec3 Truck() const;
     Vec2 Velocity() const;
-    Vec3 Camera(double dt);
-    Vec3 CameraTarget() const;
+    RenderView GetRenderView(double dt, double alpha);
     Vec3 Look() const;
     bool ShowPlayer() const;
 
     bool Driving() const {
         return driving_;
-    }
-
-    double TruckYaw() const {
-        return truckYaw_;
     }
 
     double PlayerYaw() const {
@@ -105,11 +105,14 @@ public:
 
 private:
     void ResetPhysics(World& world);
+    void ResetTruck(Vec3 position, double heading);
+    bool BlockedByBuilding(Vec2 from, Vec2 to, double feet) const;
     void MovePlayer(const Controls& input, double dt);
     void Drive(const Controls& input, double dt);
     void AdvanceWeather(double dt);
     void UpdatePeople(double dt);
-    void Interact();
+    void Interact(const World& world);
+    double VehicleCameraClearance(Vec3 eye, Vec3 offset, Vec3 side) const;
     unsigned seed_;
     double daySeconds_;
     std::unique_ptr<LuxEngine::Scene> scene_;
@@ -123,6 +126,10 @@ private:
     Vec2 playerVelocity_{};
     Vec3 player_{}, camera_{};
     double up_ = 0, yaw_ = 1.49, pitch_ = -.12, truckYaw_ = 0;
+    LuxEngine::TransformComponent previousTruck_;
+    Vec2 previousLook_{yaw_, pitch_};
+    Vec2 vehicleCameraLook_{};
+    double vehicleCameraArm_ = 1;
     double elapsed_ = 0, hour_ = 12, wetness_ = 0;
     float cloud_ = 0, fog_ = .0015f, flash_ = 0;
     Weather weather_ = Weather::Clear;

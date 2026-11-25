@@ -455,7 +455,17 @@ void MeshData::Upload(GpuDevice& device, Mesh3D& mesh) const {
         throw std::runtime_error("Frontier County mesh upload failed: " + device.GetLastError());
 }
 
+uint64 MeshData::UploadBytes() const {
+    return uint64(vertices.size()) * sizeof(RenderVertex) + uint64(indices.size()) * sizeof(uint32);
+}
+
 struct World::State {
+    struct UploadingChunk {
+        Draft draft;
+        Loaded chunk;
+        size_t nextMesh = 0;
+    };
+
     unsigned seed = 0, vegetation = 0;
     int radius = 0;
     Stats stats;
@@ -465,6 +475,7 @@ struct World::State {
     std::deque<ChunkKey> requests;
     std::deque<Draft> ready;
     std::optional<ChunkKey> active;
+    std::optional<UploadingChunk> uploading;
     std::exception_ptr workerError;
     bool stopping = false;
     std::thread worker;
@@ -503,27 +514,42 @@ struct World::State {
         }
     }
 
-    void Commit(Draft&& draft, GpuDevice& device) {
-        auto [it, inserted] = loaded.try_emplace(draft.key);
-        if (!inserted)
-            return;
-        auto& chunk = it->second;
-        draft.terrain.Upload(device, chunk.ground);
-        draft.road.Upload(device, chunk.road);
-        draft.scenery.Upload(device, chunk.scenery);
-        for (size_t i = 0; i < draft.foliage.size(); ++i) {
-            auto& src = draft.foliage[i];
-            if (src.plants.empty())
+    unsigned AdvanceUpload(GpuDevice& device) {
+        constexpr unsigned MeshBudget = 3;
+        constexpr uint64 ByteBudget = 1024ull * 1024;
+        auto& [draft, chunk, nextMesh] = *uploading;
+        const std::array geometry{&draft.terrain, &draft.road, &draft.scenery};
+        const std::array targets{&chunk.ground, &chunk.road, &chunk.scenery};
+        unsigned meshes = 0;
+        uint64 bytes = 0;
+        for (; nextMesh < geometry.size() + draft.foliage.size(); ++nextMesh) {
+            const bool baseMesh = nextMesh < geometry.size();
+            const size_t cell = baseMesh ? 0 : nextMesh - geometry.size();
+            auto& source = baseMesh ? *geometry[nextMesh] : draft.foliage[cell].cards;
+            if (source.indices.empty())
                 continue;
-            auto& dst = chunk.foliage[i];
-            dst.cards = std::make_unique<Mesh3D>();
-            src.cards.Upload(device, *dst.cards);
-            dst.plants = std::move(src.plants);
+            const uint64 size = source.UploadBytes();
+            if (meshes && (meshes >= MeshBudget || bytes + size > ByteBudget))
+                return meshes;
+            if (baseMesh) {
+                source.Upload(device, *targets[nextMesh]);
+            } else {
+                auto& dst = chunk.foliage[cell];
+                dst.cards = std::make_unique<Mesh3D>();
+                source.Upload(device, *dst.cards);
+                dst.plants = std::move(draft.foliage[cell].plants);
+            }
+            ++meshes;
+            bytes += size;
+            source = {};
         }
         chunk.obstacles = std::move(draft.obstacles);
         chunk.trees = draft.trees;
+        loaded.try_emplace(draft.key, std::move(chunk));
         ++stats.built;
         stats.lastBuildMs = draft.buildMs;
+        uploading.reset();
+        return meshes;
     }
 };
 
@@ -571,12 +597,14 @@ void World::Start(unsigned seed, unsigned vegetation, int radius, Vec2 initial, 
     s.seed = seed;
     s.vegetation = vegetation;
     s.radius = radius;
-    s.Commit(Generate(KeyFor(initial), seed, vegetation), device);
+    s.uploading.emplace(State::UploadingChunk{Generate(KeyFor(initial), seed, vegetation), {}});
+    while (s.uploading)
+        s.AdvanceUpload(device);
     s.worker = std::thread([&s] { s.Work(); });
-    Stream(initial, {}, device);
+    Stream(initial, {}, device, false);
 }
 
-void World::Stream(Vec2 at, Vec2 velocity, GpuDevice& device) {
+void World::Stream(Vec2 at, Vec2 velocity, GpuDevice& device, bool allowUploads) {
     auto& s = *state_;
     const ChunkKey center = KeyFor(at);
     const Vec2 predicted = at + velocity * 2.5;
@@ -595,30 +623,32 @@ void World::Stream(Vec2 at, Vec2 velocity, GpuDevice& device) {
     auto contains = [&](ChunkKey key) { return std::ranges::find(desired, key) != desired.end(); };
     s.stats.evicted +=
         unsigned(std::erase_if(s.loaded, [&](const auto& item) { return !contains(item.first); }));
-    std::deque<Draft> upload;
+    if (s.uploading && !contains(s.uploading->draft.key))
+        s.uploading.reset();
     {
         const std::lock_guard lock(s.mutex);
         if (s.workerError)
             std::rethrow_exception(s.workerError);
         std::erase_if(s.ready, [&](const Draft& draft) { return !contains(draft.key); });
-        while (upload.size() < 2 && !s.ready.empty()) {
-            upload.push_back(std::move(s.ready.front()));
-            s.ready.pop_front();
+        if (allowUploads && !s.uploading && !s.ready.empty()) {
+            const auto next = std::ranges::min_element(
+                s.ready, {}, [&](const Draft& draft) { return priority(draft.key); });
+            s.uploading.emplace(State::UploadingChunk{std::move(*next), {}});
+            s.ready.erase(next);
         }
         s.requests.clear();
         for (const auto key : desired) {
             const auto has = [key](const Draft& draft) { return draft.key == key; };
-            if (!s.loaded.contains(key) && s.active != key && std::ranges::none_of(s.ready, has) &&
-                std::ranges::none_of(upload, has))
+            if (!s.loaded.contains(key) && s.active != key &&
+                (!s.uploading || s.uploading->draft.key != key) &&
+                std::ranges::none_of(s.ready, has))
                 s.requests.push_back(key);
         }
-        s.stats.pending =
-            unsigned(s.requests.size() + s.ready.size() + size_t(s.active.has_value()));
     }
     s.wake.notify_one();
-    for (auto& draft : upload)
-        s.Commit(std::move(draft), device);
+    s.stats.uploadedMeshes = allowUploads && s.uploading ? s.AdvanceUpload(device) : 0;
     s.stats.loaded = unsigned(s.loaded.size());
+    s.stats.pending = unsigned(desired.size()) - s.stats.loaded;
     s.stats.trees = 0;
     for (const auto& [key, chunk] : s.loaded)
         s.stats.trees += chunk.trees;

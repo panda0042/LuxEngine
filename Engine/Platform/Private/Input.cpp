@@ -18,8 +18,15 @@ struct Action {
 };
 
 struct WindowButtons {
-    std::unordered_set<int32> keys;
+    std::unordered_map<SDL_Scancode, int32> scanKeys;
+    std::unordered_set<int32> keysWithoutScancode;
     std::unordered_set<int32> mouse;
+
+    bool KeyDown(int32 code) const {
+        return keysWithoutScancode.contains(code) ||
+               std::ranges::any_of(scanKeys,
+                                   [code](const auto& active) { return active.second == code; });
+    }
 };
 
 struct InputState {
@@ -55,9 +62,8 @@ bool PhysicalDown(const InputState& state, InputBinding binding) {
     case InputDevice::Keyboard:
         if (state.externalKeys.contains(binding.code))
             return true;
-        return std::any_of(state.windows.begin(), state.windows.end(), [&](const auto& window) {
-            return window.second.keys.contains(binding.code);
-        });
+        return std::any_of(state.windows.begin(), state.windows.end(),
+                           [&](const auto& window) { return window.second.KeyDown(binding.code); });
     case InputDevice::MouseButton:
         if (state.externalMouseButtons.contains(binding.code))
             return true;
@@ -191,13 +197,22 @@ void Input::ProcessEvent(const SDL_Event& event) {
     auto& state = State();
     bool changed = false;
     switch (event.type) {
-    case SDL_EVENT_KEY_DOWN:
-        changed =
-            state.windows[event.key.windowID].keys.insert(static_cast<int32>(event.key.key)).second;
+    case SDL_EVENT_KEY_DOWN: {
+        auto& buttons = state.windows[event.key.windowID];
+        const auto key = static_cast<int32>(event.key.key);
+        changed = event.key.scancode == SDL_SCANCODE_UNKNOWN
+                      ? buttons.keysWithoutScancode.insert(key).second
+                      : buttons.scanKeys.try_emplace(event.key.scancode, key).second;
         break;
+    }
     case SDL_EVENT_KEY_UP:
-        if (auto found = state.windows.find(event.key.windowID); found != state.windows.end())
-            changed = found->second.keys.erase(static_cast<int32>(event.key.key)) != 0;
+        if (auto found = state.windows.find(event.key.windowID); found != state.windows.end()) {
+            auto& buttons = found->second;
+            changed = event.key.scancode != SDL_SCANCODE_UNKNOWN &&
+                      buttons.scanKeys.erase(event.key.scancode) != 0;
+            if (!changed)
+                changed = buttons.keysWithoutScancode.erase(static_cast<int32>(event.key.key)) != 0;
+        }
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         changed = state.windows[event.button.windowID].mouse.insert(event.button.button).second;

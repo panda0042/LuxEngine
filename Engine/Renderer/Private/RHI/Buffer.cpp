@@ -36,12 +36,12 @@ bool GpuBuffer::Initialize(GpuDevice* device, BufferType type, uint32 sizeBytes)
 
 bool GpuBuffer::InitializeFromBackend(const std::shared_ptr<Rhi::RenderBackend>& owner,
                                       BufferType type, uint32 sizeBytes) {
-    Release();
     if (!owner || !owner->Usable() || sizeBytes == 0)
         return false;
     uint64 handle = 0;
     if (!owner->CreateBuffer(type, sizeBytes, handle))
         return false;
+    Release();
     handle_ = handle;
     owner_ = owner;
     type_ = type;

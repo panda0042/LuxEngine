@@ -11,10 +11,13 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <deque>
 #include <format>
+#include <future>
 #include <iostream>
 #include <map>
 #include <numbers>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -22,6 +25,7 @@ namespace Frontier {
 namespace {
 using namespace LuxEngine;
 constexpr double Tau = 2 * std::numbers::pi;
+constexpr auto AutomationTimeout = std::chrono::seconds(45);
 
 struct Quality {
     std::string_view name;
@@ -31,7 +35,7 @@ struct Quality {
 };
 
 constexpr std::array Qualities{
-    Quality{"low", 96, 512, 55, 1, false},         Quality{"medium", 160, 1024, 80, 1, false},
+    Quality{"low", 96, 1024, 55, 1, false},        Quality{"medium", 160, 1024, 80, 1, false},
     Quality{"high", 256, 1024, 120, 2, false},     Quality{"ultra", 352, 2048, 150, 2, true},
     Quality{"cinematic", 512, 2048, 190, 2, true}, Quality{"extreme", 1024, 4096, 230, 3, true},
 };
@@ -53,6 +57,10 @@ unsigned Integer(std::string_view text, unsigned low, unsigned high) {
         value > high)
         throw std::runtime_error("Invalid numeric option: " + std::string(text));
     return value;
+}
+
+std::filesystem::path PathFromUtf8(std::string_view text) {
+    return std::filesystem::path(std::u8string(text.begin(), text.end()));
 }
 
 Options Parse(int argc, char** argv) {
@@ -79,9 +87,9 @@ Options Parse(int argc, char** argv) {
         else if (arg == "--no-edge-aa")
             options.edgeAA = false;
         else if (arg == "--output")
-            options.output = next();
+            options.output = PathFromUtf8(next());
         else if (arg == "--capture")
-            options.capture = next();
+            options.capture = PathFromUtf8(next());
         else if (arg == "--seed")
             options.seed = Integer(next(), 0, 0xffffffff);
         else if (arg == "--day-seconds")
@@ -135,6 +143,22 @@ std::string Utf8Path(const std::filesystem::path& path) {
     return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
 }
 
+bool CoverTerrainReady(const World& world, ChunkKey tile) {
+    const int left = std::max(-WorldHalf, tile.x * CoverTileSize);
+    const int top = std::max(-WorldHalf, tile.z * CoverTileSize);
+    const int right = std::min(WorldHalf - 1, (tile.x + 1) * CoverTileSize - 1);
+    const int bottom = std::min(WorldHalf - 1, (tile.z + 1) * CoverTileSize - 1);
+    if (left > right || top > bottom)
+        return false;
+    const auto first = ChunkAt({double(left), double(top)});
+    const auto last = ChunkAt({double(right), double(bottom)});
+    for (int z = first.z; z <= last.z; ++z)
+        for (int x = first.x; x <= last.x; ++x)
+            if (!world.HasChunk({x, z}))
+                return false;
+    return true;
+}
+
 class FrontierApp final : public Application {
 public:
     explicit FrontierApp(Options options)
@@ -160,8 +184,8 @@ private:
     void Step(const Controls& controls, double dt);
     void SmokeStep();
     void UpdateLight();
-    void DrawActors();
-    void DrawVegetation(Vec3 eye);
+    void DrawActors(const TransformComponent& truckPose);
+    void DrawVegetation(Vec3 eye, bool allowUploads, FrameSample& sample);
     void DrawHud();
     Vec2 ScenarioStart() const;
 
@@ -172,18 +196,33 @@ private:
     Renderer3D::Context renderer_;
     WaterSurface lake_;
     PropModels props_;
-    std::map<ChunkKey, std::vector<PropModels::Part>> groundCover_;
+
+    struct CoverTile {
+        std::deque<PropModels::Geometry> pending;
+        std::vector<PropModels::Part> parts;
+    };
+
+    struct CoverBuild {
+        ChunkKey tile;
+        std::future<std::deque<PropModels::Geometry>> result;
+    };
+
+    std::map<ChunkKey, CoverTile> groundCover_;
+    std::optional<CoverBuild> coverBuild_;
     std::vector<Plant> nearTrees_;
     Characters characters_;
     Material3D ground_, scenery_, foliage_, road_;
     Render3DSettings settings_;
     std::unique_ptr<LuxSamples::Artwork> artwork_;
     std::filesystem::path assets_;
-    std::chrono::steady_clock::time_point automationStart_, lastRender_;
+    std::chrono::steady_clock::time_point automationDeadline_, lastRender_;
     Vec3 driveStart_;
     double time_ = 0, updateMs_ = 0;
     unsigned smokeStage_ = 0, frameWidth_ = 0, frameHeight_ = 0;
+    unsigned groundCoverPending_ = 0;
+    bool terrainUploaded_ = false, coverUploadReady_ = false;
     bool sampledTemporalHistory_ = false;
+    bool sceneReady_ = false, benchmarkReady_ = false;
     bool rt_ = false, controlsVisible_ = false, showStats_ = false, done_ = false,
          capturePending_ = false;
 };
@@ -203,8 +242,7 @@ void FrontierApp::OnInit() {
     const char* base = SDL_GetBasePath();
     if (!base)
         throw std::runtime_error("Could not locate sample assets");
-    assets_ =
-        std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(base))) / "assets";
+    assets_ = PathFromUtf8(base) / "assets";
     artwork_ = std::make_unique<LuxSamples::Artwork>(gpu, assets_);
     renderer_.Init(&gpu);
     if (options_.benchmark && !gpu.SetVSync(false))
@@ -288,7 +326,7 @@ void FrontierApp::OnInit() {
         !GetWindow().SetRelativeMouseMode(true))
         throw std::runtime_error("Cannot capture relative mouse input");
     Input::ConsumeMouseDelta();
-    automationStart_ = std::chrono::steady_clock::now();
+    automationDeadline_ = std::chrono::steady_clock::now() + AutomationTimeout;
 }
 
 void FrontierApp::Step(const Controls& controls, double dt) {
@@ -301,8 +339,15 @@ void FrontierApp::Step(const Controls& controls, double dt) {
 }
 
 void FrontierApp::OnUpdate(double dt) {
-    if (options_.smoke || options_.benchmark || !options_.capture.empty())
+    if (options_.smoke || options_.benchmark || !options_.capture.empty()) {
+        if (std::chrono::steady_clock::now() >= automationDeadline_)
+            throw std::runtime_error(std::format(
+                "Automated run timed out in {} at smoke stage {} after {} presented frames "
+                "({} chunks loaded)",
+                options_.scenario, smokeStage_, recorder_.PresentedFrames(),
+                world_.GetStats().loaded));
         return;
+    }
     if (Input::WasActionPressed("quit"))
         Close();
     if (Input::WasActionPressed("pause")) {
@@ -360,6 +405,15 @@ void FrontierApp::SmokeStep() {
         Step({.throttle = 1}, dt);
     if (Distance(Horizontal(driveStart_), Horizontal(game_.Truck())) <= 4)
         return;
+    const auto previous = game_.GetRenderView(0, 0);
+    const auto middle = game_.GetRenderView(0, .5);
+    const auto current = game_.GetRenderView(0, 1);
+    const auto motion = current.truck.position - previous.truck.position;
+    const auto truckError = middle.truck.position - (previous.truck.position + motion * .5);
+    const auto cameraError = middle.cameraTarget - (previous.cameraTarget + motion * .5);
+    if (motion.Dot(motion) < 1e-8 || truckError.Dot(truckError) > 1e-12 ||
+        cameraError.Dot(cameraError) > 1e-12)
+        throw std::runtime_error("Truck and camera must share the interpolated motion");
     game_.StartAt({820, 24}, false);
     ++smokeStage_;
 }
@@ -392,54 +446,93 @@ void FrontierApp::UpdateLight() {
     ground_.roughness = float(1 - .48 * game_.Wetness());
 }
 
-void FrontierApp::DrawVegetation(Vec3 eye) {
+void FrontierApp::DrawVegetation(Vec3 eye, bool allowUploads, FrameSample& sample) {
     for (const auto& tree : nearTrees_)
         props_.Draw(renderer_, "norway-spruce", tree.ground, tree.dimensions, tree.yaw);
 
+    const auto streamStart = std::chrono::steady_clock::now();
     const ChunkKey center{int(std::floor(eye.x / CoverTileSize)),
                           int(std::floor(eye.z / CoverTileSize))};
     const int radius = options_.quality.radius > 1 ? 2 : 1;
     const auto away = [&](ChunkKey tile) {
         return std::max(std::abs(tile.x - center.x), std::abs(tile.z - center.z));
     };
-    std::erase_if(groundCover_, [&](const auto& entry) { return away(entry.first) > radius; });
-    unsigned uploads = 0;
-    for (int ring = 0; ring <= radius && uploads < 3; ++ring)
-        for (int z = -ring; z <= ring && uploads < 3; ++z)
-            for (int x = -ring; x <= ring && uploads < 3; ++x) {
+    std::erase_if(groundCover_, [&](const auto& entry) {
+        const int distance = away(entry.first);
+        return distance > radius + 1 || (distance > radius && !entry.second.pending.empty()) ||
+               !CoverTerrainReady(world_, entry.first);
+    });
+    if (coverBuild_ &&
+        coverBuild_->result.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        const auto tile = coverBuild_->tile;
+        auto geometry = coverBuild_->result.get();
+        coverBuild_.reset();
+        if (away(tile) <= radius && CoverTerrainReady(world_, tile))
+            groundCover_.try_emplace(tile, CoverTile{std::move(geometry), {}});
+    }
+    groundCoverPending_ = 0;
+    sample.groundCoverBatches = 0;
+    unsigned drafts = 0;
+    std::optional<ChunkKey> prepare;
+    for (int ring = 0; ring <= radius; ++ring)
+        for (int z = -ring; z <= ring; ++z)
+            for (int x = -ring; x <= ring; ++x) {
                 const ChunkKey tile{center.x + x, center.z + z};
-                if (away(tile) != ring || groundCover_.contains(tile))
+                if (away(tile) != ring)
                     continue;
-                const Vec3 origin{double(tile.x * CoverTileSize), 0,
-                                  double(tile.z * CoverTileSize)};
-                if (!world_.HasChunk(ChunkAt(Horizontal(origin))))
+                const auto found = groundCover_.find(tile);
+                if (found == groundCover_.end()) {
+                    if (CoverTerrainReady(world_, tile)) {
+                        if (!prepare)
+                            prepare = tile;
+                        ++groundCoverPending_;
+                    }
                     continue;
-                const auto plants = GroundCover(tile, options_.seed);
-                auto& parts = groundCover_[tile];
-                constexpr std::array names{"grass-clump", "sedge-tuft"};
-                for (size_t i = 0; i < names.size(); ++i) {
-                    auto batch = props_.Batch(GetGpuDevice(), names[i], plants[i], origin);
-                    for (auto& part : batch)
-                        parts.push_back(std::move(part));
                 }
-                ++uploads;
+                auto& cover = found->second;
+                if (cover.pending.empty())
+                    continue;
+                if (allowUploads) {
+                    auto& geometry = cover.pending.front();
+                    auto mesh = std::make_unique<Mesh3D>();
+                    geometry.mesh.Upload(GetGpuDevice(), *mesh);
+                    cover.parts.push_back({std::move(mesh), std::move(geometry.material)});
+                    cover.pending.pop_front();
+                    ++sample.groundCoverBatches;
+                    allowUploads = false;
+                }
+                drafts += unsigned(!cover.pending.empty());
             }
-    for (const auto& [tile, parts] : groundCover_) {
+    if (prepare && !coverBuild_ && drafts < 2)
+        coverBuild_.emplace(
+            CoverBuild{*prepare, std::async(std::launch::async, &PropModels::BuildGroundCover,
+                                            &props_, *prepare, options_.seed)});
+    coverUploadReady_ = drafts != 0;
+    groundCoverPending_ += drafts;
+    sample.groundCoverPending = groundCoverPending_;
+    sample.groundCoverStreamMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - streamStart)
+            .count();
+    for (const auto& [tile, cover] : groundCover_) {
+        if (away(tile) > radius)
+            continue;
         const auto transform =
             Mat4::Translate({double(tile.x * CoverTileSize), 0, double(tile.z * CoverTileSize)});
-        for (const auto& part : parts)
+        for (const auto& part : cover.parts)
             renderer_.DrawMesh(*part.mesh, transform, part.material);
     }
 }
 
-void FrontierApp::DrawActors() {
-    const auto player = game_.Player(), truck = game_.Truck();
+void FrontierApp::DrawActors(const TransformComponent& truckPose) {
+    const auto player = game_.Player();
     const auto nearby = [&](Vec3 point, double range) {
         return Distance(Horizontal(player), Horizontal(point)) < range;
     };
-    if (nearby(truck, 440))
-        props_.Draw(renderer_, "pickup-truck", truck - Vec3{0, .81, 0}, {1.9, 1.77, 4.53},
-                    std::numbers::pi - game_.TruckYaw());
+    if (nearby(truckPose.position, 440)) {
+        const auto placement = truckPose.GetTransform() * Mat4::Translate({0, -.81, 0}) *
+                               Mat4::RotateY(std::numbers::pi);
+        props_.Draw(renderer_, "pickup-truck", placement, {1.9, 1.77, 4.53});
+    }
     for (const auto& structure : Structures()) {
         const auto base = OnGround(structure.position, options_.seed, -.07);
         if (nearby(base, 550) && world_.HasChunk(ChunkAt(structure.position)))
@@ -518,10 +611,19 @@ void FrontierApp::OnRender(float) {
     auto& sample = recorder_.BeginFrame();
     if (options_.smoke)
         SmokeStep();
-    if (options_.benchmark)
+    if (options_.benchmark && benchmarkReady_)
         Step({.throttle = options_.scenario == "drive" ? 1. : 0.}, GetFixedUpdateStep());
-    world_.Stream(Horizontal(game_.Player()), game_.Velocity(), gpu);
+    const auto streamStart = std::chrono::steady_clock::now();
+    const bool reserveCover =
+        terrainUploaded_ &&
+        (coverUploadReady_ || (coverBuild_ && coverBuild_->result.wait_for(std::chrono::seconds(
+                                                  0)) == std::future_status::ready));
+    world_.Stream(Horizontal(game_.Player()), game_.Velocity(), gpu, !reserveCover);
+    sample.worldStreamMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - streamStart)
+            .count();
     sample.chunks = world_.GetStats();
+    terrainUploaded_ = sample.chunks.uploadedMeshes != 0;
     sample.physicsAndGameMs = std::exchange(updateMs_, 0);
     sample.bodies = game_.Bodies();
 
@@ -536,8 +638,10 @@ void FrontierApp::OnRender(float) {
             ? GetFixedUpdateStep()
             : std::clamp(std::chrono::duration<double>(now - lastRender_).count(), .001, .12);
     lastRender_ = now;
-    camera.SetPosition(game_.Camera(cameraDt));
-    camera.SetTarget(game_.CameraTarget());
+    const bool automated = options_.benchmark || options_.smoke || !options_.capture.empty();
+    const auto view = game_.GetRenderView(cameraDt, automated ? 1 : GetRenderInterpolationAlpha());
+    camera.SetPosition(view.cameraPosition);
+    camera.SetTarget(view.cameraTarget);
     const bool fixedView = options_.benchmark || !options_.capture.empty();
     if (fixedView && options_.scenario == "water") {
         camera.SetPosition({222, 19.8, 310});
@@ -559,8 +663,8 @@ void FrontierApp::OnRender(float) {
     renderer_.BeginScene(camera, settings_, .98f, lights);
     nearTrees_.clear();
     world_.Draw(renderer_, ground_, scenery_, foliage_, road_, camera.GetPosition(), nearTrees_);
-    DrawVegetation(camera.GetPosition());
-    DrawActors();
+    DrawVegetation(camera.GetPosition(), !terrainUploaded_, sample);
+    DrawActors(view.truck);
     if (drawWater) {
         auto water = WaterSurface::MakeMaterial();
         water.roughness = float(.07 + .12 * game_.Wetness());
@@ -570,9 +674,13 @@ void FrontierApp::OnRender(float) {
     }
     renderer_.EndScene();
     DrawHud();
-    if (!options_.capture.empty() && !capturePending_ && recorder_.PresentedFrames() > 10 &&
-        world_.GetStats().pending == 0 && renderer_.IsEnvironmentReady() &&
-        (!drawWater || gpu.GetFrameStats().waterReflectionPasses > 0)) {
+    const bool checkingReadiness =
+        (options_.benchmark && !benchmarkReady_) || !options_.capture.empty();
+    sceneReady_ = checkingReadiness && sample.chunks.pending == 0 && groundCoverPending_ == 0 &&
+                  renderer_.IsEnvironmentReady() &&
+                  (!drawWater || gpu.GetFrameStats().waterReflectionPasses > 0);
+    if (!options_.capture.empty() && !capturePending_ && sceneReady_ &&
+        (options_.benchmark || recorder_.PresentedFrames() > 10)) {
         if (!gpu.RequestFrameCapture())
             throw std::runtime_error("Could not start frame capture");
         capturePending_ = true;
@@ -581,20 +689,20 @@ void FrontierApp::OnRender(float) {
 
 void FrontierApp::OnFramePresented() {
     const auto& gpu = GetGpuDevice();
-    const bool finished = recorder_.EndFrame(gpu, frameWidth_, frameHeight_);
+    const bool finished = recorder_.EndFrame(gpu, frameWidth_, frameHeight_, benchmarkReady_);
+    benchmarkReady_ |= options_.benchmark && sceneReady_;
+    if (benchmarkReady_)
+        automationDeadline_ = std::chrono::steady_clock::now() + AutomationTimeout;
     sampledTemporalHistory_ |= gpu.GetFrameStats().temporalHistoryPasses != 0;
     if (options_.benchmark || options_.smoke || !options_.capture.empty()) {
         if (gpu.GetCounters().validationErrors)
             throw std::runtime_error("GPU validation reported errors");
         if (!renderer_.GetLastAssetError().empty())
             throw std::runtime_error(renderer_.GetLastAssetError());
-        if (!options_.benchmark &&
-            std::chrono::steady_clock::now() - automationStart_ > std::chrono::seconds(45))
-            throw std::runtime_error(
-                std::format("Automated run timed out at stage {}, with {} chunks", smokeStage_,
-                            world_.GetStats().loaded));
     }
     if (capturePending_) {
+        if (!options_.capture.parent_path().empty())
+            std::filesystem::create_directories(options_.capture.parent_path());
         LuxSamples::WritePpmCapture(GetGpuDevice(), options_.capture);
         if (!options_.benchmark) {
             done_ = true;
@@ -614,14 +722,15 @@ void FrontierApp::OnFramePresented() {
         Close();
     }
     if (finished) {
-        recorder_.Write(options_.output, options_.scenario, gpu.GetInfo().deviceName,
-                        options_.quality.name, options_.seed);
+        recorder_.Write(options_.output, options_.scenario, gpu.GetInfo(), options_.quality.name,
+                        options_.seed);
         done_ = options_.capture.empty();
         Close();
     }
 }
 
 void FrontierApp::OnShutdown() {
+    coverBuild_.reset();
     world_.Stop();
     artwork_.reset();
     lake_.ReleaseGpu();

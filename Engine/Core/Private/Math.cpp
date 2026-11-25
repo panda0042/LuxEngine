@@ -152,17 +152,51 @@ Mat4 Mat4::RotateZ(double angleRadians) {
 }
 
 Mat4 Mat4::LookAt(const Vec3& eye, const Vec3& target, const Vec3& up) {
-    Vec3 forward = (target - eye).Normalized();
-    if (forward.x == 0.0f && forward.y == 0.0f && forward.z == 0.0f) {
-        forward = {0.0f, 0.0f, -1.0f};
+    const auto finite = [](Vec3 v) {
+        return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+    };
+    if (!finite(eye) || !finite(target) || !finite(up))
+        throw std::invalid_argument("Invalid view coordinates");
+
+    const auto largestComponent = [](Vec3 v) {
+        return std::max({std::abs(v.x), std::abs(v.y), std::abs(v.z)});
+    };
+    const auto scaled = [](Vec3 v, double scale) {
+        return Vec3{v.x / scale, v.y / scale, v.z / scale};
+    };
+    const auto unit = [&](Vec3 v) {
+        const double scale = largestComponent(v);
+        if (scale == 0)
+            return Vec3{};
+        const auto direction = scaled(v, scale);
+        return direction * (1 / std::sqrt(direction.Dot(direction)));
+    };
+    auto direction = target - eye;
+    if (!finite(direction)) {
+        const double scale = std::max(largestComponent(eye), largestComponent(target));
+        direction = scaled(target, scale) - scaled(eye, scale);
     }
-    Vec3 right = forward.Cross(up).Normalized();
-    if (right.x == 0.0f && right.y == 0.0f && right.z == 0.0f) {
-        const Vec3 alt =
-            std::abs(forward.y) > 0.99f ? Vec3{0.0f, 0.0f, 1.0f} : Vec3{0.0f, 1.0f, 0.0f};
-        right = forward.Cross(alt).Normalized();
+    auto forward = unit(direction);
+    if (forward.Dot(forward) == 0)
+        forward = {0, 0, -1};
+
+    auto cross = forward.Cross(unit(up));
+    if (cross.Dot(cross) < 1e-24) {
+        const Vec3 alternate = std::abs(forward.y) > .99 ? Vec3{0, 0, 1} : Vec3{0, 1, 0};
+        cross = forward.Cross(alternate);
     }
+    const Vec3 right = unit(cross);
     const Vec3 trueUp = right.Cross(forward);
+    const auto projectEye = [&](Vec3 axis) {
+        double value = axis.Dot(eye);
+        if (!std::isfinite(value)) {
+            const double scale = largestComponent(eye);
+            value = axis.Dot(scaled(eye, scale)) * scale;
+        }
+        if (!std::isfinite(value))
+            throw std::invalid_argument("View translation exceeds the representable range");
+        return value;
+    };
 
     Mat4 result = Identity();
     result.elements[0] = right.x;
@@ -177,9 +211,9 @@ Mat4 Mat4::LookAt(const Vec3& eye, const Vec3& target, const Vec3& up) {
     result.elements[6] = -forward.y;
     result.elements[10] = -forward.z;
 
-    result.elements[12] = -right.Dot(eye);
-    result.elements[13] = -trueUp.Dot(eye);
-    result.elements[14] = forward.Dot(eye);
+    result.elements[12] = -projectEye(right);
+    result.elements[13] = -projectEye(trueUp);
+    result.elements[14] = projectEye(forward);
     return result;
 }
 
@@ -239,31 +273,42 @@ Mat4 Mat4::InverseAffine() const {
 }
 
 namespace {
-using Value = std::array<double, 4>;
+using Quaternion = std::array<double, 4>;
 
-Value Quaternion(Value e) {
-    const double x = e[0] * .5, y = e[1] * .5, z = e[2] * .5;
+Quaternion ToQuaternion(Vec3 euler) {
+    const double x = euler.x * .5, y = euler.y * .5, z = euler.z * .5;
     const double cx = std::cos(x), sx = std::sin(x), cy = std::cos(y), sy = std::sin(y),
                  cz = std::cos(z), sz = std::sin(z);
     return {sx * cy * cz - cx * sy * sz, cx * sy * cz + sx * cy * sz, cx * cy * sz - sx * sy * cz,
             cx * cy * cz + sx * sy * sz};
 }
 
-Value Euler(Value q) {
-    return {std::atan2(2 * (q[3] * q[0] + q[1] * q[2]), 1 - 2 * (q[0] * q[0] + q[1] * q[1])),
-            std::asin(std::clamp(2 * (q[3] * q[1] - q[2] * q[0]), -1.0, 1.0)),
-            std::atan2(2 * (q[3] * q[2] + q[0] * q[1]), 1 - 2 * (q[1] * q[1] + q[2] * q[2])), 0};
+Vec3 ToEuler(Quaternion q) {
+    const auto [x, y, z, w] = q;
+    const double xx = x * x, yy = y * y, zz = z * z, ww = w * w;
+    const double r00 = (ww - yy) + (xx - zz), r10 = 2 * (w * z + x * y);
+    const double cy = std::hypot(r00, r10);
+    const double pitch = std::atan2(2 * (w * y - z * x), cy);
+    if (cy < 1e-8) {
+        const double r11 = (ww - xx) + (yy - zz), r12 = 2 * (y * z - w * x);
+        return {std::atan2(-r12, r11), pitch, 0};
+    }
+    return {std::atan2(2 * (w * x + y * z), (ww - yy) + (zz - xx)), pitch, std::atan2(r10, r00)};
 }
-} // namespace
 
-Vec3 SlerpRotation(Vec3 av, Vec3 bv, double weight) {
-    const Value a{av.x, av.y, av.z, 0}, b{bv.x, bv.y, bv.z, 0};
-    auto qa = Quaternion(a), qb = Quaternion(b);
+Quaternion Multiply(Quaternion a, Quaternion b) {
+    return {a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+            a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+            a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+            a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]};
+}
+
+Quaternion Slerp(Quaternion a, Quaternion b, double weight) {
     double dot = 0;
-    for (size_t i = 0; i < 4; ++i)
-        dot += qa[i] * qb[i];
+    for (size_t i = 0; i < a.size(); ++i)
+        dot += a[i] * b[i];
     if (dot < 0) {
-        for (auto& v : qb)
+        for (auto& v : b)
             v = -v;
         dot = -dot;
     }
@@ -273,32 +318,26 @@ Vec3 SlerpRotation(Vec3 av, Vec3 bv, double weight) {
         x = std::sin((1 - weight) * angle) * inverse;
         y = std::sin(weight * angle) * inverse;
     }
-    Value result;
+    Quaternion result;
     double length = 0;
-    for (size_t i = 0; i < 4; ++i) {
-        result[i] = qa[i] * x + qb[i] * y;
+    for (size_t i = 0; i < result.size(); ++i) {
+        result[i] = a[i] * x + b[i] * y;
         length += result[i] * result[i];
     }
     for (auto& v : result)
         v /= std::sqrt(length);
-    auto e = Euler(result);
-    return {e[0], e[1], e[2]};
+    return result;
+}
+} // namespace
+
+Vec3 SlerpRotation(Vec3 a, Vec3 b, double weight) {
+    return ToEuler(Slerp(ToQuaternion(a), ToQuaternion(b), weight));
 }
 
 Vec3 AdditiveRotation(Vec3 base, Vec3 reference, Vec3 value, double weight) {
-    auto multiply = [](Value a, Value b) -> Value {
-        return {a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
-                a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
-                a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
-                a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]};
-    };
-    auto r = Quaternion({reference.x, reference.y, reference.z, 0});
-    for (size_t i = 0; i < 3; ++i)
-        r[i] = -r[i];
-    const auto delta = Euler(multiply(r, Quaternion({value.x, value.y, value.z, 0})));
-    const auto scaled = SlerpRotation({}, {delta[0], delta[1], delta[2]}, weight);
-    const auto composed = Euler(multiply(Quaternion({base.x, base.y, base.z, 0}),
-                                         Quaternion({scaled.x, scaled.y, scaled.z, 0})));
-    return {composed[0], composed[1], composed[2]};
+    const auto [x, y, z, w] = ToQuaternion(reference);
+    const auto delta = Multiply({-x, -y, -z, w}, ToQuaternion(value));
+    const auto scaled = Slerp({0, 0, 0, 1}, delta, weight);
+    return ToEuler(Multiply(ToQuaternion(base), scaled));
 }
 } // namespace LuxEngine

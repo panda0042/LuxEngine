@@ -31,6 +31,14 @@ bool FitsGpuVector(Vec3 value) {
     return std::abs(value.x) <= limit && std::abs(value.y) <= limit && std::abs(value.z) <= limit;
 }
 
+Mat4 ViewProjection(const Mat4& projection, const Mat4& view) {
+    const auto matrix = projection * view;
+    if (!std::all_of(std::begin(matrix.elements), std::end(matrix.elements),
+                     [](double value) { return std::isfinite(value); }))
+        throw std::invalid_argument("View-projection exceeds the representable range");
+    return matrix;
+}
+
 float AlphaMaskCutoff(const Material3D& material) {
     if (material.alphaMode != MaterialAlphaMode::Mask || material.alphaCutoff <= 0 ||
         material.albedoColor.w <= 0)
@@ -184,29 +192,35 @@ double Renderer3D::Context::GetEnvironmentPreparationMs() const {
 }
 
 PerspectiveCamera::PerspectiveCamera(double fovRadians, double aspect, double nearClip,
-                                     double farClip) {
+                                     double farClip)
+    : PerspectiveCamera() {
     SetPerspective(fovRadians, aspect, nearClip, farClip);
 }
 
 void PerspectiveCamera::SetPerspective(double fovRadians, double aspect, double nearClip,
                                        double farClip) {
-    projectionMatrix_ = Mat4::Perspective(fovRadians, aspect, nearClip, farClip);
-    RecalculateMatrix();
+    const auto projection = Mat4::Perspective(fovRadians, aspect, nearClip, farClip);
+    const auto combined = ViewProjection(projection, viewMatrix_);
+    projectionMatrix_ = projection;
+    viewProjectionMatrix_ = combined;
 }
 
-void PerspectiveCamera::RecalculateMatrix() {
-    viewMatrix_ = Mat4::LookAt(position_, target_, up_);
-    viewProjectionMatrix_ = projectionMatrix_ * viewMatrix_;
+void PerspectiveCamera::SetView(const Vec3& position, const Vec3& target, const Vec3& up) {
+    const auto view = Mat4::LookAt(position, target, up);
+    const auto combined = ViewProjection(projectionMatrix_, view);
+    position_ = position;
+    target_ = target;
+    up_ = up;
+    viewMatrix_ = view;
+    viewProjectionMatrix_ = combined;
 }
 
 bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vec3> positions,
                     std::span<const uint32> indices) {
     if (!gpu || positions.empty() || indices.empty() || indices.size() % 3 != 0 ||
         positions.size() > std::numeric_limits<uint32>::max() / sizeof(RenderVertex) ||
-        indices.size() > std::numeric_limits<uint32>::max() / sizeof(uint32)) {
-        Release();
+        indices.size() > std::numeric_limits<uint32>::max() / sizeof(uint32))
         return false;
-    }
     std::vector<Vertex3D> vertices;
     vertices.reserve(positions.size());
     for (const auto& position : positions)
@@ -216,7 +230,6 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vec3> positions,
 
 bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
                     std::span<const uint32> indices) {
-    Release();
     if (!gpu || vertices.empty() || indices.empty() || indices.size() % 3 != 0 ||
         vertices.size() > std::numeric_limits<uint32>::max() / sizeof(RenderVertex) ||
         indices.size() > std::numeric_limits<uint32>::max() / sizeof(uint32))
@@ -252,6 +265,7 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
         !indicesBuffer->SetData(indices.data(), indexBytes)) {
         return false;
     }
+    Release();
     vertices_ = std::move(verticesBuffer);
     indices_ = std::move(indicesBuffer);
     origin_ = origin;
@@ -1170,18 +1184,15 @@ const std::string& Renderer3D::GetLastAssetError() {
 }
 
 void PerspectiveCamera::SetPosition(const Vec3& position) {
-    position_ = position;
-    RecalculateMatrix();
+    SetView(position, target_, up_);
 }
 
 void PerspectiveCamera::SetTarget(const Vec3& target) {
-    target_ = target;
-    RecalculateMatrix();
+    SetView(position_, target, up_);
 }
 
 void PerspectiveCamera::SetUp(const Vec3& up) {
-    up_ = up;
-    RecalculateMatrix();
+    SetView(position_, target_, up);
 }
 
 const Vec3& PerspectiveCamera::GetPosition() const {
@@ -1208,5 +1219,7 @@ uint32 Mesh3D::GetIndexCount() const {
     return IsValid() ? indexCount_ : 0;
 }
 
-PerspectiveCamera::PerspectiveCamera() = default;
+PerspectiveCamera::PerspectiveCamera() {
+    SetView(position_, target_, up_);
+}
 } // namespace LuxEngine

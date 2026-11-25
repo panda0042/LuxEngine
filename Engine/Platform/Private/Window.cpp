@@ -3,6 +3,7 @@
 #include <LuxEngine/Platform/Input.hpp>
 #include <LuxEngine/Platform/Window.hpp>
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 
@@ -82,6 +83,10 @@ bool Window::ApplySystemTheme() {
 
 void Window::Shutdown() {
     if (window_) {
+        for (const auto& listener : surfaceReleases_)
+            if (const auto release = listener.lock())
+                (*release)();
+        surfaceReleases_.clear();
         Windows().erase(SDL_GetWindowID(window_));
         SDL_Event release{};
         release.type = SDL_EVENT_WINDOW_FOCUS_LOST;
@@ -93,6 +98,11 @@ void Window::Shutdown() {
     isRunning_ = false;
     presentCallback_ = {};
     hasWindowIcon_ = false;
+}
+
+void Window::TrackSurfaceRelease(const Ref<SurfaceRelease>& release) {
+    std::erase_if(surfaceReleases_, [](const auto& listener) { return listener.expired(); });
+    surfaceReleases_.emplace_back(release);
 }
 
 void Window::SetFullscreen(bool fullscreen) {
@@ -112,9 +122,16 @@ bool Window::SetRelativeMouseMode(bool enabled) {
 }
 
 bool Window::SetVSync(bool enabled) {
-    if (!presentCallback_ || !presentCallback_(enabled))
+    const auto callback = presentCallback_;
+    if (!window_ || !callback)
         return false;
-    props_.vsync = enabled;
+    const auto id = SDL_GetWindowID(window_);
+    if (!(*callback)(enabled))
+        return false;
+    const auto found = Windows().find(id);
+    if (found == Windows().end())
+        return false;
+    found->second->props_.vsync = enabled;
     return true;
 }
 
@@ -152,63 +169,64 @@ void Window::PollEvents() {
 
 void Window::ProcessEvent(const SDL_Event& event) {
     const SDL_WindowID currentWindowID = SDL_GetWindowID(window_);
+    const auto callback = eventCallback_;
     Input::ProcessEvent(event);
     if (event.type == SDL_EVENT_SYSTEM_THEME_CHANGED) {
         if (!ApplySystemTheme())
             Log::Warn(std::string("Window icon update failed: ") + SDL_GetError());
     } else if (event.type == SDL_EVENT_QUIT) {
         isRunning_ = false;
-        if (eventCallback_) {
+        if (callback) {
             WindowCloseEvent e;
-            eventCallback_(e);
+            (*callback)(e);
         }
     } else if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
-        if (event.window.windowID == currentWindowID && eventCallback_) {
+        if (event.window.windowID == currentWindowID && callback) {
             WindowFocusEvent e;
-            eventCallback_(e);
+            (*callback)(e);
         }
     } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
-        if (event.window.windowID == currentWindowID && eventCallback_) {
+        if (event.window.windowID == currentWindowID && callback) {
             WindowLostFocusEvent e;
-            eventCallback_(e);
+            (*callback)(e);
         }
     } else if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
         if (event.window.windowID == currentWindowID) {
             isRunning_ = false;
-            if (eventCallback_) {
+            if (callback) {
                 WindowCloseEvent e;
-                eventCallback_(e);
+                (*callback)(e);
             }
         }
     } else if (event.type == SDL_EVENT_KEY_DOWN) {
-        if (eventCallback_) {
+        if (callback) {
             KeyPressedEvent e(static_cast<int32>(event.key.key), event.key.repeat);
-            eventCallback_(e);
+            (*callback)(e);
         }
     } else if (event.type == SDL_EVENT_KEY_UP) {
-        if (eventCallback_) {
+        if (callback) {
             KeyReleasedEvent e(static_cast<int32>(event.key.key));
-            eventCallback_(e);
+            (*callback)(e);
         }
     } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
-        if (eventCallback_) {
+        if (callback) {
             MouseMovedEvent e(event.motion.x, event.motion.y);
-            eventCallback_(e);
+            (*callback)(e);
         }
     } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
-        if (eventCallback_) {
+        if (callback) {
             MouseScrolledEvent e(event.wheel.x, event.wheel.y);
-            eventCallback_(e);
+            (*callback)(e);
         }
     } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-        if (eventCallback_) {
+        if (callback) {
             MouseButtonPressedEvent e(static_cast<int32>(event.button.button));
-            eventCallback_(e);
+            (*callback)(e);
         }
     } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
-        if (eventCallback_) {
+        if (callback) {
             MouseButtonReleasedEvent e(static_cast<int32>(event.button.button));
-            eventCallback_(e);
+            (*callback)(e);
         }
     } else if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
                event.type == SDL_EVENT_WINDOW_RESIZED ||
@@ -221,9 +239,9 @@ void Window::ProcessEvent(const SDL_Event& event) {
                 props_.width = static_cast<uint32>(width);
                 props_.height = static_cast<uint32>(height);
             }
-            if (eventCallback_) {
+            if (callback) {
                 WindowResizeEvent e(props_.width, props_.height);
-                eventCallback_(e);
+                (*callback)(e);
             }
         }
     }
@@ -292,7 +310,8 @@ SDL_Window* Window::GetNativeHandle() const {
 }
 
 void Window::SetPresentCallback(std::function<bool(bool)> callback) {
-    presentCallback_ = std::move(callback);
+    presentCallback_ =
+        callback ? CreateRef<std::function<bool(bool)>>(std::move(callback)) : nullptr;
 }
 
 bool Window::IsVSync() const {
@@ -300,7 +319,7 @@ bool Window::IsVSync() const {
 }
 
 void Window::SetEventCallback(const EventCallbackFn& callback) {
-    eventCallback_ = callback;
+    eventCallback_ = callback ? CreateRef<EventCallbackFn>(callback) : nullptr;
 }
 
 Window::Window() = default;

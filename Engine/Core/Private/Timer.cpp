@@ -31,6 +31,12 @@ bool FixedStepAccumulator::Consume(double step) {
     return true;
 }
 
+double FixedStepAccumulator::InterpolationAlpha(double step) const {
+    if (!std::isfinite(step) || step <= 0)
+        return 1.0;
+    return std::clamp(elapsed_ / step, 0.0, 1.0);
+}
+
 void FixedStepAccumulator::DropBacklog(double step) {
     if (elapsed_ >= step)
         Reset();

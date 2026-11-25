@@ -144,6 +144,35 @@ void Diagnostics() {
     Check(allocated.liveBuffers == baseline.liveBuffers + 1 &&
               allocated.allocationBytes >= baseline.allocationBytes + 4096,
           "GPU buffer payload and live count are reported");
+    const std::array<uint8, 64> payload{};
+    Check(buffer.SetData(payload.data(), 64), "diagnostic upload outside a frame");
+    GpuTexture texture;
+    Check(Begin(first.window, first.gpu) && first.gpu.Clear(0, 0, 0, 1) &&
+              buffer.SetData(payload.data(), 64) && buffer.SetData(payload.data(), 16, 64) &&
+              !buffer.SetData(payload.data(), 64, 4095) &&
+              texture.Initialize(&first.gpu, 4, 4, payload.data(), TextureFilter::Linear,
+                                 TextureColorSpace::Linear, {.mipmaps = true}),
+          "upload diagnostic frame records buffer updates and a mipmapped texture");
+    const auto activeUploads = first.gpu.GetFrameStats();
+    Check(activeUploads.uploadBytes == 64 + 16 + 64 + 16 + 4 && activeUploads.submissions == 0 &&
+              activeUploads.drawCalls == 0,
+          "active frame reports uploads without waiting for a draw or submission");
+    Check(first.gpu.EndFrame(), "upload diagnostic frame submits successfully");
+    const auto uploads = first.gpu.GetFrameStats();
+    Check(uploads.uploadBytes == 64 + 16 + 64 + 16 + 4,
+          "upload bytes count successful buffer ranges and all texture mips in the current frame");
+    Check(uploads.uploadCpuMs > 0 && uploads.uploadWaitMs >= 0 &&
+              uploads.uploadWaitMs <= uploads.uploadCpuMs &&
+              uploads.uploadWaitMs <= uploads.cpuWaitMs,
+          "upload waits belong to both CPU upload time and total GPU wait time");
+    Check(buffer.SetData(payload.data(), 64) && Begin(first.window, first.gpu) &&
+              first.gpu.Clear(0, 0, 0, 1) && first.gpu.EndFrame(),
+          "upload metrics test submits a frame without uploads");
+    const auto idleUploads = first.gpu.GetFrameStats();
+    Check(idleUploads.uploadBytes == 0 && idleUploads.uploadCpuMs == 0 &&
+              idleUploads.uploadWaitMs == 0 && idleUploads.cpuWaitMs >= 0,
+          "upload metrics are reset per frame and exclude out-of-frame transfers");
+    texture.Release();
     buffer.Release();
     Check(first.gpu.GetMemoryStats().pendingDestructions > 0,
           "deferred buffer release remains visible");
@@ -234,6 +263,37 @@ void Misuse() {
           "misuse keeps the device usable");
     Check(CaptureClear(s.window, s.gpu, 0, 1, 0, capture) && CentreIs(capture, 0, 255, 0),
           "rendering after misuse");
+    GpuBuffer buffer, invalidBuffer;
+    GpuTexture texture;
+    Mesh3D mesh;
+    const std::array<Vec3, 3> positions{{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}};
+    const std::array<uint32, 3> indices{0, 1, 2}, invalidIndices{0, 1, 5};
+    Check(buffer.Initialize(&s.gpu, BufferType::Vertex, 64) && texture.Initialize(&s.gpu, 4, 4) &&
+              mesh.Upload(&s.gpu, positions, indices),
+          "resource replacements start from valid GPU objects");
+    const auto validResources = s.gpu.GetMemoryStats();
+    Check(!invalidBuffer.Initialize(&s.gpu, static_cast<BufferType>(99), 64) &&
+              !invalidBuffer.IsValid(),
+          "invalid buffer types do not create a vertex buffer by default");
+    Check(!buffer.Initialize(&s.gpu, BufferType::Vertex, 0) &&
+              !buffer.Initialize(&s.gpu, static_cast<BufferType>(99), 64) && buffer.IsValid() &&
+              buffer.GetSize() == 64 && buffer.GetType() == BufferType::Vertex,
+          "failed buffer replacement keeps its previous handle and type");
+    Check(!texture.Initialize(&s.gpu, 0, 4) && !texture.Initialize(nullptr, 4, 4) &&
+              texture.IsValid() && texture.GetWidth() == 4 && texture.GetHeight() == 4,
+          "failed texture replacement keeps its image and dimensions");
+    Check(!mesh.Upload(&s.gpu, positions, invalidIndices) &&
+              !mesh.Upload(nullptr, positions, indices) && mesh.IsValid(),
+          "failed mesh replacement keeps its previous geometry");
+    const auto afterFailedReplacements = s.gpu.GetMemoryStats();
+    Check(afterFailedReplacements.liveBuffers == validResources.liveBuffers &&
+              afterFailedReplacements.liveTextures == validResources.liveTextures &&
+              afterFailedReplacements.allocationBytes == validResources.allocationBytes,
+          "failed replacements preserve live allocations without allocating extras");
+    Check(buffer.Initialize(&s.gpu, BufferType::Index, 12) && buffer.GetSize() == 12 &&
+              buffer.GetType() == BufferType::Index && texture.Initialize(&s.gpu, 8, 4) &&
+              texture.GetWidth() == 8 && mesh.Upload(&s.gpu, positions, indices),
+          "valid replacements still update their resource handles");
     Window secondWindow;
     Check(secondWindow.Initialize({.title = "Second Forge viewport", .width = 96, .height = 64}),
           "second window initialized");
@@ -388,8 +448,37 @@ void Lifecycle() {
     GpuFrameCapture capture;
     Check(CaptureClear(window, same, 0, 0, 1, capture) && CentreIs(capture, 0, 0, 255),
           "renders after restart");
+    GpuBuffer survivingBuffer;
+    Check(survivingBuffer.Initialize(&same, BufferType::Vertex, 64),
+          "buffer alive before closing rendering surface");
+    Check(Begin(window, same) && same.Clear(0, 0, 0, 1), "window closes with a frame open");
+    const auto skipped = same.GetCounters().framesSkipped;
+    window.Shutdown();
+    Check(!same.IsReady() && same.GetStatus() == GpuStatus::SurfaceLost &&
+              same.GetLastFailure() == GpuStatus::SurfaceLost && !same.GetLastError().empty(),
+          "window shutdown releases the native rendering surface and reports surface loss");
+    Check(same.BeginFrame() == GpuDevice::FrameStart::Error && !same.EndFrame() &&
+              same.GetCounters().framesSkipped == skipped && !survivingBuffer.IsValid(),
+          "closed surfaces reject frames and invalidate resources");
+    Check(window.Initialize(props), "window can be reopened after losing its old surface");
+    Check(same.BeginFrame() == GpuDevice::FrameStart::Error,
+          "reopening a window never reconnects its old swap chain");
+    same.Shutdown();
+    Check(same.Initialize(window) && CaptureClear(window, same, 0, 1, 0, capture) &&
+              CentreIs(capture, 0, 255, 0),
+          "an explicitly restarted device renders on the new window surface");
     same.Shutdown();
     window.Shutdown();
+
+    GpuDevice outlivesWindow;
+    {
+        Window temporary;
+        Check(temporary.Initialize(props) && outlivesWindow.Initialize(temporary),
+              "temporary rendering window initializes");
+    }
+    Check(!outlivesWindow.IsReady() && outlivesWindow.GetStatus() == GpuStatus::SurfaceLost &&
+              outlivesWindow.BeginFrame() == GpuDevice::FrameStart::Error,
+          "device reports surface loss after the window object is destroyed");
 }
 
 void ManyFrames() {

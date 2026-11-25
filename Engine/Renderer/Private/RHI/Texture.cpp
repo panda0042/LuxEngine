@@ -43,7 +43,6 @@ GpuTexture& GpuTexture::operator=(GpuTexture&& other) noexcept {
 bool GpuTexture::Initialize(GpuDevice* device, uint32 width, uint32 height, const void* pixelData,
                             TextureFilter filter, TextureColorSpace colorSpace,
                             TextureSampling sampling, float alphaMaskCutoff) {
-    Release();
     if (!device || !device->IsReady())
         return false;
     const auto layout = Rhi::GetTextureLayout(width, height, sampling.mipmaps);
@@ -70,6 +69,7 @@ bool GpuTexture::Initialize(GpuDevice* device, uint32 width, uint32 height, cons
     if (!device->backend_->CreateTexture(width, height, {mipPixels.data(), layout.mipCount}, filter,
                                          colorSpace, handle))
         return false;
+    Release();
     handle_ = handle;
     owner_ = device->backend_;
     width_ = width;
