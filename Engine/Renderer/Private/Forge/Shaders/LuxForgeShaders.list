@@ -78,6 +78,11 @@
 #include "LuxTemporal.frag.fsl"
 #end
 
+#frag luxtemporal_composite.frag
+#define LUX_TEMPORAL_COMPOSITE
+#include "LuxTemporal.frag.fsl"
+#end
+
 #comp luxfog.comp
 #include "LuxFog.comp.fsl"
 #end

@@ -1,4 +1,25 @@
 // Included from LuxForge.cpp with the scene target and descriptor helpers in scope.
+Pipeline* CreateTemporalPipeline(LuxForgeDevice* device, Shader* shader, bool composite) {
+    PipelineDesc desc = {};
+    desc.mType = PIPELINE_TYPE_GRAPHICS;
+    PIPELINE_LAYOUT_DESC(desc, SRT_LAYOUT_DESC(LuxTemporalSrt, Persistent), NULL, NULL, NULL);
+    auto& graphics = desc.mGraphicsDesc;
+    RasterizerStateDesc raster = {};
+    raster.mCullMode = CULL_MODE_NONE;
+    DepthStateDesc noDepth = {};
+    TinyImageFormat formats[] = {kHdrFormat, TinyImageFormat_R32_SFLOAT, kHdrFormat};
+    graphics.pShaderProgram = shader;
+    graphics.pRasterizerState = &raster;
+    graphics.pDepthState = &noDepth;
+    graphics.pColorFormats = formats;
+    graphics.mRenderTargetCount = composite ? 3 : 2;
+    graphics.mSampleCount = SAMPLE_COUNT_1;
+    graphics.mPrimitiveTopo = PRIMITIVE_TOPO_TRI_LIST;
+    Pipeline* pipeline = nullptr;
+    addPipeline(device->renderer, &desc, &pipeline);
+    return pipeline;
+}
+
 bool InitTemporal(LuxForgeDevice* device) {
     auto& temporal = device->temporal;
     if (temporal.ready)
@@ -25,30 +46,27 @@ bool InitTemporal(LuxForgeDevice* device) {
     if (!temporal.set || !temporal.constants || !temporal.constants->pCpuMappedAddress)
         return false;
 
-    PipelineDesc desc = {};
-    desc.mType = PIPELINE_TYPE_GRAPHICS;
-    PIPELINE_LAYOUT_DESC(desc, SRT_LAYOUT_DESC(LuxTemporalSrt, Persistent), NULL, NULL, NULL);
-    auto& graphics = desc.mGraphicsDesc;
-    RasterizerStateDesc raster = {};
-    raster.mCullMode = CULL_MODE_NONE;
-    DepthStateDesc noDepth = {};
-    TinyImageFormat formats[] = {kHdrFormat, TinyImageFormat_R32_SFLOAT};
-    graphics.pShaderProgram = temporal.shader;
-    graphics.pRasterizerState = &raster;
-    graphics.pDepthState = &noDepth;
-    graphics.pColorFormats = formats;
-    graphics.mRenderTargetCount = 2;
-    graphics.mSampleCount = SAMPLE_COUNT_1;
-    graphics.mPrimitiveTopo = PRIMITIVE_TOPO_TRI_LIST;
-    addPipeline(device->renderer, &desc, &temporal.pipeline);
+    temporal.pipeline = CreateTemporalPipeline(device, temporal.shader, false);
     temporal.ready = temporal.pipeline != nullptr;
     return temporal.ready;
 }
 
-bool PrepareTemporal(LuxForgeDevice* device) {
+bool PrepareTemporal(LuxForgeDevice* device, bool composite) {
     auto& temporal = device->temporal;
     if (!InitTemporal(device))
         return false;
+    if (composite && !temporal.compositePipeline) {
+        if (temporal.compositeAttempted)
+            return false;
+        temporal.compositeAttempted = true;
+        temporal.compositeShader =
+            LoadShader(device, "luxfullscreen.vert", "luxtemporal_composite.frag");
+        if (!temporal.compositeShader)
+            return false;
+        temporal.compositePipeline = CreateTemporalPipeline(device, temporal.compositeShader, true);
+        if (!temporal.compositePipeline)
+            return false;
+    }
     if (temporal.color[0].target)
         return true;
     for (unsigned i = 0; i < 2; ++i) {
@@ -75,7 +93,9 @@ float RadicalInverse(unsigned index, unsigned base) {
 
 Texture* ResolveTemporal(LuxForgeDevice* device, Cmd* cmd, const LuxForgeScene& scene,
                          LuxForgeDevice::SceneTarget& color, LuxForgeDevice::SceneTarget& depth,
-                         const std::array<float, 2>& jitter, uint64_t frame) {
+                         LuxForgeDevice::SceneTarget* opaqueDepth,
+                         LuxForgeDevice::SceneTarget* composite, const std::array<float, 2>& jitter,
+                         uint64_t frame) {
     auto& temporal = device->temporal;
     const auto old = temporal.index;
     const unsigned output = old ^ 1u;
@@ -108,27 +128,31 @@ Texture* ResolveTemporal(LuxForgeDevice* device, Cmd* cmd, const LuxForgeScene& 
     values[30] = jitter[0];
     values[31] = jitter[1];
     values[32] = history ? 1.f : 0.f;
+    values[33] = opaqueDepth ? 1.f : 0.f;
 
     const uint32_t offset = device->frameSlot * LuxForgeDevice::kSceneStride;
     std::memcpy(static_cast<uint8_t*>(temporal.constants->pCpuMappedAddress) + offset,
                 values.data(), sizeof(values));
     DescriptorDataRange range{offset, LuxForgeDevice::kSceneStride, 0};
-    DescriptorData params[5] = {};
+    DescriptorData params[6] = {};
     params[0].mIndex = SRT_RES_IDX(LuxTemporalSrt, Persistent, gTemporal);
     params[0].pRanges = &range;
     params[0].ppBuffers = &temporal.constants;
     Texture* textures[] = {color.target->pTexture, depth.target->pTexture,
                            (history ? temporal.color[old] : color).target->pTexture,
-                           (history ? temporal.depth[old] : depth).target->pTexture};
+                           (history ? temporal.depth[old] : depth).target->pTexture,
+                           (opaqueDepth ? opaqueDepth : &depth)->target->pTexture};
     const uint32_t slots[] = {SRT_RES_IDX(LuxTemporalSrt, Persistent, gCurrentColor),
                               SRT_RES_IDX(LuxTemporalSrt, Persistent, gCurrentDepth),
                               SRT_RES_IDX(LuxTemporalSrt, Persistent, gPreviousColor),
-                              SRT_RES_IDX(LuxTemporalSrt, Persistent, gPreviousDepth)};
-    for (unsigned i = 0; i < 4; ++i) {
+                              SRT_RES_IDX(LuxTemporalSrt, Persistent, gPreviousDepth),
+                              SRT_RES_IDX(LuxTemporalSrt, Persistent, gTemporalOpaqueDepth)};
+    for (unsigned i = 0; i < std::size(textures); ++i) {
         params[i + 1].mIndex = slots[i];
         params[i + 1].ppTextures = &textures[i];
     }
-    updateDescriptorSet(device->renderer, device->frameSlot, temporal.set, 5, params);
+    updateDescriptorSet(device->renderer, device->frameSlot, temporal.set, std::size(params),
+                        params);
 
     Transition(cmd, depth, RESOURCE_STATE_SHADER_RESOURCE);
     Transition(cmd, temporal.color[output], RESOURCE_STATE_RENDER_TARGET);
@@ -137,14 +161,21 @@ Texture* ResolveTemporal(LuxForgeDevice* device, Cmd* cmd, const LuxForgeScene& 
     targets.mRenderTargetCount = 2;
     targets.mRenderTargets[0].pRenderTarget = temporal.color[output].target;
     targets.mRenderTargets[1].pRenderTarget = temporal.depth[output].target;
-    for (unsigned i = 0; i < 2; ++i) {
+    if (composite) {
+        Transition(cmd, *composite, RESOURCE_STATE_RENDER_TARGET);
+        targets.mRenderTargetCount = 3;
+        targets.mRenderTargets[2].pRenderTarget = composite->target;
+    }
+    for (unsigned i = 0; i < targets.mRenderTargetCount; ++i) {
         targets.mRenderTargets[i].mLoadAction = LOAD_ACTION_CLEAR;
         targets.mRenderTargets[i].mStoreAction = STORE_ACTION_STORE;
     }
+    if (composite)
+        targets.mRenderTargets[2].mLoadAction = LOAD_ACTION_DONTCARE;
     cmdBindRenderTargets(cmd, &targets);
     cmdSetViewport(cmd, 0, 0, float(device->width), float(device->height), 0, 1);
     cmdSetScissor(cmd, 0, 0, device->width, device->height);
-    BindPipeline(device, cmd, temporal.pipeline);
+    BindPipeline(device, cmd, composite ? temporal.compositePipeline : temporal.pipeline);
     BindDescriptors(device, cmd, device->frameSlot, temporal.set);
     cmdDraw(cmd, 3, 0);
     cmdBindRenderTargets(cmd, nullptr);
