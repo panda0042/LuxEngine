@@ -3171,6 +3171,74 @@ void WaterComposite() {
 
     const auto backgroundRed = Vec4{1, 0, 0, 1};
     const auto backgroundBlue = Vec4{0, 0, 1, 1};
+
+    const auto waterOnly = draw(&mesh, {}, 1.5, backgroundBlue, false, false);
+    settings.temporalAntialiasing = true;
+    constexpr double overlayWidth = .45, frontDepth = .5;
+    const auto captureBlendedWater = [&](GpuFrameCapture& frame, double redX) {
+        return CaptureFrame(session, frame, [&] {
+            if (!session.gpu.Clear(0, 0, 0, 1))
+                return false;
+            context.BeginScene(camera, settings, 1);
+            Material3D floor;
+            floor.albedoColor = backgroundBlue;
+            context.DrawMesh(mesh, Mat4::Translate({0, 0, -1.5}) * Mat4::Scale({6, 6, 1}), floor);
+            Material3D water;
+            water.albedoColor = {0, 0, 0, 1};
+            water.roughness = .06f;
+            water.water = WaterMaterial3D{{}, 1.333f};
+            context.DrawMesh(mesh, Mat4::Scale({2, 2, 1}), water);
+            Material3D overlay;
+            overlay.alphaMode = MaterialAlphaMode::Blend;
+            overlay.albedoColor = {1, 0, 0, .8f};
+            context.DrawMesh(
+                mesh, Mat4::Translate({redX, 0, frontDepth}) * Mat4::Scale({overlayWidth, .45, 1}),
+                overlay);
+            overlay.albedoColor = {0, 1, 0, .8f};
+            context.DrawMesh(mesh, Mat4::Translate({-.56, 0, -.5}) * Mat4::Scale({.4, .4, 1}),
+                             overlay);
+            context.EndScene();
+            return context.GetLastAssetError().empty();
+        });
+    };
+    GpuFrameCapture initialBlend, movedBlend, foggedBlend;
+    if (waterOnly.rgba.empty() || !captureBlendedWater(initialBlend, 0))
+        return Check(false, "water and transparent overlays capture with TAA enabled");
+    Check(session.gpu.GetFrameStats().temporalResolvePasses == 1,
+          "water with transparent overlays runs the temporal resolve");
+    const double worldPixel = 2 * (3 - frontDepth) * std::tan(ToRadians(30)) / initialBlend.width;
+    const double movedRed = overlayWidth * .5 + worldPixel;
+    if (!captureBlendedWater(movedBlend, movedRed))
+        return Check(false, "moving overlay captures with temporal history");
+    const auto temporalStats = session.gpu.GetFrameStats();
+    Check(temporalStats.temporalResolvePasses == 1 && temporalStats.temporalHistoryPasses == 1,
+          "water temporal history survives transparent overlays");
+    const auto redBefore = read(initialBlend);
+    const auto redAfter = read(movedBlend, .56f);
+    const auto previousRed = read(movedBlend);
+    const auto adjacentRed = read(movedBlend, .5f + 1.5f / movedBlend.width);
+    const auto openWater = read(waterOnly);
+    const auto hiddenGreen = read(movedBlend, .36f);
+    const auto openLeftWater = read(waterOnly, .36f);
+    Check(redBefore[0] > redBefore[2] + 40 && redAfter[0] > redAfter[2] + 40 &&
+              adjacentRed[0] > adjacentRed[2] + 40,
+          "a transparent overlay in front of water blends at its current position");
+    Check(std::abs(previousRed[0] - openWater[0]) <= 4,
+          "the previous overlay pixel returns to water even beside a current red pixel");
+    Check(std::abs(hiddenGreen[1] - openLeftWater[1]) <= 4,
+          "water depth hides transparent geometry behind the surface");
+
+    settings.fog = {{.5, .5, .5}, .025f, 30, .12f, 0, .12f, false};
+    if (!captureBlendedWater(foggedBlend, movedRed))
+        return Check(false, "fog captures with temporal water and overlays");
+    const auto fogStats = session.gpu.GetFrameStats();
+    const auto foggedRed = read(foggedBlend, .56f);
+    Check(fogStats.volumetricFogPasses == 1 && fogStats.temporalHistoryPasses == 1 &&
+              foggedRed[0] > foggedRed[2] + 30,
+          "fog composites the resolved water and its current transparent overlays");
+    settings.fog = {};
+    settings.temporalAntialiasing = false;
+
     camera.SetPosition({0, 0, -1});
     const auto transmittedRed = read(draw(&mesh, {}, -1, backgroundRed, false, false));
     const auto transmittedBlue = read(draw(&mesh, {}, -1, backgroundBlue, false, false));

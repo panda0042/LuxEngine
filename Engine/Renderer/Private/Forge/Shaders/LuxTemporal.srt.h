@@ -8,6 +8,7 @@ DECL_TEXTURE(Persistent, Tex2D(float4), gCurrentColor)
 DECL_TEXTURE(Persistent, Tex2D(float), gCurrentDepth)
 DECL_TEXTURE(Persistent, Tex2D(float4), gPreviousColor)
 DECL_TEXTURE(Persistent, Tex2D(float), gPreviousDepth)
+DECL_TEXTURE(Persistent, Tex2D(float), gTemporalOpaqueDepth)
 END_SRT_SET(Persistent)
 END_SRT(LuxTemporalSrt)
 

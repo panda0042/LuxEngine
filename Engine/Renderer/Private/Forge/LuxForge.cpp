@@ -292,9 +292,11 @@ struct LuxForgeDevice {
 
     struct TemporalState {
         Shader* shader = nullptr;
+        Shader* compositeShader = nullptr;
         DescriptorSet* set = nullptr;
         Buffer* constants = nullptr;
         Pipeline* pipeline = nullptr;
+        Pipeline* compositePipeline = nullptr;
         SceneTarget color[2], depth[2];
         std::array<float, 16> matrix{};
         std::array<double, 3> origin{};
@@ -302,6 +304,7 @@ struct LuxForgeDevice {
         uint64_t frame = 0, view = 0;
         uint32_t environment = 0, index = 0;
         bool attempted = false, ready = false;
+        bool compositeAttempted = false;
     } temporal;
 
     std::vector<PendingTarget> pendingTargets;
@@ -2586,10 +2589,12 @@ void ShutdownScene(LuxForgeDevice* device) {
     RetireTemporal(device);
     if (temporal.set)
         removeDescriptorSet(device->renderer, temporal.set);
-    if (temporal.pipeline)
-        removePipeline(device->renderer, temporal.pipeline);
-    if (temporal.shader)
-        removeShader(device->renderer, temporal.shader);
+    for (auto* pipeline : {temporal.pipeline, temporal.compositePipeline})
+        if (pipeline)
+            removePipeline(device->renderer, pipeline);
+    for (auto* shader : {temporal.shader, temporal.compositeShader})
+        if (shader)
+            removeShader(device->renderer, shader);
     if (temporal.constants)
         removeResource(temporal.constants);
     temporal = {};
@@ -3040,15 +3045,19 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxFor
 
     const uint64_t thisFrame = device->frameNumber + 1;
     const uint32_t pass = device->scenePasses++;
-    const bool temporal =
-        scene->temporalView && pass == 0 && colorEnd == waterEnd && PrepareTemporal(device);
+    const bool waterWithBlend = water && waterEnd < colorEnd;
+    const bool temporal = scene->temporalView && pass == 0 &&
+                          (colorEnd == waterEnd || waterWithBlend) &&
+                          PrepareTemporal(device, waterWithBlend);
+    const bool compositeBlend = temporal && waterWithBlend;
     std::array<float, 2> jitter{};
     LuxForgeScene jittered;
     if (temporal) {
         jittered = *scene;
         const unsigned sample = unsigned((thisFrame - 1) % 8) + 1;
-        jitter = {(RadicalInverse(sample, 2) - 0.5f) * 2.f / device->width,
-                  (RadicalInverse(sample, 3) - 0.5f) * 2.f / device->height};
+        const float jitterScale = water ? .55f : 1.f;
+        jitter = {(RadicalInverse(sample, 2) - 0.5f) * (2.f * jitterScale) / device->width,
+                  (RadicalInverse(sample, 3) - 0.5f) * (2.f * jitterScale) / device->height};
         for (unsigned col = 0; col < 4; ++col) {
             auto* column = jittered.viewProjection + col * 4;
             column[0] += jitter[0] * column[3];
@@ -3345,8 +3354,8 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxFor
         ++device->frameStats.drawCalls;
         // Both the opaque snapshot and the composite are stable until subsequent frames on
         // this queue. Water writes the composite's depth before standard transparent geometry.
-        DrawColorMeshes(device, cmd, visible, firstDraw, opaqueEnd, colorEnd, waterEntry,
-                        rayTracing);
+        DrawColorMeshes(device, cmd, visible, firstDraw, opaqueEnd,
+                        compositeBlend ? waterEnd : colorEnd, waterEntry, rayTracing);
         cmdBindRenderTargets(cmd, nullptr);
         Transition(cmd, device->waterHdr, RESOURCE_STATE_SHADER_RESOURCE);
         device->waterHdr.lastUsedFrame = device->waterDepth.lastUsedFrame = thisFrame;
@@ -3356,8 +3365,31 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxFor
     if (temporal) {
         auto& currentColor = water ? device->waterHdr : device->hdr;
         auto& currentDepth = water ? device->waterDepth : device->sceneDepth;
+        auto* composite = compositeBlend ? &device->hdr : nullptr;
         resolved =
-            ResolveTemporal(device, cmd, *scene, currentColor, currentDepth, jitter, thisFrame);
+            ResolveTemporal(device, cmd, *scene, currentColor, currentDepth,
+                            water ? &device->sceneDepth : nullptr, composite, jitter, thisFrame);
+        if (composite) {
+            Transition(cmd, currentDepth, RESOURCE_STATE_DEPTH_WRITE);
+            BindRenderTargetsDesc bind = {};
+            bind.mRenderTargetCount = 1;
+            bind.mRenderTargets[0].pRenderTarget = composite->target;
+            bind.mRenderTargets[0].mLoadAction = LOAD_ACTION_LOAD;
+            bind.mRenderTargets[0].mStoreAction = STORE_ACTION_STORE;
+            bind.mDepthStencil.pDepthStencil = currentDepth.target;
+            bind.mDepthStencil.mLoadAction = LOAD_ACTION_LOAD;
+            bind.mDepthStencil.mStoreAction = STORE_ACTION_STORE;
+            bind.mDepthStencil.mLoadActionStencil = LOAD_ACTION_DONTCARE;
+            bind.mDepthStencil.mStoreActionStencil = STORE_ACTION_DONTCARE;
+            cmdBindRenderTargets(cmd, &bind);
+            cmdSetViewport(cmd, 0.0f, 0.0f, static_cast<float>(device->width),
+                           static_cast<float>(device->height), 0.0f, 1.0f);
+            cmdSetScissor(cmd, 0, 0, device->width, device->height);
+            DrawColorMeshes(device, cmd, visible, firstDraw, waterEnd, colorEnd, entry, rayTracing);
+            cmdBindRenderTargets(cmd, nullptr);
+            Transition(cmd, *composite, RESOURCE_STATE_SHADER_RESOURCE);
+            resolved = composite->target->pTexture;
+        }
         textures[5] = resolved;
         updateDescriptorSet(device->renderer, toneEntry, device->sceneSet, commonDescriptors,
                             params);
