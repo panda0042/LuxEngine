@@ -62,10 +62,12 @@ bool Valid(const OceanSpectrumSettings& s) {
 } // namespace
 
 struct OceanSpectrum::State {
+    static constexpr uint32 ColumnBatch = 8;
+
     explicit State(const OceanSpectrumSettings& config)
         : settings(config), n(settings.resolution), mask(n - 1), spacing(settings.patchLength / n),
           modes(n * n), angularFrequencies(n * n / 2 + 1), phases(angularFrequencies.size()),
-          roots(n), bitReverse(n), fields(n * n), column(n), surface(n * n) {
+          roots(n), bitReverse(n), fields(n * n), columns(n * ColumnBatch), surface(n * n) {
         for (uint32 i = 0; i < n; ++i) {
             roots[i] = std::polar(1.0, Tau * i / n);
             for (uint32 bit = 1, value = i; bit < n; bit <<= 1, value >>= 1)
@@ -117,23 +119,44 @@ struct OceanSpectrum::State {
         return static_cast<size_t>(z & mask) * n + (x & mask);
     }
 
-    void Transform(std::span<WaveFields> line) const {
-        for (uint32 i = 0; i < n; ++i)
-            if (i < bitReverse[i])
-                std::swap(line[i], line[bitReverse[i]]);
-        for (uint32 length = 2; length <= n; length <<= 1) {
-            const uint32 half = length / 2, stride = n / length;
+    void TransformBitReversed(std::span<WaveFields> line) const {
+        for (uint32 length = 4; length <= n; length *= 4) {
+            const uint32 quarter = length / 4, stride = n / length;
             for (uint32 group = 0; group < n; group += length)
-                for (uint32 i = 0; i < half; ++i) {
+                for (uint32 i = 0; i < quarter; ++i) {
                     auto& a = line[group + i];
-                    auto& b = line[group + i + half];
-                    const auto root = roots[i * stride];
+                    auto& b = line[group + i + quarter];
+                    auto& c = line[group + i + 2 * quarter];
+                    auto& d = line[group + i + 3 * quarter];
+                    const Complex firstRoot = roots[2 * i * stride];
+                    const Complex evenRoot = roots[i * stride],
+                                  oddRoot = roots[(i + quarter) * stride];
                     for (size_t field = 0; field < a.size(); ++field) {
-                        const Complex rotated = b[field] * root;
-                        b[field] = a[field] - rotated;
-                        a[field] += rotated;
+                        const Complex bRotated = b[field] * firstRoot;
+                        const Complex dRotated = d[field] * firstRoot;
+                        const Complex leftSum = a[field] + bRotated;
+                        const Complex leftDifference = a[field] - bRotated;
+                        const Complex rightSum = (c[field] + dRotated) * evenRoot;
+                        const Complex rightDifference = (c[field] - dRotated) * oddRoot;
+                        a[field] = leftSum + rightSum;
+                        b[field] = leftDifference + rightDifference;
+                        c[field] = leftSum - rightSum;
+                        d[field] = leftDifference - rightDifference;
                     }
                 }
+        }
+        if (std::countr_zero(n) % 2 == 0)
+            return;
+        const uint32 half = n / 2;
+        for (uint32 i = 0; i < half; ++i) {
+            auto& a = line[i];
+            auto& b = line[i + half];
+            const Complex root = roots[i];
+            for (size_t field = 0; field < a.size(); ++field) {
+                const Complex rotated = b[field] * root;
+                b[field] = a[field] - rotated;
+                a[field] += rotated;
+            }
         }
     }
 
@@ -163,23 +186,30 @@ struct OceanSpectrum::State {
                 const auto velocityZ = I * mode.choppyDirection.y * heightRate;
                 // Coefficients carry the frequency-domain sample area, so the inverse
                 // sum is unnormalized and amplitude does not shrink with grid size.
-                fields[index] = {height + I * displacementX, displacementZ + I * heightRate,
-                                 velocityX + I * velocityZ};
+                fields[Index(bitReverse[x], z)] = {height + I * displacementX,
+                                                   displacementZ + I * heightRate,
+                                                   velocityX + I * velocityZ};
             }
         for (uint32 z = 0; z < n; ++z)
-            Transform(std::span(fields).subspan(Index(0, z), n));
-        for (uint32 x = 0; x < n; ++x) {
-            for (uint32 z = 0; z < n; ++z)
-                column[z] = fields[Index(x, z)];
-            Transform(column);
-            for (uint32 z = 0; z < n; ++z)
-                fields[Index(x, z)] = column[z];
-        }
-
-        for (size_t i = 0; i < fields.size(); ++i) {
-            const auto& value = fields[i];
-            surface[i].displacement = {value[0].imag(), value[0].real(), value[1].real()};
-            surface[i].velocity = {value[2].real(), value[1].imag(), value[2].imag()};
+            TransformBitReversed(std::span(fields).subspan(Index(0, z), n));
+        for (uint32 start = 0; start < n; start += ColumnBatch) {
+            for (uint32 z = 0; z < n; ++z) {
+                const auto* row = fields.data() + Index(start, z);
+                auto* destination = columns.data() + bitReverse[z];
+                for (uint32 x = 0; x < ColumnBatch; ++x)
+                    destination[x * n] = row[x];
+            }
+            for (uint32 x = 0; x < ColumnBatch; ++x)
+                TransformBitReversed(std::span(columns).subspan(x * n, n));
+            for (uint32 z = 0; z < n; ++z) {
+                const auto* source = columns.data() + z;
+                auto* row = surface.data() + Index(start, z);
+                for (uint32 x = 0; x < ColumnBatch; ++x) {
+                    const auto& value = source[x * n];
+                    row[x].displacement = {value[0].imag(), value[0].real(), value[1].real()};
+                    row[x].velocity = {value[2].real(), value[1].imag(), value[2].imag()};
+                }
+            }
         }
         for (uint32 z = 0; z < n; ++z)
             for (uint32 x = 0; x < n; ++x) {
@@ -229,7 +259,7 @@ struct OceanSpectrum::State {
     std::vector<double> angularFrequencies;
     std::vector<Complex> phases, roots;
     std::vector<uint32> bitReverse;
-    std::vector<WaveFields> fields, column;
+    std::vector<WaveFields> fields, columns;
     std::vector<OceanSample> surface;
 };
 
