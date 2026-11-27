@@ -32,6 +32,7 @@ struct ScenePlayerOptions {
     std::optional<ScenePlayerView> view;
     // Stops after this many frames when non-zero (smoke tests).
     uint32 maxFrames = 0;
+    std::string assetRoot;
 };
 
 struct ScenePlayerCameraView {
@@ -60,7 +61,7 @@ ScenePlayerCameras ResolveScenePlayerCameras(Scene& scene, double aspect,
                                              const ScenePlayerView& fallback);
 
 // Parses: <scene> [--title T] [--size W H] [--fullscreen] [--view X Y HALF_HEIGHT]
-//         [--frames N] [--scripts DLL]
+//         [--frames N] [--scripts DLL] [--asset-root DIR]
 // Returns std::nullopt and sets error on invalid arguments.
 std::optional<ScenePlayerOptions> ParseScenePlayerArguments(const std::vector<std::string>& args,
                                                             std::string& error);

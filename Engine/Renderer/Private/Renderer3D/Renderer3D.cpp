@@ -1,3 +1,4 @@
+#include "Forge/LuxForgeApi.h"
 #include "LuxVirtualShadowPages.hpp"
 #include "RHI/RenderBackend.hpp"
 #include "RHI/TextureMipChain.hpp"
@@ -668,7 +669,8 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
                                texture->alphaMaskCutoff_ == AlphaMaskCutoff(material);
     const uint32 sampling =
         (material.textureSampling.addressMode == TextureAddressMode::Repeat ? 1u : 0u) |
-        (material.textureSampling.anisotropic ? 2u : 0u) | (alphaCoverage ? 4u : 0u);
+        (material.textureSampling.anisotropic ? 2u : 0u) | (alphaCoverage ? 4u : 0u) |
+        (textures.unlitSprite ? LUX_FORGE_SAMPLING_UNLIT : 0u);
     Vec4 water{0, 0, 0, 0};
     if (material.water) {
         const auto airToWater = material.water->indexOfRefraction;

@@ -494,12 +494,12 @@ void Scene::OnRender() {
             if (!tilemaps && entity.HasComponent<SpriteRendererComponent>()) {
                 const auto& sprite = entity.GetComponent<SpriteRendererComponent>();
                 if (Finite(sprite.color)) {
-                    if (sprite.texturePath.empty())
-                        Renderer2D::DrawQuad(matrix, Exposed(sprite.color, settings_.exposure));
-                    else
-                        Renderer2D::DrawSpriteAsset(matrix, ResolveAssetPath(sprite.texturePath),
-                                                    sprite.frame, sprite.columns, sprite.rows,
-                                                    Exposed(sprite.color, settings_.exposure));
+                    const auto tint = Exposed(sprite.color, settings_.exposure);
+                    if (sprite.texturePath.empty() ||
+                        !Renderer2D::DrawSpriteAsset(matrix, ResolveAssetPath(sprite.texturePath),
+                                                     sprite.frame, sprite.columns, sprite.rows,
+                                                     tint))
+                        Renderer2D::DrawQuad(matrix, tint);
                 }
             }
         }
@@ -1221,7 +1221,46 @@ bool Scene::Serialize(const std::string& filepath, std::string* writtenData) {
     return true;
 }
 
-bool Scene::DeserializeStream(std::istream& in) {
+namespace {
+bool ValidLegacySpritePath(const std::string& path) {
+    if (path.empty())
+        return true;
+    if (path.size() > 4096 || !IsValidUtf8(path) ||
+        path.find_first_of("\\:") != std::string::npos ||
+        std::any_of(path.begin(), path.end(), [](unsigned char c) { return c < 32 || c == 127; }))
+        return false;
+    const auto file = Utf8Path(path);
+    return !file.has_root_path() && std::none_of(file.begin(), file.end(), [](const auto& part) {
+        return part.empty() || part == "." || part == "..";
+    });
+}
+
+std::string ResolveLegacySpritePath(const std::string& value, const std::string& source,
+                                    const std::string& assetRoot) {
+    namespace fs = std::filesystem;
+    auto root =
+        assetRoot.empty() ? fs::absolute(Utf8Path(source)).parent_path() : Utf8Path(assetRoot);
+    if (assetRoot.empty()) {
+        for (auto folder = root; !folder.empty() && folder != folder.parent_path();
+             folder = folder.parent_path()) {
+            std::error_code error;
+            if (fs::is_regular_file(folder / "project.luxproj", error)) {
+                root = folder;
+                break;
+            }
+        }
+    }
+    root = fs::weakly_canonical(root);
+    const auto resolved = fs::weakly_canonical(root / Utf8Path(value));
+    const auto relative = resolved.lexically_relative(root);
+    if (relative.empty() || relative.is_absolute() || *relative.begin() == "..")
+        throw std::invalid_argument("Invalid legacy sprite texture path");
+    return PathToUtf8(resolved);
+}
+} // namespace
+
+bool Scene::DeserializeStream(std::istream& in, const std::string& source,
+                              const std::string& assetRoot) {
     in.imbue(std::locale::classic());
     std::string header;
     unsigned version = 0;
@@ -1233,7 +1272,9 @@ bool Scene::DeserializeStream(std::istream& in) {
     parsed.nextEntityId_ = 1;
     uint32 lastId = 0;
     try {
-        if (version >= 3) {
+        in >> std::ws;
+        const bool texturedV3 = version == 3 && in.peek() != 'S';
+        if (version >= 3 && !texturedV3) {
             std::string marker;
             SceneSettings settings;
             if (!(in >> marker >> settings.clearColor >> settings.exposure >> settings.gravity >>
@@ -1294,6 +1335,16 @@ bool Scene::DeserializeStream(std::istream& in) {
             });
             load.operator()<SpriteRendererComponent>([&](auto& c) {
                 in >> c.color;
+                if (texturedV3) {
+                    in >> std::ws;
+                    if (in.peek() != '"' || !(in >> std::quoted(c.texturePath)) ||
+                        !ValidLegacySpritePath(c.texturePath)) {
+                        in.setstate(std::ios::failbit);
+                        return;
+                    }
+                    if (!c.texturePath.empty() && (!source.empty() || !assetRoot.empty()))
+                        c.texturePath = ResolveLegacySpritePath(c.texturePath, source, assetRoot);
+                }
                 if (!Finite(c.color))
                     in.setstate(std::ios::failbit);
             });
@@ -1390,7 +1441,7 @@ bool Scene::DeserializeStream(std::istream& in) {
                     }
                 });
             }
-            if (version >= 3) {
+            if (version >= 3 && !texturedV3) {
                 load.operator()<HierarchyComponent>([&](auto& c) { in >> c.parent >> c.group; });
                 load.operator()<SceneReferenceComponent>([&](auto& c) {
                     int mode = 0;
@@ -1445,13 +1496,18 @@ void Scene::AdoptLoadedScene(Scene& parsed) {
 }
 
 bool Scene::DeserializeFromString(const std::string& data) {
+    return DeserializeWithSource(data, {}, {});
+}
+
+bool Scene::DeserializeWithSource(const std::string& data, const std::string& source,
+                                  const std::string& assetRoot) {
     if (data.empty() || data.size() > MaxSceneSizeBytes)
         return false;
     const auto first = data.find_first_not_of(" \t\r\n");
     if (first != std::string::npos && data[first] == '{')
         return DeserializeJson(data);
     std::istringstream in(data);
-    return DeserializeStream(in);
+    return DeserializeStream(in, source, assetRoot);
 }
 
 bool Scene::Deserialize(const std::string& filepath) {
@@ -1466,7 +1522,7 @@ bool Scene::Deserialize(const std::string& filepath) {
         return false;
     std::string data(static_cast<size_t>(fileSize), '\0');
     if (!in.read(data.data(), static_cast<std::streamsize>(data.size())) ||
-        in.peek() != std::char_traits<char>::eof() || !DeserializeFromString(data))
+        in.peek() != std::char_traits<char>::eof() || !DeserializeWithSource(data, filepath, {}))
         return false;
     sourcePath_ = filepath;
     return true;

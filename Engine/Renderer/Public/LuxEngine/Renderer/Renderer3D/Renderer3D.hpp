@@ -57,6 +57,7 @@ struct MaterialTextures3D {
     GpuTexture* baseColor = nullptr;
     GpuTexture* normal = nullptr;
     GpuTexture* roughness = nullptr;
+    bool unlitSprite = false;
 };
 
 struct PointLight {

@@ -373,6 +373,11 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
         discard;
     if (gDraw.options.y < 1.5f)
         color.a = 1.0f;
+    if ((maps & 128u) != 0u)
+    {
+        color.rgb = pow(max(color.rgb, 0.0f), float3(2.2f, 2.2f, 2.2f));
+        RETURN(color);
+    }
     const bool authoredNormal = dot(In.normal, In.normal) > 1e-10f;
     const float3 faceNormal = authoredNormal ? In.normal : cross(ddy(In.world), ddx(In.world));
     const float lenSq = dot(faceNormal, faceNormal);

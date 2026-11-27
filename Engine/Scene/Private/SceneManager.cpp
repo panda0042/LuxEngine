@@ -578,7 +578,8 @@ struct SceneManager::State {
         return data;
     }
 
-    std::shared_ptr<Scene> LoadResolved(const fs::path& requested, LoadContext& context);
+    std::shared_ptr<Scene> LoadResolved(const fs::path& requested, LoadContext& context,
+                                        const fs::path& spriteAssetRoot = {});
     void RefreshOne(Scene& target, uint32 root, Scene& source, bool reset = false);
     SceneLoadResult LoadTop(const fs::path& requested, bool preload,
                             std::optional<uint64> submittedGeneration = std::nullopt);
@@ -910,7 +911,8 @@ void SceneManager::State::RefreshOne(Scene& target, uint32 root, Scene& source, 
 }
 
 std::shared_ptr<Scene> SceneManager::State::LoadResolved(const fs::path& requested,
-                                                         LoadContext& context) {
+                                                         LoadContext& context,
+                                                         const fs::path& spriteAssetRoot) {
     const auto path = Canonical(requested);
     if (context.stack.size() >= MaxDepth)
         throw std::runtime_error("씬 참조의 중첩 한도 16단계를 넘었습니다.");
@@ -920,11 +922,20 @@ std::shared_ptr<Scene> SceneManager::State::LoadResolved(const fs::path& request
     context.stack.push_back(path);
     try {
         auto result = std::make_shared<Scene>();
-        if (!result->DeserializeFromString(Read(path, context)))
+        if (!result->DeserializeWithSource(Read(path, context), Utf8(path), Utf8(spriteAssetRoot)))
             throw std::runtime_error("씬 파일 형식이 올바르지 않습니다: " + Utf8(path));
         if (PrefabLibrary::IsPrefabPath(path) && result->GetChildren(0).size() != 1)
             throw std::runtime_error("프리팹은 최상위 오브젝트 하나를 포함해야 합니다.");
         result->SetSourcePath(Utf8(path));
+        if (!spriteAssetRoot.empty()) {
+            for (auto entity : result->GetEntities()) {
+                auto* sprite = entity.TryGetComponent<SpriteRendererComponent>();
+                if (sprite && !sprite->texturePath.empty() &&
+                    Path(sprite->texturePath).is_relative())
+                    sprite->texturePath =
+                        Utf8(Canonical(spriteAssetRoot / Path(sprite->texturePath)));
+            }
+        }
         RewritePaths(*result, path, nullptr);
         ValidateInheritance(*result);
         for (const auto root : ReferenceRoots(*result)) {
@@ -1002,6 +1013,19 @@ SceneManager::~SceneManager() = default;
 
 SceneLoadResult SceneManager::Load(const fs::path& path) {
     return state_->LoadTop(path, false);
+}
+
+SceneLoadResult SceneManager::LoadWithSpriteAssetRoot(const fs::path& path,
+                                                      const fs::path& assetRoot) {
+    try {
+        const auto directory = Canonical(assetRoot);
+        if (!fs::is_directory(directory))
+            return {nullptr, "스프라이트 에셋 폴더를 찾을 수 없습니다: " + Utf8(directory)};
+        LoadContext context;
+        return {state_->LoadResolved(path, context, directory), {}};
+    } catch (const std::exception& error) {
+        return {nullptr, error.what()};
+    }
 }
 
 std::shared_ptr<Scene> SceneManager::Load(const fs::path& path, std::string& error) {

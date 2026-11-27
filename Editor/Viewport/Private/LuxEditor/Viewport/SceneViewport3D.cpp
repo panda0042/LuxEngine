@@ -371,6 +371,47 @@ void SceneViewport3D::paintEvent(LuxUI::PaintEvent*) {
     painter.restore();
     if (engineFrame_ && !cachedFrame_.isNull())
         painter.drawImage(rect(), cachedFrame_);
+    if (!engineFrame_) {
+        auto& scene = document_.GetScene();
+        const auto forward = camera.GetTarget() - camera.GetPosition();
+
+        struct PreviewSprite {
+            const LuxEngine::SpriteRendererComponent* sprite;
+            LuxUI::PolygonF shape;
+            double depth;
+        };
+
+        std::vector<PreviewSprite> sprites;
+        for (auto entity : scene.GetEntities()) {
+            const auto* sprite = entity.TryGetComponent<LuxEngine::SpriteRendererComponent>();
+            if (!sprite || sprite->texturePath.empty() ||
+                !entity.HasComponent<LuxEngine::TransformComponent>() ||
+                entity.HasComponent<LuxEngine::MeshRendererComponent>())
+                continue;
+            const auto world = scene.GetWorldMatrix(entity.GetId());
+            LuxUI::PolygonF shape;
+            for (const LuxEngine::Vec3 point :
+                 {LuxEngine::Vec3{-.5, .5, 0}, {.5, .5, 0}, {.5, -.5, 0}, {-.5, -.5, 0}}) {
+                const auto projected = project(world.TransformPoint(point));
+                if (!projected)
+                    break;
+                shape << *projected;
+            }
+            const auto depth = (world.TransformPoint({}) - camera.GetPosition()).Dot(forward);
+            if (shape.size() == 4 && std::isfinite(depth))
+                sprites.push_back({sprite, std::move(shape), depth});
+        }
+        std::stable_sort(sprites.begin(), sprites.end(), [](const auto& left, const auto& right) {
+            return left.depth > right.depth;
+        });
+        const auto exposure = scene.GetSettings().exposure;
+        for (const auto& item : sprites) {
+            const auto color = item.sprite->color;
+            spriteImages_.Draw(
+                painter, scene.ResolveAssetPath(item.sprite->texturePath), *item.sprite,
+                {color.x * exposure, color.y * exposure, color.z * exposure, color.w}, item.shape);
+        }
+    }
     if (engineFrame_ && engineRenderer_ && !engineRenderer_->LastError().isEmpty()) {
         const auto message = painter.fontMetrics().elidedText(
             engineRenderer_->LastError(), LuxUI::Flags::ElideMiddle, std::max(1, width() - 32));

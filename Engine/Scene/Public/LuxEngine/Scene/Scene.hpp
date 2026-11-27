@@ -175,7 +175,10 @@ private:
                                                               uint32 parent, bool preserveIds,
                                                               bool restoreLocal);
 
-    bool DeserializeStream(std::istream& in); // Legacy scene versions 1–6, read only.
+    bool DeserializeWithSource(const std::string& data, const std::string& source,
+                               const std::string& assetRoot);
+    bool DeserializeStream(std::istream& in, const std::string& source,
+                           const std::string& assetRoot);
     bool DeserializeJson(const std::string& data);
     bool ValidateForSerialization();
     void AdoptLoadedScene(Scene& parsed);

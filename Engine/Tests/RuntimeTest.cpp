@@ -86,6 +86,8 @@ void Parse() {
         {"a.lux", "--frames", "-1"},
         {"a.lux", "--scripts"},
         {"a.lux", "--scripts", "--fullscreen", "--frames", "1"},
+        {"a.lux", "--asset-root"},
+        {"a.lux", "--asset-root", "--fullscreen"},
         {"a.lux", "--unknown"},
     };
     for (const auto& args : invalid) {
@@ -99,6 +101,66 @@ void Parse() {
         {"scene.lux", "--scripts", "./-scripts.dll", "--fullscreen"}, error);
     Check(options && options->scriptAssemblyPath == "./-scripts.dll" && options->fullscreen,
           "a relative script path with a dash needs no special quoting inside the parser");
+    options = ParseScenePlayerArguments({"a.lux", "--asset-root", "한글 Assets"}, error);
+    Check(options && options->assetRoot == "한글 Assets", "sprite asset root parses as UTF-8");
+
+    namespace fs = std::filesystem;
+    RuntimeFiles files;
+    const auto authored = files.root / "scenes";
+    const auto assets = files.root / "assets";
+    fs::create_directories(authored);
+    fs::create_directories(assets / "images");
+    std::ofstream(assets / "images" / "sprite.png").put('x');
+    const auto file = authored / "sprite.lux";
+    const auto utf8 = file.u8string();
+    LuxEngine::Scene scene;
+    auto entity = scene.CreateEntity("Sprite");
+    entity.AddComponent<LuxEngine::SpriteRendererComponent>().texturePath = "images/sprite.png";
+    Check(scene.Serialize({reinterpret_cast<const char*>(utf8.data()), utf8.size()}),
+          "asset-root test scene saves");
+    LuxEngine::SceneManager manager;
+    Check(manager.Preload(file, error), "default asset root is preloaded");
+    const auto overridden = manager.LoadWithSpriteAssetRoot(file, assets);
+    Check(static_cast<bool>(overridden),
+          "player can load sprite assets from an explicit directory");
+    const auto& sprite =
+        overridden.scene->GetComponent<LuxEngine::SpriteRendererComponent>(entity.GetId());
+    const auto pathFromUtf8 = [](const std::string& value) {
+        return fs::path(
+            std::u8string(reinterpret_cast<const char8_t*>(value.data()), value.size()));
+    };
+    Check(fs::equivalent(pathFromUtf8(sprite.texturePath), assets / "images" / "sprite.png"),
+          "explicit sprite asset root bypasses the ordinary preload result");
+    const auto ordinary = manager.Load(file);
+    Check(ordinary &&
+              pathFromUtf8(
+                  ordinary.scene->GetComponent<LuxEngine::SpriteRendererComponent>(entity.GetId())
+                      .texturePath)
+                      .parent_path() == fs::weakly_canonical(authored / "images"),
+          "custom asset root leaves ordinary scene resolution intact");
+    Check(!manager.LoadWithSpriteAssetRoot(file, files.root / "missing"),
+          "missing sprite asset directory is rejected");
+
+    std::ofstream(files.root / "project.luxproj").put('\n');
+    fs::create_directories(files.root / "images");
+    std::ofstream(files.root / "images" / "sprite.png").put('x');
+    const auto legacy = authored / "legacy.lux";
+    std::ofstream(legacy) << "LuxEngineScene 3 1\n7\n1 \"Legacy\"\n1 0 0 0 0 0 0 1 1 1\n"
+                             "1 1 1 1 1 \"images/sprite.png\"\n0\n0\n0\n0\n0\n0\n0\n0\n";
+    const auto oldScene = manager.Load(legacy);
+    Check(oldScene &&
+              fs::equivalent(
+                  pathFromUtf8(oldScene.scene->GetComponent<LuxEngine::SpriteRendererComponent>(7)
+                                   .texturePath),
+                  files.root / "images" / "sprite.png"),
+          "legacy sprite paths resolve against the original project marker");
+    const auto oldOverride = manager.LoadWithSpriteAssetRoot(legacy, assets);
+    Check(oldOverride &&
+              fs::equivalent(pathFromUtf8(oldOverride.scene
+                                              ->GetComponent<LuxEngine::SpriteRendererComponent>(7)
+                                              .texturePath),
+                             assets / "images" / "sprite.png"),
+          "explicit sprite asset directory also overrides a legacy project marker");
 }
 
 void Fit() {

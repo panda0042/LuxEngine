@@ -27,6 +27,8 @@ public:
     SceneManager& operator=(const SceneManager&) = delete;
 
     SceneLoadResult Load(const std::filesystem::path& path);
+    SceneLoadResult LoadWithSpriteAssetRoot(const std::filesystem::path& path,
+                                            const std::filesystem::path& assetRoot);
     std::shared_ptr<Scene> Load(const std::filesystem::path& path, std::string& error);
     std::future<SceneLoadResult> LoadAsync(const std::filesystem::path& path);
     bool Preload(const std::filesystem::path& path, std::string& error);

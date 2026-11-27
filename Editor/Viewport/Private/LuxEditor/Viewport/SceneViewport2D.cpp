@@ -369,7 +369,8 @@ void SceneViewport2D::paintEvent(LuxUI::PaintEvent*) {
             !entity.HasComponent<LuxEngine::SpriteRendererComponent>())
             continue;
         const auto matrix = entity.GetScene()->GetWorldMatrix(entity.GetId());
-        const auto color = entity.GetComponent<LuxEngine::SpriteRendererComponent>().color;
+        const auto& sprite = entity.GetComponent<LuxEngine::SpriteRendererComponent>();
+        const auto color = sprite.color;
         if (std::any_of(std::begin(matrix.elements), std::end(matrix.elements),
                         [](double value) { return !std::isfinite(value); }))
             continue;
@@ -377,14 +378,19 @@ void SceneViewport2D::paintEvent(LuxUI::PaintEvent*) {
         const bool active = document_.IsSelected(entity.GetId());
         painter.setPen(
             LuxUI::Pen(active ? Selection : LuxUI::Color(178, 189, 204), active ? 3 : 1));
-        if (engineFrame_)
+        const LuxEngine::Vec4 tint{color.x * settings.exposure, color.y * settings.exposure,
+                                   color.z * settings.exposure, color.w};
+        LuxUI::PolygonF imageShape;
+        imageShape << shape[3] << shape[2] << shape[1] << shape[0];
+        if (engineFrame_ ||
+            (!sprite.texturePath.empty() &&
+             spriteImages_.Draw(painter, entity.GetScene()->ResolveAssetPath(sprite.texturePath),
+                                sprite, tint, imageShape)))
             painter.setBrush(LuxUI::Flags::NoBrush);
         else
             painter.setBrush(
-                LuxUI::Color::fromRgbF(std::clamp(color.x * settings.exposure, 0.0f, 1.0f),
-                                       std::clamp(color.y * settings.exposure, 0.0f, 1.0f),
-                                       std::clamp(color.z * settings.exposure, 0.0f, 1.0f),
-                                       std::clamp(color.w, 0.0f, 1.0f)));
+                LuxUI::Color::fromRgbF(std::clamp(tint.x, 0.f, 1.f), std::clamp(tint.y, 0.f, 1.f),
+                                       std::clamp(tint.z, 0.f, 1.f), std::clamp(tint.w, 0.f, 1.f)));
         painter.drawPolygon(shape);
         painter.setPen(active ? Selection : LuxUI::Color(215, 222, 231));
         if (active)

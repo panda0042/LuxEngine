@@ -24,7 +24,7 @@ cmake --build build --target SampleForestSurvivor
 
 Visual Studio 같은 다중 구성 생성기는 `cmake --build build --config Debug --target SampleForestSurvivor`로 빌드하고 `build/bin/Debug/`의 실행 파일을 연다. 실행 파일 옆의 `assets/`와 `shaders/`를 함께 유지한다.
 
-씬 파일만 실행하는 런타임 샘플은 `./build/bin/LuxPlayer samples/ScenePlayer/Scene.lux`로 연다. 런타임 단독 배포에도 이 파일을 `scenes/ScenePlayer.lux`로 포함한다. 씬의 텍스처 참조 직렬화는 아직 개발 중이므로 이 검증용 씬은 엔진의 색상 도형을 사용한다.
+씬 파일만 실행하는 런타임 샘플은 `./build/bin/LuxPlayer samples/ScenePlayer/Scene.lux`로 연다. 런타임 단독 배포에도 이 파일을 `scenes/ScenePlayer.lux`로 포함한다. 이 검증용 씬은 엔진의 색상 도형을 사용한다. 이미지가 있는 씬은 `SpriteRendererComponent::texturePath`에 텍스처를 지정할 수 있다.
 
 서바이벌 게임의 일반 실행은 타이틀 화면에서 기다린다. **게임 시작 버튼을 마우스로 눌러야 시작한다.** Enter, Space, Esc 또는 화면의 빈 곳을 눌러도 시작하지 않는다. 메뉴 버튼은 누른 곳과 뗀 곳이 같은 버튼일 때 실행한다. 일시정지·계속·재시작·종료와 강화 선택에도 화면 버튼이 있다.
 
@@ -53,7 +53,7 @@ LUX_ENGINE_MAIN(RunGame)
 
 ForestSurvivor의 `Game/`은 전투와 성장 규칙, `App/`은 엔진 생명주기·입력·오디오 연결, `Presentation/`은 화면과 버튼 배치를 담당한다. 게임 규칙 테스트는 창이나 GPU 없이 실행한다. UI 테스트는 실제 입력 이벤트로 버튼 클릭, 드래그 취소, 메뉴 상태 전환과 창 크기 변경을 검사한다.
 
-픽셀 이미지는 텍스처 생성 시 `TextureFilter::Nearest`를 명시한다. 일반 텍스처의 기본 필터는 `Linear`다. 현재 엔진의 `SpriteComponent`에는 텍스처 참조 기능이 개발 중이므로, 샘플의 텍스처 출력은 GPU 렌더링 API를 사용한다. 관련 코드에도 이 경계를 주석으로 표시했다.
+픽셀 이미지는 텍스처 생성 시 `TextureFilter::Nearest`를 명시한다. 일반 텍스처의 기본 필터는 `Linear`다. 이 샘플은 GPU 렌더링 API로 텍스처를 직접 그린다. 저장 가능한 씬에서는 스프라이트 텍스처 경로와 아틀라스 프레임을 JSON에 기록한다. `LuxPlayer 씬.lux --asset-root 폴더`를 사용하면 시작 씬의 상대 스프라이트 텍스처 경로를 지정한 폴더에서 찾는다.
 
 화면 안내와 메뉴는 한국어를 기본으로 표시한다. UTF-8은 바이트가 아닌 유니코드 코드포인트로 읽고, 줄바꿈도 문자 경계를 지킨다. 한글은 공식 배포처가 퍼블릭 도메인으로 공개한 둥근모꼴+Fixedsys 1.3을 포함하므로 운영체제의 한글 폰트 설치 여부에 의존하지 않는다. 게임명 MOSSBOUND와 키 이름은 그대로 사용한다.
 

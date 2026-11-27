@@ -2936,8 +2936,8 @@ bool SceneDrawUsable(const LuxForgeDevice* device, const LuxForgeSceneDraw& draw
         if (texture &&
             (texture > LuxForgeDevice::kMaxTextures || !device->textures[texture].texture))
             return false;
-    if (draw.sampling > 7 || !std::isfinite(draw.normalScale) || draw.normalScale < 0 ||
-        draw.normalScale > 16 || !std::isfinite(draw.occlusionStrength) ||
+    if (draw.sampling > (7u | LUX_FORGE_SAMPLING_UNLIT) || !std::isfinite(draw.normalScale) ||
+        draw.normalScale < 0 || draw.normalScale > 16 || !std::isfinite(draw.occlusionStrength) ||
         draw.occlusionStrength < 0 || draw.occlusionStrength > 1)
         return false;
     const auto* index = buffer(draw.indexBuffer, LUX_FORGE_BUFFER_INDEX);
@@ -3180,7 +3180,8 @@ uint32_t WriteSceneDraws(LuxForgeDevice* device, const LuxForgeScene& scene,
             static_cast<float>((draw.normalTexture ? 1 : 0) | (draw.metallicTexture ? 2 : 0) |
                                (draw.roughnessTexture ? 4 : 0) | (draw.occlusionTexture ? 8 : 0) |
                                (draw.terrainColor ? 16 : 0) | (draw.terrainNormal ? 32 : 0) |
-                               (draw.terrainRoughness ? 64 : 0));
+                               (draw.terrainRoughness ? 64 : 0) |
+                               ((draw.sampling & LUX_FORGE_SAMPLING_UNLIT) ? 128 : 0));
         block.materialOptions[0] = draw.normalScale;
         block.materialOptions[1] = draw.occlusionStrength;
         block.materialOptions[2] = static_cast<float>(draw.sampling & 3u);
