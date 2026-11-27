@@ -256,7 +256,7 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 waveNormal, float3 tint
     const uint bounces = uint(gScene.rayOptions.z);
     const float rayWeight = 1.0f - smoothstep(0.72f, 1.0f, pointDepth / gScene.rayOptions.y);
     const float reflectionWeight = rayWeight * (1.0f - smoothstep(0.24f, 0.55f, roughness));
-    if ((RayEffect(2u) || RayEffect(128u)) && reflectionWeight > 0.0f)
+    if (RayEffect(2u | 128u) && reflectionWeight > 0.0f)
     {
         const float3 origin = BiasRayOrigin(In.world, n, reflection);
         const LuxRayHit hit = TraceClosestSurface(origin, reflection);
