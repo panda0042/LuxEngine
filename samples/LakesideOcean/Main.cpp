@@ -1264,9 +1264,13 @@ private:
             }
             Close();
         } else if (std::chrono::steady_clock::now() - start_ > std::chrono::seconds(20)) {
-            throw std::runtime_error("Lakeside validation timed out after " +
-                                     std::to_string(waveUpdates_) +
-                                     " FFT updates: " + renderer_.GetLastAssetError());
+            throw std::runtime_error(
+                "Lakeside validation timed out after " + std::to_string(frames_) + " frames and " +
+                std::to_string(waveUpdates_) + " FFT updates (environment " +
+                (renderer_.IsEnvironmentReady() ? "ready" : "pending") +
+                ", water reflection passes " + std::to_string(stats.waterReflectionPasses) +
+                ", dispatches " + std::to_string(stats.computeDispatches) + ", ray passes " +
+                std::to_string(stats.rayTracedPasses) + "): " + renderer_.GetLastAssetError());
         }
     }
 
