@@ -8,6 +8,7 @@
 #define STBI_FAILURE_USERMSG
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -16,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <stb_image.h>
 #include <stdexcept>
@@ -31,12 +33,27 @@ namespace {
 std::mutex s_AssetMutex, s_AssetKeyMutex;
 std::unordered_map<std::string, std::string> s_AssetKeys;
 
+struct TextureFileStamp {
+    std::filesystem::file_time_type modified;
+    std::uintmax_t size;
+
+    bool operator==(const TextureFileStamp&) const = default;
+};
+
 struct CachedTexture {
     Ref<GpuTexture> texture;
     size_t bytes;
+    TextureFileStamp stamp;
 };
 
 std::unordered_multimap<std::string, CachedTexture> s_TextureCache;
+
+struct TextureDecodeFailure {
+    TextureFileStamp stamp;
+    std::chrono::steady_clock::time_point retryAfter;
+};
+
+std::unordered_map<std::string, TextureDecodeFailure> s_TextureDecodeFailures;
 
 void RemoveCachedTextures(const std::string& key, size_t& bytes) {
     const auto [begin, end] = s_TextureCache.equal_range(key);
@@ -98,6 +115,18 @@ std::string Key(const std::string& path) {
         s_AssetKeys[path] = key;
     }
     return key;
+}
+
+std::optional<TextureFileStamp> TextureStamp(const std::string& filepath) {
+    std::error_code error;
+    const auto file = Path(filepath);
+    const auto size = std::filesystem::file_size(file, error);
+    if (error)
+        return std::nullopt;
+    const auto modified = std::filesystem::last_write_time(file, error);
+    if (error)
+        return std::nullopt;
+    return TextureFileStamp{modified, size};
 }
 
 bool ReadTextureFile(const std::string& filepath, std::vector<uint8>& data) {
@@ -260,8 +289,10 @@ Ref<GpuTexture> AssetManager::LoadTexture(const std::string& filepath, GpuDevice
     if (filepath.empty() || filepath.find('\0') != std::string::npos)
         return {};
     std::string key;
+    std::optional<TextureFileStamp> stamp;
     try {
         key = Key(filepath);
+        stamp = TextureStamp(filepath);
     } catch (const std::exception&) {
         return {};
     }
@@ -269,17 +300,43 @@ Ref<GpuTexture> AssetManager::LoadTexture(const std::string& filepath, GpuDevice
     {
         std::lock_guard<std::mutex> lock(s_AssetMutex);
         const auto [begin, end] = s_TextureCache.equal_range(key);
-        for (auto it = begin; it != end; ++it)
-            if (it->second.texture->BelongsTo(*device))
-                return it->second.texture;
+        if (begin != end && (!stamp || begin->second.stamp != *stamp)) {
+            RemoveCachedTextures(key, s_TextureCacheMemoryBytes);
+            RecordAssetVersion(key, ++s_AssetSequence, true);
+        } else {
+            for (auto it = begin; it != end; ++it)
+                if (it->second.texture->BelongsTo(*device))
+                    return it->second.texture;
+        }
+        if (!stamp) {
+            s_TextureDecodeFailures.erase(key);
+            return {};
+        }
+        const auto failed = s_TextureDecodeFailures.find(key);
+        if (failed != s_TextureDecodeFailures.end()) {
+            if (failed->second.stamp == *stamp &&
+                std::chrono::steady_clock::now() < failed->second.retryAfter)
+                return {};
+            s_TextureDecodeFailures.erase(failed);
+        }
         epoch = s_AssetEpoch;
         revision = TextureVersion(key);
     }
     int width = 0, height = 0;
     const std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels(
         DecodeTexture(filepath, width, height), stbi_image_free);
-    if (!pixels)
+    if (TextureStamp(filepath) != stamp)
         return {};
+    if (!pixels) {
+        std::lock_guard lock(s_AssetMutex);
+        if (epoch == s_AssetEpoch && revision == TextureVersion(key)) {
+            if (s_TextureDecodeFailures.size() >= 256)
+                s_TextureDecodeFailures.erase(s_TextureDecodeFailures.begin());
+            s_TextureDecodeFailures[key] = {*stamp, std::chrono::steady_clock::now() +
+                                                        std::chrono::seconds(1)};
+        }
+        return {};
+    }
     auto texture = CreateRef<GpuTexture>();
     const bool valid = width > 0 && height > 0 &&
                        texture->Initialize(device, static_cast<uint32>(width),
@@ -309,7 +366,7 @@ Ref<GpuTexture> AssetManager::LoadTexture(const std::string& filepath, GpuDevice
         EvictUnusedUnderBudget(textureBytes);
         if (!FitsCacheBudget(textureBytes))
             return texture;
-        s_TextureCache.emplace(key, CachedTexture{texture, textureBytes});
+        s_TextureCache.emplace(key, CachedTexture{texture, textureBytes, *stamp});
         s_TextureCacheMemoryBytes += textureBytes;
     }
     return texture;
@@ -370,6 +427,7 @@ void AssetManager::UnloadTexture(const std::string& filepath) {
     const auto key = Key(filepath);
     RecordAssetVersion(key, ++s_AssetSequence, true);
     s_TextureRequests.erase(key);
+    s_TextureDecodeFailures.erase(key);
     RemoveCachedTextures(key, s_TextureCacheMemoryBytes);
 }
 
@@ -787,6 +845,7 @@ bool AssetManager::ReloadTexture(const std::string& filepath, std::string& error
         }
         RecordAssetVersion(key, ticket, true);
         RemoveCachedTextures(key, s_TextureCacheMemoryBytes);
+        s_TextureDecodeFailures.erase(key);
         s_TextureErrors.erase(key);
         return true;
     } catch (const std::exception&) {
@@ -866,6 +925,7 @@ void AssetManager::Clear() {
     s_MeshErrors.clear();
     s_TextureErrors.clear();
     s_TextureCache.clear();
+    s_TextureDecodeFailures.clear();
     s_MeshCache.clear();
     s_TextureCacheMemoryBytes = 0;
     s_MeshCacheMemoryBytes = 0;

@@ -338,6 +338,12 @@ if(LUX_BUILD_TESTS)
     add_test(NAME Editor_sparse_copy COMMAND LuxEditorRegressionTests sparse-copy)
     add_test(NAME Editor_names COMMAND LuxEditorRegressionTests names)
     add_test(NAME Editor_sparse_tilemap COMMAND LuxEditorRegressionTests sparse-tilemap)
+    add_test(NAME Editor_sprite_textures COMMAND LuxEditorRegressionTests sprite-textures)
+    add_test(NAME Editor_sprite_textures_gpu COMMAND LuxEditorRegressionTests sprite-textures-gpu)
+    set_tests_properties(Editor_sprite_textures PROPERTIES LABELS "headless;editor"
+        TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LUX_EDITOR_SOFTWARE_VIEWPORT=1")
+    set_tests_properties(Editor_sprite_textures_gpu PROPERTIES LABELS "gpu;editor"
+        TIMEOUT 90 SKIP_RETURN_CODE 77 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_test(NAME Editor_picking2d COMMAND LuxEditorRegressionTests picking2d)
     add_test(NAME Editor_picking2d_gpu COMMAND LuxEditorRegressionTests picking2d-gpu)
     add_test(NAME Editor_picking3d COMMAND LuxEditorRegressionTests picking3d)

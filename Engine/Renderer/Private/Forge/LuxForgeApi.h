@@ -11,7 +11,8 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 22u
+#define LUX_FORGE_API_VERSION 23u
+#define LUX_FORGE_SAMPLING_UNLIT 8u
 
 #if defined(_WIN32)
 #if defined(LUX_FORGE_BUILD)

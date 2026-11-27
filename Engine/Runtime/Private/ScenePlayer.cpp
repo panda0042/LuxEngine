@@ -268,6 +268,12 @@ std::optional<ScenePlayerOptions> ParseScenePlayerArguments(const std::vector<st
                 return std::nullopt;
             }
             options.scriptAssemblyPath = args[i];
+        } else if (arg == "--asset-root") {
+            if (++i >= args.size() || args[i].empty() || args[i].front() == '-') {
+                error = "--asset-root expects a directory";
+                return std::nullopt;
+            }
+            options.assetRoot = args[i];
         } else if (arg == "--title") {
             if (!need(1))
                 return std::nullopt;
@@ -387,8 +393,14 @@ ScenePlayer::ScenePlayer(ScenePlayerOptions options)
       options_(std::move(options)) {}
 
 bool ScenePlayer::LoadScene() {
-    auto loaded = sceneManager_.Load(std::filesystem::path(std::u8string(
-        reinterpret_cast<const char8_t*>(options_.scenePath.data()), options_.scenePath.size())));
+    const auto path = [](const std::string& value) {
+        return std::filesystem::path(
+            std::u8string(reinterpret_cast<const char8_t*>(value.data()), value.size()));
+    };
+    auto loaded = options_.assetRoot.empty()
+                      ? sceneManager_.Load(path(options_.scenePath))
+                      : sceneManager_.LoadWithSpriteAssetRoot(path(options_.scenePath),
+                                                              path(options_.assetRoot));
     if (!loaded) {
         Log::Error("씬을 불러올 수 없습니다: " + loaded.error);
         return false;

@@ -1,5 +1,7 @@
 #include <LuxEditor/Viewport/EngineSceneRenderer.hpp>
+#include <LuxEditor/Viewport/SpriteImageCache.hpp>
 #include <LuxEditor/Viewport/ViewportCamera3D.hpp>
+#include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/ECS/ECS.hpp>
 #include <LuxEngine/Platform/Window.hpp>
 #include <LuxEngine/Renderer/RHI/GpuDevice.hpp>
@@ -20,6 +22,7 @@
 #include <cmath>
 #include <cstring>
 #include <exception>
+#include <map>
 #include <mutex>
 
 namespace LuxEditor {
@@ -106,11 +109,43 @@ struct EngineSceneRenderer::State {
     LuxEngine::uint32 height = 0;
     LuxEngine::GpuFrameCapture capture;
     LuxEngine::Mesh3D previewMesh;
+    std::map<std::array<LuxEngine::uint32, 5>, LuxEngine::Mesh3D> spriteMeshes;
+
+    LuxEngine::Mesh3D* SpriteMesh(const LuxEngine::SpriteRendererComponent& sprite,
+                                  const LuxEngine::GpuTexture& texture) {
+        const auto textureWidth = texture.GetWidth(), textureHeight = texture.GetHeight();
+        const auto source = SpriteFrameRect(static_cast<int>(textureWidth),
+                                            static_cast<int>(textureHeight), sprite);
+        if (source.isEmpty())
+            return nullptr;
+        const std::array<LuxEngine::uint32, 5> key{textureWidth, textureHeight, sprite.columns,
+                                                   sprite.rows, sprite.frame};
+        if (auto found = spriteMeshes.find(key); found != spriteMeshes.end())
+            return &found->second;
+        const double left = sprite.columns == 1 ? 0 : (source.left() + .5) / textureWidth;
+        const double right = sprite.columns == 1 ? 1 : (source.right() + .5) / textureWidth;
+        const double top = sprite.rows == 1 ? 0 : (source.top() + .5) / textureHeight;
+        const double bottom = sprite.rows == 1 ? 1 : (source.bottom() + .5) / textureHeight;
+        const std::array<LuxEngine::Vertex3D, 4> vertices{{
+            {{-.5, .5, 0}, {0, 0, 1}, {left, top}},
+            {{-.5, -.5, 0}, {0, 0, 1}, {left, bottom}},
+            {{.5, -.5, 0}, {0, 0, 1}, {right, bottom}},
+            {{.5, .5, 0}, {0, 0, 1}, {right, top}},
+        }};
+        constexpr std::array<LuxEngine::uint32, 6> indices{0, 1, 2, 0, 2, 3};
+        LuxEngine::Mesh3D mesh;
+        if (!mesh.Upload(&gpu, vertices, indices))
+            return nullptr;
+        if (spriteMeshes.size() >= 128)
+            spriteMeshes.erase(spriteMeshes.begin());
+        return &spriteMeshes.emplace(key, std::move(mesh)).first->second;
+    }
     LuxEngine::uint64 previewRevision = 0;
     LuxEngine::uint64 previewTopology = 0;
 
     ~State() {
         previewMesh.Release();
+        spriteMeshes.clear();
         context2D.Shutdown();
         context3D.Shutdown();
         gpu.Shutdown();
@@ -584,6 +619,7 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
             if (!path->empty())
                 *path = scene.ResolveAssetPath(*path);
         LuxEngine::Renderer3D::BeginScene(camera, renderSettings, scene.GetSettings().exposure);
+        std::vector<LuxEngine::Ref<LuxEngine::GpuTexture>> spriteTextures;
         for (LuxEngine::Entity entity : scene.GetEntities()) {
             if (backgroundOnly)
                 break;
@@ -626,6 +662,21 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
                            entity.TryGetComponent<LuxEngine::SpriteRendererComponent>()) {
                 LuxEngine::Material3D material;
                 material.albedoColor = sprite->color;
+                if (!sprite->texturePath.empty()) {
+                    auto texture = LuxEngine::AssetManager::LoadTexture(
+                        scene.ResolveAssetPath(sprite->texturePath), &s.gpu);
+                    if (texture) {
+                        if (const auto* quad = s.SpriteMesh(*sprite, *texture)) {
+                            material.alphaMode = LuxEngine::MaterialAlphaMode::Blend;
+                            material.textureSampling.addressMode =
+                                LuxEngine::TextureAddressMode::Clamp;
+                            s.context3D.DrawMeshWithTextures(
+                                *quad, world, material, {texture.get(), nullptr, nullptr, true});
+                            spriteTextures.push_back(std::move(texture));
+                            continue;
+                        }
+                    }
+                }
                 LuxEngine::Renderer3D::DrawMesh(world * LuxEngine::Mat4::Scale({1, 1, .02f}),
                                                 material);
             } else if (const auto* map = entity.TryGetComponent<LuxEngine::TilemapComponent>()) {

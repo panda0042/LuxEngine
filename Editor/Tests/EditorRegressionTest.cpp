@@ -322,6 +322,105 @@ void TestPicking2D(LuxUI::Application& app, bool gpu = false) {
               "2D regression emits no Vulkan validation errors");
 }
 
+void TestSpriteTextures(LuxUI::Application& app, bool gpu) {
+    LuxUI::TemporaryDir files;
+    Check(files.isValid(), "sprite texture test directory");
+    const auto file = files.filePath(LUX_UI_TEXT("atlas.png"));
+    const auto path = PathFromUtf8(file.toUtf8().toStdString());
+    const auto writeAtlas = [&file](LuxUI::Color color) {
+        LuxUI::Image atlas(4, 2, LuxUI::Image::Format_RGBA8888);
+        atlas.fill(LuxUI::Color(255, 0, 0));
+        for (int y = 0; y < atlas.height(); ++y)
+            for (int x = 2; x < atlas.width(); ++x)
+                atlas.setPixelColor(x, y, color);
+        Check(atlas.save(file), "sprite atlas writes");
+    };
+    writeAtlas(LuxUI::Color(0, 255, 0, 128));
+    const auto stamp = std::filesystem::last_write_time(path);
+    EditorDocument document;
+    auto entity = document.CreateEntity("Textured sprite");
+    auto& scene = document.GetScene();
+    auto& sprite = entity.AddComponent<SpriteRendererComponent>();
+    sprite.texturePath = PathUtf8(path);
+    sprite.columns = 2;
+    sprite.frame = 1;
+    auto settings = scene.GetSettings();
+    settings.render3D.showSkybox = false;
+    settings.render3D.shadows = false;
+    Check(scene.SetSettings(settings), "sprite fixture render settings");
+    entity.GetComponent<TransformComponent>().scale = {2, 2, 1};
+
+    PerspectiveCamera camera(ToRadians(60), 4. / 3., .1, 100);
+    camera.SetPosition({0, 0, 5});
+    if (gpu) {
+        EngineSceneRenderer renderer;
+        if (!renderer.EnsureReady())
+            throw GpuUnavailable(renderer.LastError().toStdString());
+        LuxUI::Image pixels;
+        const auto draw = [&] {
+            Check(renderer.Render3D(scene, 320, 240, {}, 0, 0, 5, pixels, nullptr, &camera),
+                  "GPU 3D editor renders the sprite");
+            return pixels.pixelColor(178, 138);
+        };
+        const auto translucent = draw();
+        Check(translucent.green() > translucent.red() + 40 && translucent.alpha() > 100 &&
+                  translucent.alpha() < 155,
+              "3D editor uses the sprite atlas frame and preserves its alpha");
+        const auto draw2D = [&] {
+            Check(renderer.Render(scene, 320, 240, {-4, 3, 8, -6}, pixels),
+                  "GPU 2D editor renders the sprite");
+            return pixels.pixelColor(178, 138);
+        };
+        const auto original = draw2D();
+        Check(original.green() > original.red() + 40, "GPU 2D renders the selected atlas frame");
+        writeAtlas(LuxUI::Color(0, 0, 255));
+        std::filesystem::last_write_time(path, stamp + std::chrono::seconds(3));
+        const auto refreshed = draw2D();
+        Check(refreshed.blue() > 200 && refreshed.green() < 20,
+              "GPU texture cache notices an edited file");
+        std::filesystem::remove(path);
+        sprite.color = {1, 0, 0, 1};
+        const auto fallback = draw2D();
+        Check(fallback.red() > 240 && fallback.green() < 20,
+              "GPU 2D uses the sprite color when its image disappears");
+        writeAtlas(LuxUI::Color(0, 0, 255));
+        sprite.color = {1, 1, 1, 1};
+        const auto recovered = draw2D();
+        Check(recovered.blue() > 200 && recovered.green() < 20,
+              "GPU sprite recovers when its file is recreated");
+        Check(renderer.GetGpuDevice()->GetCounters().validationErrors == 0,
+              "sprite rendering emits no GPU validation errors");
+        return;
+    }
+
+    SceneViewport2D view2D(nullptr, document, {}, {}, {}, {}, {});
+    view2D.resize(320, 240);
+    view2D.SetGridVisible(false);
+    Check(view2D.SetView(0, 0, 3), "software 2D editor sets its view");
+    view2D.show();
+    SceneViewport3D view3D(nullptr, document, {}, {}, {}, {});
+    view3D.resize(320, 240);
+    view3D.SetGridVisible(false);
+    Check(view3D.SetViewCamera(camera, 60, .1, 100), "software 3D editor sets its view");
+    view3D.show();
+    app.processEvents();
+    const auto read = [](LuxUI::Widget& view) {
+        LuxUI::Image pixels(view.size(), LuxUI::Image::Format_RGBA8888);
+        view.render(&pixels);
+        return pixels.pixelColor(view.width() / 2 + 16, view.height() / 2 + 16);
+    };
+    for (auto* view :
+         {static_cast<LuxUI::Widget*>(&view2D), static_cast<LuxUI::Widget*>(&view3D)}) {
+        const auto translucent = read(*view);
+        Check(translucent.green() > translucent.red() + 70 && translucent.green() < 210,
+              "software editor views draw the selected atlas frame with alpha");
+    }
+    writeAtlas(LuxUI::Color(0, 0, 255));
+    std::filesystem::last_write_time(path, stamp + std::chrono::seconds(3));
+    Check(read(view2D).blue() > 200 && read(view3D).blue() > 200,
+          "software editor views refresh an edited atlas");
+}
+
 LuxUI::PointF ReferenceProjection(Vec3 point, LuxUI::Size size, double yaw, double pitch) {
     const double cy = std::cos(yaw), sy = std::sin(yaw);
     const double cp = std::cos(pitch), sp = std::sin(pitch);
@@ -606,7 +705,12 @@ int main(int argc, char** argv) {
             TestSparseTilemap(app);
         else if (suite == "picking2d")
             TestPicking2D(app);
-        else if (suite == "picking2d-gpu") {
+        else if (suite == "sprite-textures")
+            TestSpriteTextures(app, false);
+        else if (suite == "sprite-textures-gpu") {
+            EngineSceneRenderer::SetForceAllowed(true);
+            TestSpriteTextures(app, true);
+        } else if (suite == "picking2d-gpu") {
             EngineSceneRenderer::SetForceAllowed(true);
             TestPicking2D(app, true);
         } else if (suite == "picking3d")

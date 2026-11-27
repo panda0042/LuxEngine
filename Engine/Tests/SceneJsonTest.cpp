@@ -271,6 +271,26 @@ void Test() {
                   legacyCamera.GetComponent<CameraComponent>(1).farClip == 1000.0,
               "legacy text cameras retain their original clipping defaults");
     }
+    const std::string legacySpriteV3 =
+        "LuxEngineScene 3 1\n7\n1 \"Legacy\"\n1 0 0 0 0 0 0 1 1 1\n"
+        "1 0.2 0.4 0.6 0.8 \"Assets/한글.png\"\n0\n0\n0\n0\n0\n0\n0\n0\n";
+    Scene texturedLegacy;
+    Check(texturedLegacy.DeserializeFromString(legacySpriteV3), "textured legacy v3 reads");
+    const auto& oldSprite = texturedLegacy.GetComponent<SpriteRendererComponent>(7);
+    Check(oldSprite.texturePath == "Assets/한글.png" && oldSprite.columns == 1 &&
+              oldSprite.rows == 1 && oldSprite.frame == 0,
+          "textured legacy v3 keeps its texture and upgrades atlas defaults");
+    auto escapingSprite = legacySpriteV3;
+    escapingSprite.replace(escapingSprite.find("Assets/"), 7, "../");
+    const auto oldSpriteEntity = texturedLegacy.GetEntities().front();
+    Check(!texturedLegacy.DeserializeFromString(escapingSprite) && oldSpriteEntity.IsValid() &&
+              oldSprite.texturePath == "Assets/한글.png",
+          "legacy v3 rejects a texture outside its root without changing the live scene");
+    Check(texturedLegacy.SerializeToString(second) &&
+              Json::parse(second)["entities"][0]["components"]["sprite"]["texture"] ==
+                  "Assets/한글.png",
+          "textured legacy v3 migrates to JSON without losing its texture");
+
     Scene old;
     Check(old.DeserializeFromString("LuxEngineScene 1 0\n"), "legacy v1 reads");
     Check(old.DeserializeFromString("LuxEngineScene 2 0\n"), "legacy v2 reads");

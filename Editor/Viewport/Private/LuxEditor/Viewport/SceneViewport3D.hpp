@@ -1,6 +1,7 @@
 #pragma once
 #include <LuxEditor/Viewport/EditorTool.hpp>
 #include <LuxEditor/Viewport/ModelingViewport.hpp>
+#include <LuxEditor/Viewport/SpriteImageCache.hpp>
 #include <LuxEngine/Core/Math.hpp>
 #include <LuxUI/PointerCapture.hpp>
 #include <LuxUI/Widgets.hpp>
@@ -91,6 +92,7 @@ private:
     void wheelEvent(LuxUI::WheelEvent*) override;
     void focusOutEvent(LuxUI::FocusEvent*) override;
     EditorDocument& document_;
+    SpriteImageCache spriteImages_;
     std::function<void(std::optional<LuxEngine::uint32>)> onSelect_;
     std::function<void(LuxEngine::uint32, const LuxEngine::TransformComponent&)> onTransform_;
     std::function<void()> onBeginEdit_;
