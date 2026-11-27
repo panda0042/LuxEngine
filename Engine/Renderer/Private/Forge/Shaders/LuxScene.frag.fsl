@@ -14,10 +14,16 @@ STRUCT(MeshOutput)
 
 #ifdef LUX_RAY_QUERY
 #include "LuxRayLighting.h"
-#define SurfaceDirectionalShadow RayDirectionalShadow
-#else
-#define SurfaceDirectionalShadow DirectionalShadow
 #endif
+
+float SurfaceDirectionalShadow(float3 position, float3 normal)
+{
+#ifdef LUX_RAY_QUERY
+    return RayDirectionalShadow(position, normal);
+#else
+    return DirectionalShadow(position, normal);
+#endif
+}
 
 float WaterDepth(float z)
 {
