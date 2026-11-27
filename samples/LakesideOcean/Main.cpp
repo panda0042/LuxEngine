@@ -15,10 +15,13 @@
 #include <cstdio>
 #include <filesystem>
 #include <iostream>
+#include <locale>
 #include <numbers>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -1447,10 +1450,13 @@ int Run(int argc, char** argv) {
                 return invalidOptions();
         } else if (name == "--pitch") {
             double pitch = 0;
-            const auto [end, error] =
-                std::from_chars(value.data(), value.data() + value.size(), pitch);
-            if (error != std::errc{} || end != value.data() + value.size() ||
-                !std::isfinite(pitch) || pitch < -.04 || pitch > 1.15)
+            std::istringstream input{std::string(value)};
+            input.imbue(std::locale::classic());
+            input >> std::noskipws >> pitch;
+            if (value.empty() || value.front() == '+' ||
+                value.find_first_not_of("0123456789.eE+-") != std::string_view::npos ||
+                input.fail() || !input.eof() || !std::isfinite(pitch) || pitch < -.04 ||
+                pitch > 1.15)
                 return invalidOptions();
             options.capturePitch = pitch;
         } else if (name == "--view") {
