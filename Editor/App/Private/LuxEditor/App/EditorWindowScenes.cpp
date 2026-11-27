@@ -443,9 +443,12 @@ void EditorWindow::PollSceneLoads() {
 }
 
 void EditorWindow::RememberSceneBaseline(bool clean) {
-    const auto tab = document_.GetActiveTabId();
+    RememberSceneBaseline(document_.GetActiveTabId(), clean);
+}
+
+void EditorWindow::RememberSceneBaseline(EditorDocument::TabId tab, bool clean) {
     if (clean) {
-        const auto snapshot = SnapshotScene();
+        const auto snapshot = SnapshotScene(tab);
         if (!snapshot.isEmpty())
             cleanScenes_[tab] = snapshot;
         autosavedAt_[tab] = std::chrono::steady_clock::now();
@@ -522,8 +525,6 @@ void EditorWindow::PushSceneCommand(SceneEditCommand* command) {
 }
 
 bool EditorWindow::SaveAllScenes(bool currentProjectOnly) {
-    StopPreview();
-    const auto original = document_.GetActiveTabId();
     const auto selectedProject = project_;
     for (const auto& tab : document_.ListTabs()) {
         if (!tab.dirty)
@@ -534,13 +535,9 @@ bool EditorWindow::SaveAllScenes(bool currentProjectOnly) {
                 context->second->GetFile() != selectedProject->GetFile())
                 continue;
         }
-        SwitchSceneDocument(tab.id, false);
-        if (!SaveScene(false)) {
-            SwitchSceneDocument(original, false);
+        if (!SaveSceneTab(tab.id, false))
             return false;
-        }
     }
-    SwitchSceneDocument(original, false);
     return true;
 }
 
@@ -618,7 +615,7 @@ void EditorWindow::SetStartupScene() {
 }
 
 void EditorWindow::EditSceneSettings() {
-    if (previewActive_)
+    if (preview_.IsActive())
         return;
     const auto settings = ShowSceneSettingsDialog(this, document_.GetScene().GetSettings(),
                                                   document_.GetScene().GetSourcePath());
@@ -632,7 +629,7 @@ void EditorWindow::EditSceneSettings() {
 }
 
 void EditorWindow::AddSceneReference(LuxEngine::SceneReferenceMode mode) {
-    if (previewActive_)
+    if (preview_.IsActive())
         return;
     const auto file = LuxUI::FileDialog::getOpenFileName(this, LUX_UI_TEXT("참조 씬 선택"), {},
                                                          LUX_UI_TEXT("Lux 씬 (*.lux)"));
@@ -673,7 +670,8 @@ void EditorWindow::RefreshSceneReferences() {
 
 void EditorWindow::RelinkSceneReference() {
     const auto selected = document_.GetSelected();
-    if (previewActive_ || !selected || !selected.HasComponent<LuxEngine::SceneReferenceComponent>())
+    if (preview_.IsActive() || !selected ||
+        !selected.HasComponent<LuxEngine::SceneReferenceComponent>())
         return;
     const auto file = LuxUI::FileDialog::getOpenFileName(
         this, LUX_UI_TEXT("참조 씬 경로 변경"),
@@ -707,7 +705,8 @@ void EditorWindow::RelinkSceneReference() {
 
 void EditorWindow::ConfigureSceneStreaming() {
     const auto selected = document_.GetSelected();
-    if (!selected || !selected.HasComponent<LuxEngine::SceneReferenceComponent>() || previewActive_)
+    if (!selected || !selected.HasComponent<LuxEngine::SceneReferenceComponent>() ||
+        preview_.IsActive())
         return;
     const auto reference = selected.GetComponent<LuxEngine::SceneReferenceComponent>();
     LuxUI::Dialog dialog(this);
@@ -769,7 +768,7 @@ void EditorWindow::ConfigureSceneStreaming() {
 void EditorWindow::TickSceneStreaming() {
     if (!viewportEditBefore_.isEmpty() || !timelineBefore_.isEmpty())
         return;
-    if (previewActive_ || refreshingHierarchy_ || restoringHistory_)
+    if (preview_.IsActive() || refreshingHierarchy_ || restoringHistory_)
         return;
     double x, y, height;
     canvas_->GetView(x, y, height);
@@ -858,7 +857,7 @@ void EditorWindow::ChooseMoveDestination() {
 }
 
 bool EditorWindow::MoveSelectionToScene(EditorDocument::TabId targetId) {
-    if (previewActive_)
+    if (preview_.IsActive())
         return false;
     CancelViewportEdit();
     EndTimelineEdit();

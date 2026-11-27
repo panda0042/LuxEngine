@@ -19,7 +19,7 @@ LuxUI::String PlayerExecutable() {
 } // namespace
 
 void EditorWindow::StartScriptDebug() {
-    if (!project_ || previewActive_ || buildProcess_ || scriptWorkspace_->IsDebugging())
+    if (!project_ || preview_.IsActive() || buildProcess_ || scriptWorkspace_->IsDebugging())
         return;
     if (FindScriptTool("LUX_NETCOREDBG", "scripts/debugAdapter", "netcoredbg").isEmpty()) {
         ShowError(LUX_UI_TEXT("C# 디버깅"),

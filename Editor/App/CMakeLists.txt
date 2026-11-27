@@ -9,6 +9,8 @@ target_sources(LuxEditorUi PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Private/LuxEditor/App/EditorWindowProjects.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Private/LuxEditor/App/EditorWindowScenes.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Private/LuxEditor/App/EditorWindowPlay.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Private/LuxEditor/App/EditorWindowPreview.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Private/LuxEditor/App/PreviewSession.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Private/LuxEditor/App/EditorWindowBuild.cpp"
 )
 target_sources(LuxEditorUi PRIVATE

@@ -185,7 +185,9 @@ void TestRecoveryHistory(LuxUI::Application& app) {
     undo->redo();
     Check(document.IsDirty() && document.GetScene().GetEntityCount() == 2, "redo remains dirty");
     undo->undo();
-    // Closing must still ask to save the recovered changes.
+    window->findChild<LuxUI::Action*>("previewStep")->trigger();
+    const auto* runtime = window->GetRuntimeScene();
+    Check(runtime, "preview starts for the recovered scene");
     int prompts = 0;
     LuxUI::Timer cancel;
     LuxUI::Object::connect(&cancel, &LuxUI::Timer::timeout, &app, [&] {
@@ -196,11 +198,12 @@ void TestRecoveryHistory(LuxUI::Application& app) {
         }
     });
     cancel.start(5);
-    Check(!window->close() && prompts == 1, "close asks to save recovered changes after undo");
+    Check(!window->close() && prompts == 1 && window->GetRuntimeScene() == runtime,
+          "cancelling close keeps the recovered edit and preview");
     cancel.stop();
     window->findChild<LuxUI::Action*>("saveScene")->trigger();
     LuxEngine::Scene disk;
-    Check(!document.IsDirty() && undo->isClean() &&
+    Check(!document.IsDirty() && undo->isClean() && window->GetRuntimeScene() == runtime &&
               disk.Deserialize(PathUtf8(fixture.project.GetSceneFile())) &&
               disk.GetEntityCount() == 1,
           "saving recovered content establishes the clean baseline");
@@ -208,6 +211,7 @@ void TestRecoveryHistory(LuxUI::Application& app) {
     Check(document.IsDirty(), "redo away from the saved baseline is dirty");
     undo->undo();
     Check(!document.IsDirty(), "undo back to the saved baseline is clean");
+    Check(window->close() && !window->GetRuntimeScene(), "confirmed close stops the preview");
 }
 
 void TestBrokenSceneRecovery(LuxUI::Application& app) {
@@ -384,6 +388,10 @@ void TestReopenCurrentProject(LuxUI::Application& app) {
     updated.CreateEntity("Latest start from disk");
     Check(updated.Serialize(PathUtf8(fixture.project.GetSceneFile())),
           "another collaborator updates the project start scene on disk");
+    window->findChild<LuxUI::Action*>("previewStep")->trigger();
+    const auto* runtime = window->GetRuntimeScene();
+    Check(runtime, "preview starts before the project reopen action");
+    bool cancelReopen = true;
     int discardPrompts = 0, errors = 0;
     LuxUI::Timer answer;
     LuxUI::Object::connect(&answer, &LuxUI::Timer::timeout, &app, [&] {
@@ -393,9 +401,10 @@ void TestReopenCurrentProject(LuxUI::Application& app) {
             LuxUI::MetaObject::invokeMethod(dialog, "accept", LuxUI::Flags::DirectConnection);
         } else if (auto* message =
                        qobject_cast<LuxUI::MessageBox*>(LuxUI::Application::activeModalWidget())) {
-            if (auto* no = message->button(LuxUI::MessageBox::No)) {
+            if (auto* button = message->button(cancelReopen ? LuxUI::MessageBox::Cancel
+                                                            : LuxUI::MessageBox::No)) {
                 ++discardPrompts;
-                no->click();
+                button->click();
             } else {
                 ++errors;
                 message->accept();
@@ -406,9 +415,15 @@ void TestReopenCurrentProject(LuxUI::Application& app) {
     auto* action = window->findChild<LuxUI::Action*>("openProject");
     Check(action && action->isEnabled(), "project open action is available");
     action->trigger();
+    Check(discardPrompts == 1 && errors == 0 && document.GetActiveTabId() == startTab &&
+              document.IsDirty(secondaryTab) && window->GetRuntimeScene() == runtime,
+          "cancelling project reopen preserves the existing tabs and preview");
+    cancelReopen = false;
+    action->trigger();
     answer.stop();
     const auto entities = document.GetScene().GetEntities();
-    Check(discardPrompts == 1 && errors == 0 && document.ListTabs().size() == 1 &&
+    Check(discardPrompts == 2 && errors == 0 && !window->GetRuntimeScene() &&
+              document.ListTabs().size() == 1 &&
               PathFromUtf8(document.GetPath()) == fixture.project.GetSceneFile() &&
               !document.IsDirty() && entities.size() == 1 &&
               entities.front().GetComponent<LuxEngine::TagComponent>().tag ==

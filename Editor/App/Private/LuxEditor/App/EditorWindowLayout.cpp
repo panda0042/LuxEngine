@@ -200,8 +200,10 @@ void EditorWindow::BuildLayout() {
     connect(viewChoice, &LuxUI::ComboBox::currentIndexChanged, cameraSpeed,
             [cameraSpeed](int index) { cameraSpeed->setVisible(index == 0); });
     gameCanvas_ = new GameViewport(viewportTabs_);
-    gameCanvas_->SetSceneProvider(
-        [this] { return runtimeScene_ ? runtimeScene_.get() : &document_.GetScene(); });
+    gameCanvas_->SetSceneProvider([this] {
+        auto* runtime = GetRuntimeScene();
+        return runtime ? runtime : &document_.GetScene();
+    });
     viewportTabs_->addTab(canvas3D_, LUX_UI_TEXT("Scene · 3D"));
     viewportTabs_->addTab(canvas_, LUX_UI_TEXT("Scene · 2D"));
     viewportTabs_->addTab(gameCanvas_, LUX_UI_TEXT("Game"));

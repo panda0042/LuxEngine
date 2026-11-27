@@ -1,13 +1,13 @@
 #pragma once
+#include <LuxEditor/App/PreviewSession.hpp>
 #include <LuxEditor/Build/ProjectBuild.hpp>
 #include <LuxEditor/Project/EditorProject.hpp>
 #include <LuxEditor/Scene/EditorDocument.hpp>
 #include <LuxEditor/Scene/EditorSnapshot.hpp>
 #include <LuxEditor/Scene/SelectionTransform.hpp>
 #include <LuxEditor/Viewport/EditorTool.hpp>
-#include <LuxEngine/Runtime/ScenePlayer.hpp>
+#include <LuxEngine/Core/Timer.hpp>
 #include <LuxEngine/Scene/SceneManager.hpp>
-#include <LuxEngine/Scripting/ScriptRuntime.hpp>
 #include <LuxUI/Framework.hpp>
 #include <LuxUI/Panels.hpp>
 #include <LuxUI/Widgets.hpp>
@@ -104,6 +104,7 @@ private:
     bool SaveAllScenes(bool currentProjectOnly = false);
     bool RequestCloseScene(EditorDocument::TabId id);
     void RememberSceneBaseline(bool clean = true);
+    void RememberSceneBaseline(EditorDocument::TabId tab, bool clean);
     void UpdateSceneDirty(EditorDocument::TabId id, const EditorSnapshot& snapshot);
     EditorSnapshot SnapshotScene(EditorDocument::TabId id);
     void RestoreSceneAt(EditorDocument::TabId id, const EditorSnapshot& snapshot,
@@ -172,6 +173,7 @@ private:
     void RescanProjectResources();
     bool ConfirmDiscardChanges();
     bool SaveScene(bool choosePath);
+    bool SaveSceneTab(EditorDocument::TabId tab, bool choosePath);
     void AddEntity();
     void AddMeshEntity();
     void AddBasicModelMenu(LuxUI::Menu* menu);
@@ -206,8 +208,9 @@ private:
     void TogglePreviewPause();
     void StepPreview();
     void AdvancePreview();
-    void TickPreview(double step);
-    bool EnsurePreviewScripts(LuxEngine::Scene& scene);
+    void PausePreview();
+    LuxEngine::ScenePlayerView GetPreviewView() const;
+    void PresentPreviewUpdate(const PreviewSession::Update& update);
     // Saves the current scene and runs it in a separate LuxPlayer window.
     void RunSceneInWindow();
     void StartScriptDebug();
@@ -267,6 +270,7 @@ private:
     LuxUI::Timer sceneLoadTimer_;
     LuxUI::Timer sceneStreamingTimer_;
     LuxEngine::SceneManager sceneManager_;
+    PreviewSession preview_{sceneManager_};
 
     struct PendingSceneLoad {
         std::filesystem::path path;
@@ -426,15 +430,7 @@ private:
     bool transformRejected_ = false;
     EditorSnapshot timelineBefore_;
     std::optional<LuxEngine::uint32> viewportEditSelected_;
-    uint64_t previewFrame_ = 0;
-    double previewStreamingElapsed_ = 0;
     LuxEngine::Timer previewClock_;
-    LuxEngine::FixedStepAccumulator previewUpdates_;
-    LuxEngine::Entity previewPlayer_;
-    LuxEngine::ScenePlayerControls previewControls_;
-    bool previewActive_ = false;
-    std::unique_ptr<LuxEngine::Scene> runtimeScene_;
-    LuxEngine::ScriptRuntime previewScripts_;
     std::filesystem::path playAssembly_;
     std::filesystem::path playAssemblyProject_;
     std::vector<std::string> projectToolIds_;
@@ -446,8 +442,6 @@ private:
     LuxUI::DockWidget* profilerDock_ = nullptr;
     LuxUI::Timer developmentTimer_;
     uint64_t lastEngineLog_ = 0;
-    double lastUpdateMs_ = 0;
-    bool previewPaused_ = false;
     bool debugDockHiddenForSize_ = false;
     LuxUI::String theme_ = LUX_UI_TEXT("dark");
     double uiScale_ = 1.0;

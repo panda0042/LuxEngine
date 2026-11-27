@@ -137,7 +137,7 @@ void EditorWindow::BuildAnimationPanel() {
         LUX_UI_TEXT("게임 실행 시 클립을 자동으로 재생합니다. 키프레임은 유지됩니다."));
     heading->addWidget(autoPlay);
     connect(autoPlay, &LuxUI::CheckBox::toggled, this, [this](bool playing) {
-        if (refreshingInspector_ || previewActive_)
+        if (refreshingInspector_ || preview_.IsActive())
             return;
         auto entity = document_.GetSelected();
         if (!entity || !entity.HasComponent<LuxEngine::AnimationComponent>())
@@ -489,7 +489,7 @@ void EditorWindow::BuildAnimationPanel() {
         timelineBefore_ = SnapshotScene();
     });
     connect(animationTimeline_, &LuxUI::Slider::actionTriggered, this, [this] {
-        if (animationTimeline_->isSliderDown() || previewActive_)
+        if (animationTimeline_->isSliderDown() || preview_.IsActive())
             return;
         timelineBefore_ = SnapshotScene();
         LuxUI::Timer::singleShot(0, this, [this] { EndTimelineEdit(); });
@@ -518,7 +518,7 @@ void EditorWindow::BuildAnimationPanel() {
 
 void EditorWindow::SetAnimationTool(EditorTool tool) {
     const int index = static_cast<int>(tool);
-    if (previewActive_ || index < 0 || index > 3)
+    if (preview_.IsActive() || index < 0 || index > 3)
         return;
     StopAnimationPlayback();
     EndTimelineEdit();
@@ -571,21 +571,22 @@ void EditorWindow::RefreshAnimationWorkspace() {
     if (auto* create =
             animationPanel_->findChild<LuxUI::PushButton*>(LUX_UI_TEXT("animationCreateClip")))
         create->setEnabled(!animation && entity &&
-                           entity.HasComponent<LuxEngine::TransformComponent>() && !previewActive_);
+                           entity.HasComponent<LuxEngine::TransformComponent>() &&
+                           !preview_.IsActive());
     if (auto* autoPlay =
             animationPanel_->findChild<LuxUI::CheckBox*>(LUX_UI_TEXT("animationAutoPlay"))) {
         const LuxUI::SignalBlocker blocked(autoPlay);
         autoPlay->setChecked(animation && animation->playing);
-        autoPlay->setEnabled(animation && !previewActive_);
+        autoPlay->setEnabled(animation && !preview_.IsActive());
     }
     if (auto* remove =
             animationPanel_->findChild<LuxUI::ToolButton*>(LUX_UI_TEXT("animationRemoveClip")))
-        remove->setEnabled(animation && !previewActive_);
+        remove->setEnabled(animation && !preview_.IsActive());
     if (auto* label = animationPanel_->findChild<LuxUI::Label*>(LUX_UI_TEXT("animationKeyCount")))
         label->setText(LUX_UI_TEXT("Transform Clip · 키 %1개").arg(count));
     if (auto* details =
             animationPanel_->findChild<LuxUI::GroupBox*>(LUX_UI_TEXT("animationKeyDetails")))
-        details->setEnabled(row >= 0 && !previewActive_);
+        details->setEnabled(row >= 0 && !preview_.IsActive());
     if (row >= 0) {
         const auto& key = animation->clip.keyframes[row];
         const LuxUI::SignalBlocker blockTime(animationKeyTime_);
@@ -631,7 +632,7 @@ void EditorWindow::RefreshAnimationWorkspace() {
 void EditorWindow::MoveAnimationKey(int index, double time) {
     auto entity = document_.GetSelected();
     auto* animation = entity ? entity.TryGetComponent<LuxEngine::AnimationComponent>() : nullptr;
-    if (previewActive_ || !animation || !std::isfinite(time) || index < 0 ||
+    if (preview_.IsActive() || !animation || !std::isfinite(time) || index < 0 ||
         static_cast<size_t>(index) >= animation->clip.keyframes.size())
         return;
     time = std::clamp<double>(time, 0.0f, animation->clip.duration);
@@ -655,7 +656,7 @@ void EditorWindow::MoveAnimationKey(int index, double time) {
 }
 
 void EditorWindow::OnAnimationKeyChanged(const LuxUI::Widget* field) {
-    if (refreshingInspector_ || previewActive_)
+    if (refreshingInspector_ || preview_.IsActive())
         return;
     auto entity = document_.GetSelected();
     const auto* animation =
@@ -695,7 +696,7 @@ void EditorWindow::OnAnimationKeyChanged(const LuxUI::Widget* field) {
 }
 
 void EditorWindow::OnAnimationChanged(const LuxUI::Widget* field) {
-    if (refreshingInspector_ || previewActive_ || !document_.GetSelected() ||
+    if (refreshingInspector_ || preview_.IsActive() || !document_.GetSelected() ||
         !document_.GetSelected().HasComponent<LuxEngine::TransformComponent>())
         return;
     StopAnimationPlayback();
@@ -731,7 +732,7 @@ void EditorWindow::OnAnimationChanged(const LuxUI::Widget* field) {
 }
 
 void EditorWindow::AddKeyframe() {
-    if (previewActive_ || !document_.GetSelected() ||
+    if (preview_.IsActive() || !document_.GetSelected() ||
         !document_.GetSelected().HasComponent<LuxEngine::TransformComponent>() ||
         !document_.GetSelected().HasComponent<LuxEngine::AnimationComponent>())
         return;
@@ -754,7 +755,7 @@ void EditorWindow::AddKeyframe() {
 }
 
 void EditorWindow::RemoveKeyframe() {
-    if (previewActive_ || !document_.GetSelected() ||
+    if (preview_.IsActive() || !document_.GetSelected() ||
         !document_.GetSelected().HasComponent<LuxEngine::AnimationComponent>())
         return;
     StopAnimationPlayback();
@@ -780,7 +781,7 @@ void EditorWindow::ScrubAnimation(int value) {
 }
 
 void EditorWindow::SeekAnimationTime(double time) {
-    if (refreshingInspector_ || previewActive_ || !document_.GetSelected() ||
+    if (refreshingInspector_ || preview_.IsActive() || !document_.GetSelected() ||
         !document_.GetSelected().HasComponent<LuxEngine::TransformComponent>() ||
         !document_.GetSelected().HasComponent<LuxEngine::AnimationComponent>())
         return;

@@ -64,6 +64,7 @@ public:
     bool IsDirty(TabId tab) const noexcept;
     bool SetDirty(TabId tab, bool dirty) noexcept;
     bool Save(TabId tab);
+    bool SaveAs(TabId tab, const std::string& path);
     std::optional<LuxEngine::uint32> GetSelectedId(TabId tab) const noexcept;
     void Select(TabId tab, std::optional<LuxEngine::uint32> id);
     std::vector<LuxEngine::uint32> GetSelection() const;

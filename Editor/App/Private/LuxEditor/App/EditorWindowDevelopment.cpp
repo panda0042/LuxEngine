@@ -54,12 +54,12 @@ void EditorWindow::BuildDevelopmentWorkspace() {
     tabifyDockWidget(docks_[7], profilerDock_);
     profilerDock_->hide();
     RegisterTool({"play", "현재 씬 플레이 (F5)", [this] { StartPreview(); },
-                  [this] { return !previewActive_; }});
+                  [this] { return !preview_.IsActive(); }});
     RegisterTool({"pause", "플레이 일시정지/계속", [this] { TogglePreviewPause(); },
-                  [this] { return previewActive_; }});
+                  [this] { return preview_.IsActive(); }});
     RegisterTool({"step", "한 프레임 실행", [this] { StepPreview(); }, {}});
     RegisterTool(
-        {"stop", "플레이 종료", [this] { StopPreview(); }, [this] { return previewActive_; }});
+        {"stop", "플레이 종료", [this] { StopPreview(); }, [this] { return preview_.IsActive(); }});
     RegisterTool({"frame", "선택 오브젝트에 초점", [this] { canvas3D_->FocusSelection(); }, {}});
     RegisterTool({"profiler",
                   "프로파일러 표시",
@@ -69,9 +69,9 @@ void EditorWindow::BuildDevelopmentWorkspace() {
                   },
                   {}});
     RegisterTool({"scripts", "플레이용 C# 어셈블리 선택…", [this] { SelectPlayAssembly(); },
-                  [this] { return !previewActive_; }});
+                  [this] { return !preview_.IsActive(); }});
     RegisterTool({"reload-tools", "프로젝트 도구 불러오기…", [this] { LoadProjectTools(); },
-                  [this] { return !previewActive_; }});
+                  [this] { return !preview_.IsActive(); }});
     developmentConsole_->SetCommandHandler([this](std::string command) {
         if (command == "help" || command == "tools") {
             for (const auto& [id, title] : commands_.Commands())
@@ -106,19 +106,20 @@ void EditorWindow::BuildDevelopmentWorkspace() {
 }
 
 void EditorWindow::PollDevelopmentWorkspace() {
-    scriptWorkspace_->SetExecutionActive(previewActive_ || buildProcess_);
+    scriptWorkspace_->SetExecutionActive(preview_.IsActive() || buildProcess_);
     for (const auto& entry : LuxEngine::Log::ReadAfter(lastEngineLog_)) {
         lastEngineLog_ = entry.sequence;
         const auto severity = entry.level >= LuxEngine::LogLevel::Error  ? LuxUI::Severity::Error
                               : entry.level == LuxEngine::LogLevel::Warn ? LuxUI::Severity::Warning
                                                                          : LuxUI::Severity::Info;
         developmentConsole_->Append(severity, "엔진", entry.message);
-        if (entry.level >= LuxEngine::LogLevel::Error && previewActive_ && !previewPaused_ &&
+        if (entry.sequence > preview_.LogStartSequence() &&
+            entry.level >= LuxEngine::LogLevel::Error && preview_.IsRunning() &&
             pauseOnErrorAction_->isChecked())
             TogglePreviewPause();
     }
     LuxUI::FrameSample sample;
-    sample.updateMs = lastUpdateMs_;
+    sample.updateMs = preview_.LastUpdateMs();
     if (canvas3D_) {
         const auto renderer = viewportTabs_->currentWidget() == gameCanvas_
                                   ? gameCanvas_->GetRenderer()
@@ -157,7 +158,7 @@ void EditorWindow::SelectPlayAssembly() {
 }
 
 void EditorWindow::LoadProjectTools() {
-    if (!project_ || previewActive_)
+    if (!project_ || preview_.IsActive())
         return;
     const auto path = LuxUI::FileDialog::getOpenFileName(
         this, LUX_UI_TEXT("프로젝트 제작 도구"),
@@ -172,7 +173,7 @@ void EditorWindow::LoadProjectTools() {
 
 bool EditorWindow::LoadProjectToolsFromFile(const std::filesystem::path& file, std::string& error) {
     error.clear();
-    if (!project_ || previewActive_) {
+    if (!project_ || preview_.IsActive()) {
         error = "프로젝트 편집 모드에서 도구를 불러와 주세요.";
         return false;
     }
@@ -223,7 +224,7 @@ bool EditorWindow::LoadProjectToolsFromFile(const std::filesystem::path& file, s
                      RefreshAll();
                  },
                  [this, projectFile] {
-                     return !previewActive_ && project_ && project_->GetFile() == projectFile;
+                     return !preview_.IsActive() && project_ && project_->GetFile() == projectFile;
                  }});
         }
         added.reserve(prepared.size());
@@ -260,7 +261,7 @@ void EditorWindow::BuildAssetBrowserCommands() {
 }
 
 void EditorWindow::ImportAssetsDialog() {
-    if (!project_ || previewActive_)
+    if (!project_ || preview_.IsActive())
         return;
     const auto projectFile = project_->GetFile();
     const auto files = LuxUI::FileDialog::getOpenFileNames(this, LUX_UI_TEXT("에셋 가져오기"));
@@ -280,7 +281,7 @@ bool EditorWindow::ImportAssetFiles(const std::vector<std::filesystem::path>& fi
     error.clear();
     std::vector<fs::path> created;
     try {
-        if (!project_ || previewActive_ || files.empty() || files.size() > 256)
+        if (!project_ || preview_.IsActive() || files.empty() || files.size() > 256)
             throw std::runtime_error("프로젝트 편집 모드에서 1~256개 파일을 선택해 주세요.");
         const auto root = fs::canonical(project_->GetFile().parent_path());
         const auto destination =
@@ -321,7 +322,7 @@ bool EditorWindow::ImportAssetFiles(const std::vector<std::filesystem::path>& fi
 
 void EditorWindow::CreateAssetFolder() {
     namespace fs = std::filesystem;
-    if (!project_ || previewActive_)
+    if (!project_ || preview_.IsActive())
         return;
     const auto projectFile = project_->GetFile();
     bool accepted = false;
@@ -431,10 +432,10 @@ std::optional<LuxEngine::LuxKey> GameKey(const LuxUI::KeyEvent& event) {
 } // namespace
 
 bool EditorWindow::eventFilter(LuxUI::Object* source, LuxUI::Event* event) {
-    if (source == gameCanvas_ && previewActive_) {
+    if (source == gameCanvas_ && preview_.IsActive()) {
         if (event->type() == LuxUI::Event::FocusOut)
             LuxEngine::Input::ClearExternalKeys();
-        if (!previewPaused_ && gameCanvas_->IsInputEnabled() && gameCanvas_->hasFocus() &&
+        if (preview_.IsRunning() && gameCanvas_->IsInputEnabled() && gameCanvas_->hasFocus() &&
             gameCanvas_->isVisible() &&
             (event->type() == LuxUI::Event::KeyPress || event->type() == LuxUI::Event::KeyRelease ||
              event->type() == LuxUI::Event::ShortcutOverride)) {

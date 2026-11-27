@@ -209,7 +209,7 @@ void EditorWindow::SetWorkspace(Workspace workspace) {
         else {
             scriptWorkspace_->SetProjectRoot(project_ ? project_->GetFile().parent_path()
                                                       : std::filesystem::path{});
-            scriptWorkspace_->SetExecutionActive(previewActive_ || buildProcess_);
+            scriptWorkspace_->SetExecutionActive(preview_.IsActive() || buildProcess_);
         }
     } else {
         workspaceStack_->setCurrentIndex(0);
