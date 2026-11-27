@@ -1,6 +1,10 @@
 // Both HDR scene layouts share these declarations. The ray-query variant appends
 // bindings to Persistent; per-frame lighting and per-draw material sets stay compatible.
 BEGIN_SRT_SET(Persistent)
+DECL_SAMPLER(Persistent, SamplerState, gMaterialClamp)
+DECL_SAMPLER(Persistent, SamplerState, gMaterialRepeat)
+DECL_SAMPLER(Persistent, SamplerState, gMaterialAnisotropicClamp)
+DECL_SAMPLER(Persistent, SamplerState, gMaterialAnisotropicRepeat)
 DECL_CBUFFER(Persistent, CBUFFER(LuxSceneData), gScene)
 DECL_TEXTURE(Persistent, TexCube(float4), gDiffuseEnv)
 DECL_TEXTURE(Persistent, TexCube(float4), gSpecularEnv)
@@ -9,10 +13,6 @@ DECL_TEXTURE(Persistent, Tex2D(float4), gBrdfLut)
 DECL_TEXTURE(Persistent, Tex2D(float), gShadowMap)
 DECL_TEXTURE(Persistent, Tex2D(float4), gHdrImage)
 DECL_TEXTURE(Persistent, Tex2D(float), gOpaqueDepth)
-DECL_SAMPLER(Persistent, SamplerState, gMaterialClamp)
-DECL_SAMPLER(Persistent, SamplerState, gMaterialRepeat)
-DECL_SAMPLER(Persistent, SamplerState, gMaterialAnisotropicClamp)
-DECL_SAMPLER(Persistent, SamplerState, gMaterialAnisotropicRepeat)
 DECL_TEXTURE(Persistent, TexCube(float4), gWaterSpecularEnv)
 #ifdef LUX_RAY_BINDINGS
 DECL_RAYTRACING(Persistent, RaytracingAccelerationStructure, gRayScene)

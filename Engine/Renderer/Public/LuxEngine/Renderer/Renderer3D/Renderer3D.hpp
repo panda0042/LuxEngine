@@ -135,6 +135,11 @@ private:
     Vec3 minimum_, maximum_;
 };
 
+struct CoastalWaterFrame {
+    float timeSeconds = 0;
+    float breakerHeight = 0;
+};
+
 class LUX_API Renderer3D {
 public:
     struct Statistics {
@@ -162,6 +167,9 @@ public:
                         std::span<const PointLight> pointLights);
         void BeginScene(const PerspectiveCamera& camera, const Render3DSettings& settings,
                         float exposure, std::span<const PointLight> pointLights = {});
+        void BeginScene(const PerspectiveCamera& camera, const Render3DSettings& settings,
+                        float exposure, std::span<const PointLight> pointLights,
+                        std::optional<CoastalWaterFrame> coastalWater);
         void EndScene();
         void AbortScene();
 
@@ -215,6 +223,9 @@ public:
                            std::span<const PointLight> pointLights);
     static void BeginScene(const PerspectiveCamera& camera, const Render3DSettings& settings,
                            float exposure, std::span<const PointLight> pointLights = {});
+    static void BeginScene(const PerspectiveCamera& camera, const Render3DSettings& settings,
+                           float exposure, std::span<const PointLight> pointLights,
+                           std::optional<CoastalWaterFrame> coastalWater);
     static void EndScene();
 
     static void DrawMesh(const Mat4& transform, const Material3D& material);

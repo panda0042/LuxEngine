@@ -56,7 +56,7 @@ void EditorWindow::AddBasicModelMenu(LuxUI::Menu* parent) {
     auto* reimport = parent->addAction(LUX_UI_TEXT("선택 모델을 원본에서 다시 가져오기"));
     reimport->setObjectName(LUX_UI_TEXT("reimportSelectedModel"));
     connect(reimport, &LuxUI::Action::triggered, this, [this] {
-        if (previewActive_ || !project_ || !document_.GetSelected())
+        if (preview_.IsActive() || !project_ || !document_.GetSelected())
             return;
         const auto selected = document_.GetSelected();
         if (!FindImportedModelRoot(document_.GetScene(), selected.GetId())) {
@@ -93,7 +93,7 @@ void EditorWindow::AddBasicModelMenu(LuxUI::Menu* parent) {
 }
 
 void EditorWindow::AddBasicModel(const std::string& id) {
-    if (previewActive_)
+    if (preview_.IsActive())
         return;
     if (!project_) {
         ShowError(LUX_UI_TEXT("기본 모델 추가"),
@@ -111,7 +111,7 @@ void EditorWindow::AddBasicModel(const std::string& id) {
 }
 
 void EditorWindow::AddModelAsset(const std::filesystem::path& path) {
-    if (previewActive_)
+    if (preview_.IsActive())
         return;
     if (!project_ || !IsInsideProject(path, project_->GetFile().parent_path())) {
         ShowError(LUX_UI_TEXT("모델 배치"),
@@ -175,7 +175,7 @@ void EditorWindow::AddModelAsset(const std::filesystem::path& path) {
 }
 
 void EditorWindow::ChooseModelAsset() {
-    if (previewActive_ || !document_.GetSelected())
+    if (preview_.IsActive() || !document_.GetSelected())
         return;
     const auto tab = document_.GetActiveTabId();
     const auto entity = document_.GetSelected().GetId();

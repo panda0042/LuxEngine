@@ -1,6 +1,9 @@
 #include "LuxRayTracing.hpp"
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
+#if defined(_WIN32) && !defined(NOMINMAX)
+#define NOMINMAX
+#endif
 #include "LuxForgeApi.h"
 #include <algorithm>
 #include <array>
@@ -26,7 +29,7 @@ constexpr uint32_t MaxTriangles = 2'000'000;
 constexpr uint32_t MaxInstances = 16'384;
 constexpr uint32_t VertexStride = sizeof(LuxForgeVertex);
 constexpr uint32_t PositionBytes = sizeof(Float3);
-constexpr uint32_t AlphaOffset = offsetof(LuxForgeVertex, color) + sizeof(float) * 3;
+constexpr uint32_t ColorOffset = offsetof(LuxForgeVertex, color);
 static_assert(offsetof(LuxForgeVertex, position) == 0 && PositionBytes == 12);
 
 struct MeshKey {
@@ -50,7 +53,7 @@ struct MeshKeyHash {
 
 struct SourceVertex {
     Float3 position;
-    float alpha = 0;
+    Float4 color{1, 1, 1, 0};
 };
 
 struct SourceBuffer {
@@ -141,7 +144,10 @@ Buffer* CreateMetadata(uint32_t count, const char* name) {
     desc.mDescriptors = DESCRIPTOR_TYPE_BUFFER;
     desc.mElementCount = count;
     desc.mStructStride = sizeof(Float4);
-    desc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT | BUFFER_CREATION_FLAG_HOST_COHERENT;
+    desc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
+#if defined(VULKAN)
+    desc.mFlags |= BUFFER_CREATION_FLAG_HOST_COHERENT;
+#endif
     desc.mStartState = RESOURCE_STATE_SHADER_RESOURCE;
     desc.pName = name;
     Buffer* buffer = nullptr;
@@ -154,6 +160,7 @@ Buffer* CreateMetadata(uint32_t count, const char* name) {
     return buffer;
 }
 
+#if defined(VULKAN)
 void SynchronizeBuild(Cmd* cmd, VkPipelineStageFlags source, VkAccessFlags writes,
                       VkPipelineStageFlags destination, VkAccessFlags reads) {
     VkMemoryBarrier barrier = {};
@@ -163,6 +170,7 @@ void SynchronizeBuild(Cmd* cmd, VkPipelineStageFlags source, VkAccessFlags write
     vkCmdPipelineBarrier(cmd->mVk.pCmdBuf, source, destination, 0, 1, &barrier, 0, nullptr, 0,
                          nullptr);
 }
+#endif
 } // namespace
 
 struct ForgeRayTracing {
@@ -236,8 +244,9 @@ struct ForgeRayTracing {
             const auto& p = vertex.position;
             if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]))
                 return nullptr;
-            minimumAlpha = std::isfinite(vertex.alpha) ? std::min(minimumAlpha, vertex.alpha)
-                                                       : -std::numeric_limits<float>::infinity();
+            const float alpha = vertex.color[3];
+            minimumAlpha = std::isfinite(alpha) ? std::min(minimumAlpha, alpha)
+                                                : -std::numeric_limits<float>::infinity();
         }
         if (!PassesMask(minimumAlpha, draw) || !ReserveTriangles(count, frame))
             return nullptr;
@@ -262,10 +271,17 @@ struct ForgeRayTracing {
 
         auto* normals = static_cast<Float4*>(triangles->pCpuMappedAddress) + triangleCount;
         for (uint32_t face = 0; face < count; ++face) {
-            const auto& a = vertices[i[3 * face]].position;
-            const auto& b = vertices[i[3 * face + 1]].position;
-            const auto& c = vertices[i[3 * face + 2]].position;
-            normals[face] = FaceNormal(a, b, c);
+            const auto& a = vertices[i[3 * face]];
+            const auto& b = vertices[i[3 * face + 1]];
+            const auto& c = vertices[i[3 * face + 2]];
+            normals[face] = FaceNormal(a.position, b.position, c.position);
+            uint32_t packed = 0;
+            for (unsigned channel = 0; channel < 3; ++channel) {
+                const float mean = (a.color[channel] + b.color[channel] + c.color[channel]) / 3;
+                const float value = std::isfinite(mean) ? std::clamp(mean, 0.f, 1.f) : 1.f;
+                packed |= static_cast<uint32_t>(std::lround(value * 1023)) << (10 * channel);
+            }
+            std::memcpy(&normals[face][3], &packed, sizeof(packed));
         }
         RayMesh& mesh =
             meshes.emplace(key, RayMesh{blas, triangleCount, count, 0, minimumAlpha}).first->second;
@@ -297,14 +313,23 @@ struct ForgeRayTracing {
 };
 
 ForgeRayTracing* CreateForgeRayTracing(Renderer* renderer) {
-    if (!renderer || !renderer->pGpu->mRayQuerySupported ||
-        !renderer->pGpu->mBufferDeviceAddressSupported || !renderer->pGpu->mSpirv14Extension)
+    if (!renderer || !renderer->pGpu->mRayQuerySupported)
+        return nullptr;
+#if defined(VULKAN)
+    if (!renderer->pGpu->mBufferDeviceAddressSupported || !renderer->pGpu->mSpirv14Extension)
         return nullptr;
     VkFormatProperties format = {};
     vkGetPhysicalDeviceFormatProperties(renderer->pGpu->mVk.pGpu, VK_FORMAT_R32G32B32_SFLOAT,
                                         &format);
     if (!(format.bufferFeatures & VK_FORMAT_FEATURE_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR))
         return nullptr;
+#elif defined(DIRECT3D12)
+    D3D12_FEATURE_DATA_SHADER_MODEL shaderModel{D3D_SHADER_MODEL_6_5};
+    if (FAILED(renderer->mDx.pDevice->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shaderModel,
+                                                          sizeof(shaderModel))) ||
+        shaderModel.HighestShaderModel < D3D_SHADER_MODEL_6_5)
+        return nullptr;
+#endif
     Raytracing* backend = nullptr;
     if (!initRaytracing(renderer, &backend))
         return nullptr;
@@ -364,9 +389,14 @@ void DestroyForgeRayTracing(ForgeRayTracing* ray) {
 }
 
 void MarkForgeRayGeometry(const ForgeRayTracing* ray, BufferDesc& desc) {
+#if defined(VULKAN)
     if (ray && (desc.mDescriptors & (DESCRIPTOR_TYPE_VERTEX_BUFFER | DESCRIPTOR_TYPE_INDEX_BUFFER)))
         desc.mFlags |= BUFFER_CREATION_FLAG_ACCELERATION_STRUCTURE_BUILD_INPUT |
                        BUFFER_CREATION_FLAG_SHADER_DEVICE_ADDRESS;
+#elif defined(DIRECT3D12)
+    if (ray)
+        desc.mStartState |= RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+#endif
 }
 
 void UpdateForgeRayBuffer(ForgeRayTracing* ray, Buffer* buffer, int type, uint32_t totalSize,
@@ -386,7 +416,7 @@ void UpdateForgeRayBuffer(ForgeRayTracing* ray, Buffer* buffer, int type, uint32
     }
 
     source.vertices.resize(totalSize / VertexStride);
-    // Retain only the data needed for the triangle normal atlas and untextured masks.
+    // Retain positions and colors for acceleration structures and ray-hit shading.
     const uint32_t end = offset + size;
     const auto copy = [&](void* destination, uint32_t position, uint32_t length) {
         const uint32_t start = std::max(offset, position);
@@ -400,7 +430,7 @@ void UpdateForgeRayBuffer(ForgeRayTracing* ray, Buffer* buffer, int type, uint32
         const uint32_t position = index * VertexStride;
         auto& vertex = source.vertices[index];
         copy(vertex.position.data(), position, PositionBytes);
-        copy(&vertex.alpha, position + AlphaOffset, sizeof(vertex.alpha));
+        copy(vertex.color.data(), position + ColorOffset, sizeof(vertex.color));
     }
 }
 
@@ -449,7 +479,10 @@ ForgeRayScene BuildForgeRayScene(ForgeRayTracing* ray, Cmd* cmd, uint64_t frame,
             for (int column = 0; column < 4; ++column)
                 instance.mTransform[row * 4 + column] = draw.model[column * 4 + row];
         instances.push_back(instance);
-        material[0] = {draw.albedo[0], draw.albedo[1], draw.albedo[2],
+        const auto* tint = input.textureColor;
+        material[0] = {draw.albedo[0] * (tint ? tint[0] : 1.f),
+                       draw.albedo[1] * (tint ? tint[1] : 1.f),
+                       draw.albedo[2] * (tint ? tint[2] : 1.f),
                        std::isfinite(draw.metallic) ? std::clamp(draw.metallic, 0.f, 1.f) : 0};
         material[1] = {std::isfinite(draw.roughness) ? std::clamp(draw.roughness, .045f, 1.f) : .5f,
                        water ? draw.water[3] : 1.f, 0, water ? 1.f : 0.f};
@@ -482,28 +515,39 @@ ForgeRayScene BuildForgeRayScene(ForgeRayTracing* ray, Cmd* cmd, uint64_t frame,
     }
 
     uint32_t builds = 0;
+#if defined(VULKAN)
     constexpr auto buildStage = VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+    constexpr bool issueBarrier = false;
+#else
+    constexpr bool issueBarrier = true;
+#endif
     for (RayMesh* mesh : meshes) {
         if (mesh->buildFrame)
             continue;
+#if defined(VULKAN)
         if (!builds)
             SynchronizeBuild(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                              buildStage, VK_ACCESS_SHADER_READ_BIT);
-        RaytracingBuildASDesc build = {mesh->acceleration, false};
+#endif
+        RaytracingBuildASDesc build = {mesh->acceleration, issueBarrier};
         cmdBuildAccelerationStructure(cmd, ray->backend, &build);
         mesh->buildFrame = frame;
         ray->scratch.push_back(mesh);
         ++builds;
     }
+#if defined(VULKAN)
     if (builds)
         SynchronizeBuild(cmd, buildStage, VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                          buildStage, VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+#endif
 
-    RaytracingBuildASDesc build = {tlas, false};
+    RaytracingBuildASDesc build = {tlas, issueBarrier};
     cmdBuildAccelerationStructure(cmd, ray->backend, &build);
+#if defined(VULKAN)
     SynchronizeBuild(cmd, buildStage, VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                      VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+#endif
     ray->scenes.push_back({tlas, instanceBuffer, frame});
     return {tlas, instanceBuffer, ray->triangles, builds + 1};
 }

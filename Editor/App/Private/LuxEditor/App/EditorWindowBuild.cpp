@@ -63,7 +63,7 @@ void EditorWindow::StartBuild(BuildConfiguration configuration, bool clean,
         return;
     }
     if (buildProcess_ || scriptWorkspace_->IsBuilding() || scriptWorkspace_->IsDebugging() ||
-        previewActive_) {
+        preview_.IsActive()) {
         Log(LUX_UI_TEXT("실행 또는 다른 빌드가 진행 중입니다."), true);
         return;
     }

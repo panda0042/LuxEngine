@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 21u
+#define LUX_FORGE_API_VERSION 22u
 
 #if defined(_WIN32)
 #if defined(LUX_FORGE_BUILD)
@@ -53,6 +53,7 @@ typedef struct LuxForgeInfo {
     uint32_t maxTextureSize; // native 2D limit, capped by the engine's supported 16384 limit
     int gpuTimestamps;
     int rayTracing;
+    uint32_t maxVSyncInterval;
 } LuxForgeInfo;
 
 // Results of beginFrame.
@@ -204,7 +205,7 @@ typedef struct LuxForgeApi {
     int (*clear)(LuxForgeDevice* device, float r, float g, float b, float a);
     int (*endFrame)(LuxForgeDevice* device);
     int (*resize)(LuxForgeDevice* device, uint32_t width, uint32_t height);
-    int (*setVSync)(LuxForgeDevice* device, int enabled);
+    int (*setVSync)(LuxForgeDevice* device, int interval);
     int (*waitIdle)(LuxForgeDevice* device);
 
     // Capture of the next presented frame. readCapture waits for that frame, then writes

@@ -12,12 +12,9 @@
 #include <LuxEditor/Viewport/SceneViewport3D.hpp>
 #include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/ECS/ECS.hpp>
-#include <LuxEngine/Platform/Input.hpp>
-#include <LuxEngine/Runtime/ScenePlayer.hpp>
 #include <LuxUI/Widgets.hpp>
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <functional>
 #include <numbers>
@@ -623,14 +620,13 @@ void EditorWindow::closeEvent(LuxUI::CloseEvent* event) {
         event->ignore();
         return;
     }
-    CancelViewportEdit();
-    StopPreview();
-    StopSceneWindow();
-    CancelBuild();
     if (!ConfirmDiscardChanges()) {
         event->ignore();
         return;
     }
+    StopPreview();
+    StopSceneWindow();
+    CancelBuild();
     SaveWorkspaceLayout();
     event->accept();
 }
@@ -893,7 +889,7 @@ void EditorWindow::RefreshInspector() {
     if (auto* legacy =
             animationPanel_->findChild<LuxUI::Widget*>(LUX_UI_TEXT("animationWorkspace")))
         legacy->setEnabled(selected && selected.HasComponent<LuxEngine::TransformComponent>() &&
-                           !previewActive_);
+                           !preview_.IsActive());
     animationTarget_->setText(selected ? LUX_UI_TEXT("대상 · 엔티티 #%1").arg(selected.GetId())
                                        : LUX_UI_TEXT("대상 없음"));
     inspectorBody_->setVisible(static_cast<bool>(selected));
@@ -1361,202 +1357,6 @@ void EditorWindow::OnPhysicsChanged(const LuxUI::Widget* field) {
     canvas_->RefreshScene();
     overviewCanvas_->RefreshScene();
     UpdateChrome();
-}
-
-void EditorWindow::StartPreview() {
-    if (scriptWorkspace_->IsBuilding() || scriptWorkspace_->IsDebugging() || buildProcess_) {
-        Log(LUX_UI_TEXT("빌드가 끝난 뒤 실행해 주세요."), true);
-        return;
-    }
-    CancelViewportEdit();
-    if (previewActive_)
-        return;
-    StopAnimationPlayback();
-    // Authoring scenes and undo history stay alive; physics and scripts own a disposable clone.
-    std::string serialized;
-    auto runtime = std::make_unique<LuxEngine::Scene>();
-    if (!document_.GetScene().SerializeToString(serialized) ||
-        !runtime->DeserializeFromString(serialized)) {
-        Log(LUX_UI_TEXT("게임 실행용 씬 복사본을 만들지 못했습니다."), true);
-        return;
-    }
-    runtime->SetSourcePath(document_.GetScene().GetSourcePath());
-    for (const auto id :
-         document_.GetScene().GetComponentEntityIds<LuxEngine::AnimationComponent>())
-        runtime->GetComponent<LuxEngine::AnimationComponent>(id).currentTime =
-            document_.GetScene().GetComponent<LuxEngine::AnimationComponent>(id).currentTime;
-    if (!EnsurePreviewScripts(*runtime)) {
-        Log(Q(previewScripts_.GetLastError()), true);
-        return;
-    }
-    runtimeScene_ = std::move(runtime);
-    previewPlayer_ = LuxEngine::FindScenePlayer(*runtimeScene_);
-    previewControls_.Bind();
-    previewUpdates_.Reset();
-    previewFrame_ = 0;
-    previewStreamingElapsed_ = 0;
-    previewTimer_.setInterval(
-        std::max(1, static_cast<int>(std::lround(runtimeScene_->GetSettings().fixedStep * 1000))));
-    lastUpdateMs_ = 0;
-    previewActive_ = true;
-    previewPaused_ = false;
-    gameCanvas_->SetPaused(false);
-    gameCanvas_->SetInputEnabled(true);
-    gameCanvas_->RefreshScene();
-    RefreshModelingWorkspace();
-    viewportTabs_->setCurrentWidget(gameCanvas_);
-    gameCanvas_->setFocus(LuxUI::Flags::OtherFocusReason);
-    previewStartAction_->setEnabled(false);
-    previewPauseAction_->setEnabled(true);
-    previewStepAction_->setEnabled(true);
-    previewStopAction_->setEnabled(true);
-    previewClock_.Reset();
-    previewTimer_.start();
-    Log(LUX_UI_TEXT("게임 실행을 시작했습니다."));
-}
-
-void EditorWindow::StopPreview() {
-    if (!previewActive_)
-        return;
-    previewTimer_.stop();
-    previewActive_ = false;
-    previewPaused_ = false;
-    previewScripts_.Shutdown();
-    previewControls_.Unbind();
-    previewPlayer_ = {};
-    gameCanvas_->SetInputEnabled(false);
-    gameCanvas_->SetPaused(false);
-    runtimeScene_.reset();
-    previewStartAction_->setEnabled(true);
-    previewPauseAction_->setEnabled(false);
-    previewStepAction_->setEnabled(false);
-    previewStopAction_->setEnabled(false);
-    RefreshAll();
-    Log(LUX_UI_TEXT("게임 실행을 중지했습니다."));
-}
-
-void EditorWindow::TogglePreviewPause() {
-    if (!previewActive_)
-        return;
-    previewPaused_ = !previewPaused_;
-    gameCanvas_->SetPaused(previewPaused_);
-    if (previewPaused_) {
-        previewTimer_.stop();
-    } else {
-        previewUpdates_.Reset();
-        previewClock_.Reset();
-        previewTimer_.start();
-    }
-}
-
-void EditorWindow::StepPreview() {
-    if (!previewActive_)
-        StartPreview();
-    if (!previewActive_)
-        return;
-    previewPaused_ = true;
-    previewTimer_.stop();
-    gameCanvas_->SetPaused(true);
-    TickPreview(runtimeScene_->GetSettings().fixedStep);
-}
-
-bool EditorWindow::EnsurePreviewScripts(LuxEngine::Scene& scene) {
-    if (previewScripts_.IsRunning())
-        return true;
-    for (const auto id : scene.GetComponentEntityIds<LuxEngine::ScriptComponent>()) {
-        const auto& script = scene.GetComponent<LuxEngine::ScriptComponent>(id);
-        if (!script.enabled || script.typeName.empty())
-            continue;
-        LuxEngine::ScriptRuntimeConfig config;
-        config.assemblyPath = ResolvePlayAssembly();
-        return previewScripts_.Initialize(scene, config);
-    }
-    return true;
-}
-
-void EditorWindow::AdvancePreview() {
-    if (!previewActive_ || previewPaused_ || !runtimeScene_)
-        return;
-    previewUpdates_.AddElapsed(previewClock_.ElapsedSeconds());
-    previewClock_.Reset();
-    for (int i = 0; i < LuxEngine::FixedStepAccumulator::MaxUpdatesPerFrame; ++i) {
-        if (!previewActive_ || previewPaused_ || !runtimeScene_)
-            return;
-        const double step = runtimeScene_->GetSettings().fixedStep;
-        if (!previewUpdates_.Consume(step))
-            return;
-        TickPreview(step);
-    }
-    if (runtimeScene_)
-        previewUpdates_.DropBacklog(runtimeScene_->GetSettings().fixedStep);
-}
-
-void EditorWindow::TickPreview(double step) {
-    auto& scene = *runtimeScene_;
-    const auto start = std::chrono::steady_clock::now();
-    try {
-        previewControls_.Apply(previewPlayer_, step);
-        previewStreamingElapsed_ += step;
-        if (previewStreamingElapsed_ >= .1) {
-            previewStreamingElapsed_ = 0;
-            LuxEngine::ScenePlayerView view;
-            canvas_->GetView(view.centerX, view.centerY, view.halfHeight);
-            const auto observer =
-                LuxEngine::ResolveSceneStreamingObserver(scene, view, previewPlayer_.GetId());
-            std::string error;
-            bool changed = false;
-            if (!sceneManager_.UpdateStreaming(scene, {observer.x, observer.y}, error, &changed))
-                Log(Q(error), true);
-            if (changed) {
-                previewPlayer_ = LuxEngine::FindScenePlayer(scene);
-                if (!EnsurePreviewScripts(scene))
-                    throw std::runtime_error(previewScripts_.GetLastError());
-            }
-        }
-        if (!LuxEngine::UpdateSceneSimulation(scene, previewScripts_, step))
-            throw std::runtime_error(previewScripts_.GetLastError());
-        if (!scene.GetLastPhysicsError2D().empty())
-            throw std::runtime_error(scene.GetLastPhysicsError2D());
-        if (!scene.GetLastPhysicsError3D().empty())
-            throw std::runtime_error(scene.GetLastPhysicsError3D());
-        LuxEngine::Input::AdvanceFrame();
-    } catch (const std::exception& error) {
-        previewPaused_ = true;
-        previewTimer_.stop();
-        gameCanvas_->SetPaused(true);
-        Log(LUX_UI_TEXT("게임 실행 오류: %1 — 실행을 일시정지했습니다.")
-                .arg(LuxUI::String::fromUtf8(error.what())),
-            true);
-        gameCanvas_->RefreshScene();
-        return;
-    }
-    ++previewFrame_;
-    lastUpdateMs_ =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-    const auto selected = SelectedId(document_);
-    debugPanel_->UpdateScene(scene, selected.value_or(0), previewFrame_, lastUpdateMs_);
-    for (const auto& event : scene.GetCollisionEvents2D())
-        debugPanel_->AddLog(LUX_UI_TEXT("프레임 %1: #%2 ↔ #%3 %4")
-                                .arg(previewFrame_)
-                                .arg(event.entityA)
-                                .arg(event.entityB)
-                                .arg(event.isTrigger ? LUX_UI_TEXT("트리거") : LUX_UI_TEXT("충돌")),
-                            false);
-    for (const auto& event : scene.GetCollisionEvents3D())
-        debugPanel_->AddLog(LUX_UI_TEXT("3D 프레임 %1: #%2 ↔ #%3 %4")
-                                .arg(previewFrame_)
-                                .arg(event.entityA)
-                                .arg(event.entityB)
-                                .arg(event.isTrigger ? LUX_UI_TEXT("트리거") : LUX_UI_TEXT("충돌")),
-                            false);
-    if (breakOnCollisionAction_->isChecked() &&
-        (!scene.GetCollisionEvents2D().empty() || !scene.GetCollisionEvents3D().empty())) {
-        previewPaused_ = true;
-        previewTimer_.stop();
-        gameCanvas_->SetPaused(true);
-        Log(LUX_UI_TEXT("충돌 이벤트에서 게임 실행을 일시정지했습니다."));
-    }
-    gameCanvas_->RefreshScene();
 }
 
 void EditorWindow::SetTool(EditorTool tool) {
@@ -2514,14 +2314,6 @@ EditorDocument& EditorWindow::GetDocument() noexcept {
 
 const EditorDocument& EditorWindow::GetDocument() const noexcept {
     return document_;
-}
-
-LuxEngine::Scene* EditorWindow::GetRuntimeScene() noexcept {
-    return runtimeScene_.get();
-}
-
-const LuxEngine::Scene* EditorWindow::GetRuntimeScene() const noexcept {
-    return runtimeScene_.get();
 }
 
 const LuxUI::String& EditorWindow::LastLogMessage() const noexcept {

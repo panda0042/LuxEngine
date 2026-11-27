@@ -14,6 +14,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -40,6 +41,15 @@
 #include "Utilities/RingBuffer.h"
 #include "Graphics/FSL/fsl_srt.h"
 #include "Graphics/FSL/defaults.h"
+
+namespace ShaderUniforms {
+using float4 = float[4];
+using float4x4 = float[16];
+using uint4 = uint32_t[4];
+
+#include "Shaders/LuxStructs.h"
+}
+
 #include "Shaders/Lux2D.srt.h"
 #include "Shaders/LuxFogCompute.srt.h"
 #include "Shaders/LuxFogComposite.srt.h"
@@ -53,7 +63,7 @@
 #include "Shaders/LuxOceanAssemble.srt.h"
 #include "Shaders/LuxScene.srt.h"
 #include "Shaders/LuxTemporal.srt.h"
-#if defined(VULKAN)
+#if defined(VULKAN) || defined(DIRECT3D12)
 #include "Shaders/LuxRayScene.srt.h"
 #endif
 #include "Utilities/Interfaces/IMemory.h"
@@ -112,7 +122,7 @@ struct LuxForgeDevice {
     uint64_t swapchainCreations = 0;
     uint32_t width = 0;
     uint32_t height = 0;
-    bool vsync = true;
+    int vsyncInterval = 1;
     GpuCmdRing cmdRing = {};
     // Acquisition waits belong to command-ring slots; presentation waits belong to images.
     std::vector<Semaphore*> imageAcquired;
@@ -155,6 +165,7 @@ struct LuxForgeDevice {
         bool nearest = false;
         bool srgb = false;
         uint64_t bytes = 0;
+        std::array<float, 3> rayTint{1, 1, 1};
     };
 
     struct OceanBuffers {
@@ -315,6 +326,20 @@ struct LuxForgeDevice {
 };
 
 namespace {
+using ShaderUniforms::LuxDraw;
+using ShaderUniforms::LuxSceneData;
+
+static_assert(std::is_standard_layout_v<LuxDraw> && std::is_trivially_copyable_v<LuxDraw>);
+static_assert(offsetof(LuxDraw, materialOptions) == 176);
+static_assert(offsetof(LuxDraw, coastalBreaker) == 224);
+static_assert(sizeof(LuxDraw) == 240 && sizeof(LuxDraw) <= LuxForgeDevice::kDrawStride);
+static_assert(std::is_standard_layout_v<LuxSceneData> &&
+              std::is_trivially_copyable_v<LuxSceneData>);
+static_assert(offsetof(LuxSceneData, shadowMatrix) == 96);
+static_assert(offsetof(LuxSceneData, rayOptions) == 192);
+static_assert(offsetof(LuxSceneData, virtualShadowPages) == 224);
+static_assert(sizeof(LuxSceneData) == 240 && sizeof(LuxSceneData) <= LuxForgeDevice::kSceneStride);
+
 #if defined(DIRECT3D12)
 constexpr DescriptorType UniformBufferDescriptor = DESCRIPTOR_TYPE_UNDEFINED;
 #else
@@ -522,7 +547,21 @@ void RemoveSwapChain(LuxForgeDevice* device) {
     device->swapChain = nullptr;
 }
 
+#if defined(DIRECT3D12)
+constexpr int kMaxVSyncInterval = 4;
+#else
+constexpr int kMaxVSyncInterval = 1;
+#endif
+
+#if defined(LUX_FORGE_TESTING)
+std::atomic<bool> g_FailNextSwapChainCreation = false;
+#endif
+
 bool AddSwapChain(LuxForgeDevice* device) {
+#if defined(LUX_FORGE_TESTING)
+    if (g_FailNextSwapChainCreation.exchange(false))
+        return false;
+#endif
     SwapChainDesc desc = {};
     desc.mWindowHandle = device->window;
     desc.ppPresentQueues = &device->graphicsQueue;
@@ -535,11 +574,14 @@ bool AddSwapChain(LuxForgeDevice* device) {
     // Same as the Vulkan backend: linear 8-bit BGRA, shaders write display-ready values.
     desc.mColorFormat = TinyImageFormat_B8G8R8A8_UNORM;
     desc.mColorSpace = COLOR_SPACE_SDR_SRGB;
-    desc.mEnableVsync = device->vsync;
+    desc.mEnableVsync = device->vsyncInterval > 0;
     desc.mUseFlipSwapEffect = true;
     addSwapChain(device->renderer, &desc, &device->swapChain);
     if (!device->swapChain)
         return false;
+#if defined(DIRECT3D12)
+    device->swapChain->mDx.mSyncInterval = static_cast<uint32_t>(device->vsyncInterval);
+#endif
     if (!device->swapChain->mImageCount || !device->swapChain->ppRenderTargets[0])
         return false;
     // WSI may clamp the requested size or finish a resize while recreating the swap chain.
@@ -557,7 +599,6 @@ bool AddSwapChain(LuxForgeDevice* device) {
     device->renderFinished.resize(device->swapChain->mImageCount);
     for (auto& semaphore : device->renderFinished)
         initSemaphore(device->renderer, &semaphore);
-    ++device->swapchainCreations;
     return true;
 }
 
@@ -569,9 +610,18 @@ void RemoveCaptureBuffer(LuxForgeDevice* device) {
     device->captureRecorded = false;
 }
 
+constexpr char kAfterDepthTarget[] = "after depth target";
+#if defined(LUX_FORGE_TESTING) && defined(DIRECT3D12)
+std::atomic<bool> g_FailDeviceCheckAfterDepthTarget = false;
+#endif
+
 // Diagnostic: report the first step after which the D3D12 device is gone (LUX_FORGE_TRACE=1).
 bool DeviceAlive(LuxForgeDevice* device, const char* step) {
 #if defined(DIRECT3D12)
+#if defined(LUX_FORGE_TESTING)
+    if (step == kAfterDepthTarget && g_FailDeviceCheckAfterDepthTarget.exchange(false))
+        return false;
+#endif
     const char* trace = (std::getenv)("LUX_FORGE_TRACE");
     const HRESULT reason = device->renderer->mDx.pDevice->GetDeviceRemovedReason();
     if ((trace && trace[0] == '1') || FAILED(reason)) {
@@ -609,6 +659,18 @@ void RemoveDepthTarget(LuxForgeDevice* device) {
         removeRenderTarget(device->renderer, device->depth);
         device->depth = nullptr;
     }
+}
+
+bool RecreateSwapChain(LuxForgeDevice* device) {
+    waitQueueIdle(device->graphicsQueue);
+    RemoveSwapChain(device);
+    if (AddSwapChain(device) && (device->depth || AddDepthTarget(device))) {
+        ++device->swapchainCreations;
+        return true;
+    }
+    RemoveSwapChain(device);
+    RemoveDepthTarget(device);
+    return false;
 }
 
 void ReleaseTexture(LuxForgeDevice* device, uint32_t id) {
@@ -749,6 +811,26 @@ uint32_t CreateTextureImpl(LuxForgeDevice* device, uint32_t width, uint32_t heig
     device->textures[id].bytes = storageBytes;
     device->textures[id].nearest = nearest;
     device->textures[id].srgb = srgb;
+    if (device->rayTracing && mipPixels[0]) {
+        auto& tint = device->textures[id].rayTint;
+        tint = {};
+        const auto* rgba =
+            padded.empty() ? static_cast<const uint8_t*>(mipPixels[0]) : padded.data();
+        constexpr uint32_t samples = 8;
+        for (uint32_t y = 0; y < samples; ++y)
+            for (uint32_t x = 0; x < samples; ++x) {
+                const size_t pixel = ((size_t(2 * y + 1) * height / (2 * samples)) * width +
+                                      (2 * x + 1) * width / (2 * samples)) *
+                                     4;
+                for (uint32_t channel = 0; channel < tint.size(); ++channel) {
+                    float value = rgba[pixel + channel] / 255.f;
+                    if (srgb)
+                        value = value < .04045f ? value / 12.92f
+                                                : std::pow((value + .055f) / 1.055f, 2.4f);
+                    tint[channel] += value / (samples * samples);
+                }
+            }
+    }
     DescriptorData param = {};
     param.mIndex = SRT_RES_IDX(Lux2DSrt, PerBatch, gTexture);
     param.ppTextures = &device->textures[id].texture;
@@ -1222,7 +1304,7 @@ LuxForgeDevice* Create(const LuxForgeInitDesc* desc, char* error, size_t errorSi
 #endif
     device->width = desc->width ? desc->width : 1;
     device->height = desc->height ? desc->height : 1;
-    device->vsync = desc->vsync != 0;
+    device->vsyncInterval = desc->vsync ? 1 : 0;
     if (!AddSwapChain(device)) {
         lock.unlock();
         Destroy(device);
@@ -1241,25 +1323,33 @@ LuxForgeDevice* Create(const LuxForgeInitDesc* desc, char* error, size_t errorSi
     if (desc->maxFrameVertexBytes)
         device->maxFrameVertexBytes = desc->maxFrameVertexBytes;
     std::string setupError;
-    DeviceAlive(device, "after swap chain");
-    if (!AddDepthTarget(device))
+    if (!DeviceAlive(device, "after swap chain"))
+        setupError = "GPU device was lost after swap chain creation";
+    else if (!AddDepthTarget(device))
         setupError = "Depth buffer could not be created";
-    else if (DeviceAlive(device, "after depth target"))
-        Init2D(device, setupError);
-    if (!setupError.empty()) {
-        lock.unlock();
-        Destroy(device);
-        CopyText(error, errorSize, setupError);
-        return nullptr;
+    else if (!DeviceAlive(device, kAfterDepthTarget))
+        setupError = "GPU device was lost after depth target creation";
+    else if (Init2D(device, setupError)) {
+        if (DeviceAlive(device, "after 2D initialization")) {
+            ++device->swapchainCreations;
+            return device;
+        }
+        setupError = "GPU device was lost after 2D initialization";
     }
-    return device;
+    lock.unlock();
+    Destroy(device);
+    CopyText(error, errorSize,
+             setupError.empty() ? "2D renderer could not be initialized" : setupError);
+    return nullptr;
 }
 
 int BeginFrame(LuxForgeDevice* device) {
-    if (!device || !device->swapChain)
+    if (!device)
         return LUX_FORGE_FRAME_ERROR;
     if (ResetRequested())
         return Fail(device, "GPU device was lost"), LUX_FORGE_FRAME_ERROR;
+    if (!device->swapChain || !device->depth)
+        return Fail(device, "Swap chain is unavailable"), LUX_FORGE_FRAME_ERROR;
     if (device->frameOpen)
         return Fail(device, "BeginFrame called twice"), LUX_FORGE_FRAME_ERROR;
 #if defined(_WIN32)
@@ -1323,10 +1413,7 @@ int BeginFrame(LuxForgeDevice* device) {
                      nullptr, &index);
     if (index == UINT32_MAX) {
         // Swap chain is out of date; rebuild it at the current size and skip this frame.
-        waitQueueIdle(device->graphicsQueue);
-        RemoveSwapChain(device);
-        device->swapChain = nullptr;
-        if (!AddSwapChain(device))
+        if (!RecreateSwapChain(device))
             return Fail(device, "Swap chain could not be recreated"), LUX_FORGE_FRAME_ERROR;
         return LUX_FORGE_FRAME_SKIPPED;
     }
@@ -1474,34 +1561,42 @@ int EndFrame(LuxForgeDevice* device) {
 }
 
 int Resize(LuxForgeDevice* device, uint32_t width, uint32_t height) {
-    if (!device || !device->swapChain)
+    if (!device)
         return 0;
     if (device->frameOpen)
         return Fail(device, "Resize during a frame");
     if (width == 0 || height == 0)
         return 1; // minimized; keep the old swap chain until a real size arrives
-    if (width == device->width && height == device->height)
+    if (device->swapChain && device->depth && width == device->width && height == device->height)
         return 1;
-    waitQueueIdle(device->graphicsQueue);
-    RemoveSwapChain(device);
-    device->swapChain = nullptr;
     device->width = width;
     device->height = height;
-    RemoveDepthTarget(device);
-    if (!AddSwapChain(device) || !AddDepthTarget(device))
-        return Fail(device, "Swap chain could not be resized");
-    return 1;
+    return RecreateSwapChain(device) ? 1 : Fail(device, "Swap chain could not be resized");
 }
 
-int SetVSync(LuxForgeDevice* device, int enabled) {
-    if (!device || !device->swapChain)
+int SetVSyncInterval(LuxForgeDevice* device, int interval) {
+    if (!device)
         return 0;
-    if ((enabled != 0) == device->vsync)
+    if (device->frameOpen)
+        return Fail(device, "VSync interval change during a frame");
+    if (interval < 0 || interval > kMaxVSyncInterval)
+        return Fail(device, "VSync interval is not supported by the backend");
+    const bool ready = device->swapChain && device->depth;
+    if (ready && interval == device->vsyncInterval)
         return 1;
-    waitQueueIdle(device->graphicsQueue);
-    RemoveSwapChain(device);
-    device->vsync = enabled != 0;
-    return AddSwapChain(device) ? 1 : Fail(device, "VSync change failed");
+#if defined(DIRECT3D12)
+    if (ready && interval > 0 && device->vsyncInterval > 0) {
+        device->swapChain->mDx.mSyncInterval = static_cast<uint32_t>(interval);
+        device->vsyncInterval = interval;
+        return 1;
+    }
+#endif
+    const int previous = device->vsyncInterval;
+    device->vsyncInterval = interval;
+    if (RecreateSwapChain(device))
+        return 1;
+    device->vsyncInterval = previous;
+    return Fail(device, "VSync change failed");
 }
 
 int WaitIdle(LuxForgeDevice* device) {
@@ -1591,15 +1686,27 @@ int HasTexture(const LuxForgeDevice* device, uint32_t id) {
     return 1;
 }
 
-// LuxDraw layout (Shaders/Lux2DResources.h): viewProjection, model, albedo, colorOptions, options.
+void FillDrawConstants(LuxDraw& out, const float* viewProjection, const float* model,
+                       const float* albedo, float srgb, float metallic, float roughness, float pbr,
+                       bool nearest) {
+    std::memcpy(out.viewProjection, viewProjection, sizeof out.viewProjection);
+    std::memcpy(out.model, model, sizeof out.model);
+    std::memcpy(out.albedo, albedo, sizeof out.albedo);
+    out.colorOptions[0] = srgb;
+    out.colorOptions[1] = metallic;
+    out.colorOptions[2] = roughness;
+    out.colorOptions[3] = pbr;
+    out.options[0] = nearest ? 1.0f : 0.0f;
+    out.options[1] = out.options[2] = out.options[3] = 0.0f;
+}
+
 void WriteDrawConstants(float* out, const float* viewProjection, const float* model,
                         const float* albedo, float srgb, float metallic, float roughness, float pbr,
                         bool nearest) {
-    std::memcpy(out, viewProjection, sizeof(float) * 16);
-    std::memcpy(out + 16, model, sizeof(float) * 16);
-    std::memcpy(out + 32, albedo, sizeof(float) * 4);
-    out[36] = srgb, out[37] = metallic, out[38] = roughness, out[39] = pbr;
-    out[40] = nearest ? 1.0f : 0.0f, out[41] = out[42] = out[43] = 0.0f;
+    LuxDraw values;
+    FillDrawConstants(values, viewProjection, model, albedo, srgb, metallic, roughness, pbr,
+                      nearest);
+    std::memcpy(out, &values, offsetof(LuxDraw, materialOptions));
 }
 
 void BindDescriptors(LuxForgeDevice* device, Cmd* command, uint32_t index, DescriptorSet* set) {
@@ -2029,6 +2136,11 @@ int UpdateBuffer(LuxForgeDevice* device, uint32_t id, const void* data, uint32_t
                            : slot.type == LUX_FORGE_BUFFER_VERTEX
                                ? RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
                                : RESOURCE_STATE_COMMON;
+#if defined(DIRECT3D12)
+    if (device->rayTracing &&
+        (slot.type == LUX_FORGE_BUFFER_VERTEX || slot.type == LUX_FORGE_BUFFER_INDEX))
+        update.mCurrentState |= RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+#endif
     beginUpdateResource(&update);
     if (!update.pMappedData)
         return Fail(device, "UpdateBuffer could not map upload memory");
@@ -2163,16 +2275,18 @@ int DeviceLost(const LuxForgeDevice*) {
 }
 
 void Size(const LuxForgeDevice* device, uint32_t* width, uint32_t* height) {
+    const bool ready = device && device->swapChain && device->depth;
     if (width)
-        *width = device ? device->width : 0;
+        *width = ready ? device->width : 0;
     if (height)
-        *height = device ? device->height : 0;
+        *height = ready ? device->height : 0;
 }
 
 void GetInfo(const LuxForgeDevice* device, LuxForgeInfo* info) {
     if (!info)
         return;
     std::memset(info, 0, sizeof(*info));
+    info->maxVSyncInterval = kMaxVSyncInterval;
 #if defined(DIRECT3D12)
     std::snprintf(info->apiName, sizeof(info->apiName), "Direct3D 12");
 #elif defined(METAL)
@@ -2407,7 +2521,7 @@ bool CreateMaterialPipelines(LuxForgeDevice* device, PipelineDesc desc, Shader* 
     return true;
 }
 
-#if defined(VULKAN)
+#if defined(VULKAN) || defined(DIRECT3D12)
 bool InitRayScene(LuxForgeDevice* device) {
     if (device->raySceneInitAttempted)
         return device->raySceneSet != nullptr;
@@ -2423,10 +2537,15 @@ bool InitRayScene(LuxForgeDevice* device) {
     if (!CreateMaterialPipelines(device, desc, device->shaderRayScene,
                                  device->rayMaterialPipelines))
         return false;
+#if defined(DIRECT3D12)
+    // Both DXR pipelines use the same root signature and sampler table.
+    device->raySceneSet = device->sceneSet;
+#else
     const auto entries = device->framesInFlight * LuxForgeDevice::kMaxScenePasses *
                          LuxForgeDevice::kSceneDescriptors;
     const DescriptorSetDesc setDesc = SRT_SET_DESC(LuxRaySceneSrt, Persistent, entries, 0);
     addDescriptorSet(device->renderer, &setDesc, &device->raySceneSet);
+#endif
     return device->raySceneSet != nullptr;
 }
 #endif
@@ -2456,6 +2575,10 @@ bool InitScene(LuxForgeDevice* device) {
     const uint32_t entries = device->framesInFlight * LuxForgeDevice::kMaxScenePasses *
                              LuxForgeDevice::kSceneDescriptors;
     DescriptorSetDesc setDesc = SRT_SET_DESC(LuxSceneSrt, Persistent, entries, 0);
+#if defined(DIRECT3D12)
+    if (device->rayTracing)
+        setDesc = DescriptorSetDesc SRT_SET_DESC(LuxRaySceneSrt, Persistent, entries, 0);
+#endif
     addDescriptorSet(device->renderer, &setDesc, &device->sceneSet);
     if (!device->sceneSet)
         return failed("Scene descriptor set could not be created");
@@ -2601,7 +2724,7 @@ void ShutdownScene(LuxForgeDevice* device) {
     ShutdownFog(device);
     ShutdownRadianceCascades(device);
     ShutdownRestir(device);
-    if (device->raySceneSet)
+    if (device->raySceneSet && device->raySceneSet != device->sceneSet)
         removeDescriptorSet(device->renderer, device->raySceneSet);
     for (auto* pipeline : device->rayMaterialPipelines)
         if (pipeline)
@@ -2842,6 +2965,61 @@ struct SceneMesh {
     uint32_t material = 0;
 };
 
+struct SceneDrawList {
+    std::vector<SceneMesh> meshes;
+    size_t opaqueEnd = 0;
+    size_t waterEnd = 0;
+    size_t colorEnd = 0;
+};
+
+SceneDrawList CollectSceneDraws(const LuxForgeDevice* device, const LuxForgeScene& scene,
+                                const LuxForgeSceneDraw* draws, uint32_t drawCount,
+                                uint32_t budget) {
+    SceneDrawList list;
+    auto& visible = list.meshes;
+    visible.reserve(drawCount);
+    bool needsSorting = false;
+    for (uint32_t i = 0; i < drawCount; ++i) {
+        const auto& draw = draws[i];
+        if (draw.alphaMode > 2 || !std::isfinite(draw.alphaCutoff) || draw.alphaCutoff < 0 ||
+            draw.alphaCutoff > 1 || !SceneDrawUsable(device, draw))
+            continue;
+        const SceneLayer layer = draw.shadowOnly       ? SceneLayer::ShadowOnly
+                                 : WaterDraw(draw)     ? SceneLayer::Water
+                                 : draw.alphaMode == 2 ? SceneLayer::Blend
+                                                       : SceneLayer::Opaque;
+        SceneMesh mesh{&draw, layer};
+        if (layer == SceneLayer::Blend) {
+            for (unsigned axis = 0; axis < 3; ++axis) {
+                const float delta = draw.model[12 + axis] - scene.camera[axis];
+                mesh.blendDistance += delta * delta;
+            }
+        }
+        needsSorting |= layer != SceneLayer::Opaque;
+        visible.push_back(mesh);
+    }
+    if (needsSorting)
+        std::stable_sort(
+            visible.begin(), visible.end(), [](const SceneMesh& a, const SceneMesh& b) {
+                if (a.layer != b.layer)
+                    return a.layer < b.layer;
+                return a.layer == SceneLayer::Blend && a.blendDistance > b.blendDistance;
+            });
+    if (visible.size() > budget)
+        visible.resize(budget); // excess objects are skipped
+    const auto firstLayer = [&visible](SceneLayer layer) {
+        return static_cast<size_t>(std::lower_bound(visible.begin(), visible.end(), layer,
+                                                    [](const SceneMesh& mesh, SceneLayer key) {
+                                                        return mesh.layer < key;
+                                                    }) -
+                                   visible.begin());
+    };
+    list.opaqueEnd = firstLayer(SceneLayer::Water);
+    list.waterEnd = firstLayer(SceneLayer::Blend);
+    list.colorEnd = firstLayer(SceneLayer::ShadowOnly);
+    return list;
+}
+
 void BindPipeline(LuxForgeDevice* device, Cmd* cmd, Pipeline* pipeline) {
     cmdBindPipeline(cmd, pipeline);
     ++device->frameStats.pipelineBinds;
@@ -2947,6 +3125,99 @@ void WriteSceneMaterial(LuxForgeDevice* device, uint32_t materialIndex,
 #include "LuxTemporal.inl"
 #include "LuxVirtualShadow.inl"
 
+#include "LuxScenePasses.inl"
+
+uint8_t* WriteSceneConstants(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass,
+                             bool shadows, bool customWaterEnvironment,
+                             const VirtualShadowPlan& shadowPlan) {
+    LuxSceneData constants{};
+    std::memcpy(constants.camera, scene.camera, sizeof constants.camera);
+    std::memcpy(constants.environment, scene.environment, sizeof constants.environment);
+    std::memcpy(constants.options, scene.options, sizeof constants.options);
+    std::memcpy(constants.right, scene.right, sizeof constants.right);
+    std::memcpy(constants.up, scene.up, sizeof constants.up);
+    std::memcpy(constants.forward, scene.forward, sizeof constants.forward);
+    std::memcpy(constants.shadowMatrix, scene.shadowMatrix, sizeof constants.shadowMatrix);
+    std::memcpy(constants.shadowOptions, scene.shadowOptions, sizeof constants.shadowOptions);
+    if (!shadows)
+        constants.shadowOptions[0] = 0.f;
+    constants.frameSize[0] = static_cast<float>(device->width);
+    constants.frameSize[1] = static_cast<float>(device->height);
+    constants.frameSize[2] = 1.f / constants.frameSize[0];
+    constants.frameSize[3] = 1.f / constants.frameSize[1];
+    std::memcpy(constants.rayOptions, scene.rayOptions, sizeof constants.rayOptions);
+    std::memcpy(constants.waterReflection, scene.waterReflection, sizeof constants.waterReflection);
+    constants.waterReflection[0] = customWaterEnvironment ? 1.f : 0.f;
+    std::memcpy(constants.virtualShadowPages, shadowPlan.packed.data(),
+                sizeof constants.virtualShadowPages);
+    auto* destination =
+        static_cast<uint8_t*>(device->sceneUniforms[device->frameSlot]->pCpuMappedAddress) +
+        static_cast<size_t>(pass) * LuxForgeDevice::kSceneStride;
+    std::memcpy(destination, &constants, sizeof constants);
+    return destination;
+}
+
+uint32_t WriteSceneDraws(LuxForgeDevice* device, const LuxForgeScene& scene,
+                         std::vector<SceneMesh>& visible, uint64_t thisFrame) {
+    auto& frame = device->frames[device->frameSlot];
+    const uint32_t firstDraw = frame.draws;
+    uint32_t materialIndex = firstDraw;
+    std::array<uint32_t, 8> lastMaps{};
+    for (size_t i = 0; i < visible.size(); ++i) {
+        auto& mesh = visible[i];
+        const auto& draw = *mesh.draw;
+        const uint32_t texture = draw.texture ? draw.texture : device->whiteTexture;
+        LuxDraw block{};
+        const float metal =
+            std::isfinite(draw.metallic) ? std::clamp(draw.metallic, 0.f, 1.f) : 0.f;
+        const float rough =
+            std::isfinite(draw.roughness) ? std::clamp(draw.roughness, .045f, 1.f) : .5f;
+        FillDrawConstants(block, scene.viewProjection, draw.model, draw.albedo, 1.f, metal, rough,
+                          1.f, device->textures[texture].nearest);
+        block.options[1] = WaterDraw(draw) ? 0.f : static_cast<float>(draw.alphaMode);
+        block.options[2] = draw.alphaCutoff;
+        block.options[3] =
+            static_cast<float>((draw.normalTexture ? 1 : 0) | (draw.metallicTexture ? 2 : 0) |
+                               (draw.roughnessTexture ? 4 : 0) | (draw.occlusionTexture ? 8 : 0) |
+                               (draw.terrainColor ? 16 : 0) | (draw.terrainNormal ? 32 : 0) |
+                               (draw.terrainRoughness ? 64 : 0));
+        block.materialOptions[0] = draw.normalScale;
+        block.materialOptions[1] = draw.occlusionStrength;
+        block.materialOptions[2] = static_cast<float>(draw.sampling & 3u);
+        block.materialOptions[3] = draw.doubleSided ? 1.f : 0.f;
+        std::memcpy(block.water, draw.water, sizeof block.water);
+        const auto* baseTexture = device->textures[texture].texture;
+        block.textureOptions[0] = static_cast<float>(baseTexture->mWidth);
+        block.textureOptions[1] = static_cast<float>(baseTexture->mHeight);
+        block.textureOptions[2] = (draw.sampling & 4u) ? 1.f : 0.f;
+        if (device->buffers[draw.vertexBuffer].ocean && WaterDraw(draw) &&
+            scene.waterReflection[3] >= 1.f && scene.forward[3] > 0.f) {
+            block.coastalBreaker[0] = static_cast<float>(scene.temporalOrigin[0]);
+            block.coastalBreaker[1] = static_cast<float>(scene.temporalOrigin[2]);
+            block.coastalBreaker[2] = scene.forward[3];
+            block.coastalBreaker[3] = scene.waterReflection[3] - 1.f;
+        }
+        auto* destination = static_cast<uint8_t*>(frame.uniforms->pCpuMappedAddress) +
+                            static_cast<size_t>(firstDraw + i) * LuxForgeDevice::kDrawStride;
+        std::memcpy(destination, &block, sizeof block);
+        const std::array<uint32_t, 8> maps = {
+            draw.texture,          draw.normalTexture, draw.metallicTexture, draw.roughnessTexture,
+            draw.occlusionTexture, draw.terrainColor,  draw.terrainNormal,   draw.terrainRoughness};
+        // Consecutive meshes with the same maps can bind one immutable descriptor entry.
+        // Object parameters and the map-presence mask still come from each draw's block.
+        if (i == 0 || maps != lastMaps) {
+            materialIndex = firstDraw + static_cast<uint32_t>(i);
+            WriteSceneMaterial(device, materialIndex, maps);
+            lastMaps = maps;
+        }
+        mesh.material = materialIndex;
+        device->buffers[draw.vertexBuffer].lastUsedFrame = thisFrame;
+        device->buffers[draw.indexBuffer].lastUsedFrame = thisFrame;
+    }
+    frame.draws += static_cast<uint32_t>(visible.size());
+    return firstDraw;
+}
+
 int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxForgeSceneDraw* draws,
                 uint32_t drawCount, uint32_t* drawn) {
     if (drawn)
@@ -2982,48 +3253,12 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxFor
         return Fail(device, "HDR render target could not be created");
     }
     auto& frame = device->frames[device->frameSlot];
-    std::vector<SceneMesh> visible;
-    visible.reserve(drawCount);
-    bool needsSorting = false;
-    for (uint32_t i = 0; i < drawCount; ++i) {
-        const auto& draw = draws[i];
-        if (draw.alphaMode > 2 || !std::isfinite(draw.alphaCutoff) || draw.alphaCutoff < 0 ||
-            draw.alphaCutoff > 1 || !SceneDrawUsable(device, draw))
-            continue;
-        const SceneLayer layer = draw.shadowOnly       ? SceneLayer::ShadowOnly
-                                 : WaterDraw(draw)     ? SceneLayer::Water
-                                 : draw.alphaMode == 2 ? SceneLayer::Blend
-                                                       : SceneLayer::Opaque;
-        SceneMesh mesh{&draw, layer};
-        if (layer == SceneLayer::Blend) {
-            for (unsigned axis = 0; axis < 3; ++axis) {
-                const float delta = draw.model[12 + axis] - scene->camera[axis];
-                mesh.blendDistance += delta * delta;
-            }
-        }
-        needsSorting |= layer != SceneLayer::Opaque;
-        visible.push_back(mesh);
-    }
-    if (needsSorting)
-        std::stable_sort(
-            visible.begin(), visible.end(), [](const SceneMesh& a, const SceneMesh& b) {
-                if (a.layer != b.layer)
-                    return a.layer < b.layer;
-                return a.layer == SceneLayer::Blend && a.blendDistance > b.blendDistance;
-            });
     const uint32_t budget = LuxForgeDevice::kMaxDraws - frame.draws;
-    if (visible.size() > budget)
-        visible.resize(budget); // excess objects are skipped
-    const auto firstLayer = [&visible](SceneLayer layer) {
-        return static_cast<size_t>(std::lower_bound(visible.begin(), visible.end(), layer,
-                                                    [](const SceneMesh& mesh, SceneLayer key) {
-                                                        return mesh.layer < key;
-                                                    }) -
-                                   visible.begin());
-    };
-    const size_t opaqueEnd = firstLayer(SceneLayer::Water);
-    const size_t waterEnd = firstLayer(SceneLayer::Blend);
-    const size_t colorEnd = firstLayer(SceneLayer::ShadowOnly);
+    auto drawList = CollectSceneDraws(device, *scene, draws, drawCount, budget);
+    auto& visible = drawList.meshes;
+    const size_t opaqueEnd = drawList.opaqueEnd;
+    const size_t waterEnd = drawList.waterEnd;
+    const size_t colorEnd = drawList.colorEnd;
     const auto shadowPlan = PlanVirtualShadow(*scene, visible, colorEnd);
     if (shadows &&
         (!device->shadow.target || device->shadow.target->mWidth != shadowPlan.atlasWidth ||
@@ -3068,31 +3303,11 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxFor
     if (!shadows)
         device->lastShadowlessFrame = thisFrame;
 
-    // Scene constants (LuxSceneData).
-    float* constants = reinterpret_cast<float*>(
-        static_cast<uint8_t*>(device->sceneUniforms[device->frameSlot]->pCpuMappedAddress) +
-        static_cast<size_t>(pass) * LuxForgeDevice::kSceneStride);
-    std::memcpy(constants + 0, scene->camera, sizeof(float) * 4);
-    std::memcpy(constants + 4, scene->environment, sizeof(float) * 4);
-    std::memcpy(constants + 8, scene->options, sizeof(float) * 4);
-    std::memcpy(constants + 12, scene->right, sizeof(float) * 4);
-    std::memcpy(constants + 16, scene->up, sizeof(float) * 4);
-    std::memcpy(constants + 20, scene->forward, sizeof(float) * 4);
-    std::memcpy(constants + 24, scene->shadowMatrix, sizeof(float) * 16);
-    std::memcpy(constants + 40, scene->shadowOptions, sizeof(float) * 4);
-    if (!shadows)
-        constants[40] = 0.0f;
-    constants[44] = static_cast<float>(device->width);
-    constants[45] = static_cast<float>(device->height);
-    constants[46] = 1.0f / constants[44];
-    constants[47] = 1.0f / constants[45];
-    std::memcpy(constants + 48, scene->rayOptions, sizeof(scene->rayOptions));
     const bool customWaterEnvironment = water && scene->waterReflection[0] > 0 &&
                                         IsLiveEnvironment(device, scene->waterEnvironmentMap);
-    std::memcpy(constants + 52, scene->waterReflection, sizeof(scene->waterReflection));
-    constants[52] = customWaterEnvironment ? 1.f : 0.f;
+    [[maybe_unused]] auto* sceneUniforms =
+        WriteSceneConstants(device, *scene, pass, shadows, customWaterEnvironment, shadowPlan);
     device->frameStats.waterReflectionPasses += customWaterEnvironment ? 1u : 0u;
-    std::memcpy(constants + 56, shadowPlan.packed.data(), 4 * sizeof(uint32_t));
 
     // The opaque entry binds stand-ins for both targets being written.
     // Water and the copy read the finished opaque targets. Tone maps the final HDR image.
@@ -3144,73 +3359,31 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxFor
                             params);
     }
 
-    // Per-object constants: one LuxDraw block serves the shadow and the HDR pass.
-    const uint32_t firstDraw = frame.draws;
-    uint32_t materialIndex = firstDraw;
-    std::array<uint32_t, 8> lastMaps{};
-    for (size_t i = 0; i < visible.size(); ++i) {
-        auto& mesh = visible[i];
-        const auto& draw = *mesh.draw;
-        const uint32_t texture = draw.texture ? draw.texture : device->whiteTexture;
-        float* block = reinterpret_cast<float*>(
-            static_cast<uint8_t*>(frame.uniforms->pCpuMappedAddress) +
-            static_cast<size_t>(firstDraw + i) * LuxForgeDevice::kDrawStride);
-        const float metal = std::isfinite(draw.metallic) ? (draw.metallic < 0   ? 0
-                                                            : draw.metallic > 1 ? 1
-                                                                                : draw.metallic)
-                                                         : 0.0f;
-        const float rough = std::isfinite(draw.roughness) ? (draw.roughness < .045f ? .045f
-                                                             : draw.roughness > 1   ? 1
-                                                                                  : draw.roughness)
-                                                          : .5f;
-        // colorOptions = (1, metallic, roughness, 1): discard transparent texels, PBR lighting.
-        WriteDrawConstants(block, scene->viewProjection, draw.model, draw.albedo, 1.0f, metal,
-                           rough, 1.0f, device->textures[texture].nearest);
-        block[41] = WaterDraw(draw) ? 0.0f : static_cast<float>(draw.alphaMode);
-        block[42] = draw.alphaCutoff;
-        block[43] =
-            static_cast<float>((draw.normalTexture ? 1 : 0) | (draw.metallicTexture ? 2 : 0) |
-                               (draw.roughnessTexture ? 4 : 0) | (draw.occlusionTexture ? 8 : 0) |
-                               (draw.terrainColor ? 16 : 0) | (draw.terrainNormal ? 32 : 0) |
-                               (draw.terrainRoughness ? 64 : 0));
-        block[44] = draw.normalScale;
-        block[45] = draw.occlusionStrength;
-        block[46] = static_cast<float>(draw.sampling & 3u);
-        block[47] = draw.doubleSided ? 1.f : 0.f;
-        std::memcpy(block + 48, draw.water, sizeof draw.water);
-        const auto* baseTexture = device->textures[texture].texture;
-        block[52] = static_cast<float>(baseTexture->mWidth);
-        block[53] = static_cast<float>(baseTexture->mHeight);
-        block[54] = (draw.sampling & 4u) ? 1.f : 0.f;
-        block[55] = 0.f;
-        const std::array<uint32_t, 8> maps = {
-            draw.texture,          draw.normalTexture, draw.metallicTexture, draw.roughnessTexture,
-            draw.occlusionTexture, draw.terrainColor,  draw.terrainNormal,   draw.terrainRoughness};
-        // Consecutive meshes with the same maps can bind one immutable descriptor entry.
-        // Object parameters and the map-presence mask still come from each draw's block.
-        if (i == 0 || maps != lastMaps) {
-            materialIndex = firstDraw + static_cast<uint32_t>(i);
-            WriteSceneMaterial(device, materialIndex, maps);
-            lastMaps = maps;
-        }
-        mesh.material = materialIndex;
-        device->buffers[draw.vertexBuffer].lastUsedFrame = thisFrame;
-        device->buffers[draw.indexBuffer].lastUsedFrame = thisFrame;
-    }
-    frame.draws += static_cast<uint32_t>(visible.size());
+    const uint32_t firstDraw = WriteSceneDraws(device, *scene, visible, thisFrame);
 
     Cmd* cmd = device->element.pCmds[0];
     EndPass(device);
     bool rayTracing = false;
+    bool waterRayTracing = false;
     AccelerationStructure* fogRays = nullptr;
+#if defined(VULKAN) || defined(DIRECT3D12)
 #if defined(VULKAN)
     const bool cascades = scene->cascadeOptions[0] > 0;
-    const uint32_t effects = scene->rayOptions[0] >= 1.f && scene->rayOptions[0] <= 63.f
-                                 ? static_cast<uint32_t>(scene->rayOptions[0])
-                                 : 0u;
+    const bool rayFog = scene->rayTracedFog && scene->fogColorDensity[3] > 0;
+    constexpr uint32_t supportedEffects = 191u;
+#else
+    constexpr bool cascades = false;
+    constexpr bool rayFog = false;
+    constexpr uint32_t supportedEffects = 143u;
+#endif
+    constexpr uint32_t waterOnlyEffects = 4u | 128u;
+    const uint32_t requestedEffects =
+        scene->rayOptions[0] >= 1.f && scene->rayOptions[0] <= 191.f
+            ? static_cast<uint32_t>(scene->rayOptions[0]) & supportedEffects
+            : 0u;
+    const uint32_t effects = water ? requestedEffects : requestedEffects & ~waterOnlyEffects;
     const bool rayShading =
         colorEnd && (effects || cascades) && device->rayTracing && InitRayScene(device);
-    const bool rayFog = scene->rayTracedFog && scene->fogColorDensity[3] > 0;
     if (device->rayTracing && (rayShading || rayFog)) {
         std::vector<ForgeRayDraw> rayDraws;
         rayDraws.reserve(visible.size());
@@ -3218,7 +3391,9 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxFor
             const auto& draw = *mesh.draw;
             const auto& slot = device->buffers[draw.vertexBuffer];
             if (!slot.ocean)
-                rayDraws.push_back({&draw, slot.buffer, device->buffers[draw.indexBuffer].buffer});
+                rayDraws.push_back(
+                    {&draw, slot.buffer, device->buffers[draw.indexBuffer].buffer,
+                     draw.texture ? device->textures[draw.texture].rayTint.data() : nullptr});
         }
         auto result = BuildForgeRayScene(device->rayTracing, cmd, thisFrame, rayDraws.data(),
                                          rayDraws.size());
@@ -3227,6 +3402,7 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxFor
             fogRays = result.scene;
         if (result.scene && rayShading) {
             uint32_t activeEffects = effects;
+#if defined(VULKAN) && defined(ENABLE_RAYTRACING)
             auto* restir = (effects & 48u)
                                ? DispatchRestir(device, *scene, pass, result, environment.maps[2])
                                : nullptr;
@@ -3236,9 +3412,15 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxFor
                 cascades ? RenderRadianceCascades(device, *scene, pass, result) : nullptr;
             if (cascade)
                 activeEffects |= 64u;
-            constants[48] = static_cast<float>(activeEffects);
             Buffer* restirLighting = restir ? restir : result.instances;
             Buffer* cascadeLighting = cascade ? cascade : result.instances;
+#else
+            Buffer* restirLighting = result.instances;
+            Buffer* cascadeLighting = result.instances;
+#endif
+            const float encodedEffects = static_cast<float>(activeEffects);
+            std::memcpy(sceneUniforms + offsetof(LuxSceneData, rayOptions), &encodedEffects,
+                        sizeof encodedEffects);
             DescriptorDataRange range = {pass * LuxForgeDevice::kSceneStride,
                                          LuxForgeDevice::kSceneStride, 0};
             auto* rayParams = params + commonDescriptors;
@@ -3264,102 +3446,18 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxFor
                 updateDescriptorSet(device->renderer, waterEntry, device->raySceneSet,
                                     commonDescriptors + 6, params);
             }
-            rayTracing = activeEffects != 0;
-            device->frameStats.rayTracedPasses += rayTracing ? 1u : 0u;
+            rayTracing = (activeEffects & ~waterOnlyEffects) != 0;
+            waterRayTracing = water && (activeEffects & (1u | 2u | waterOnlyEffects)) != 0;
+            device->frameStats.rayTracedPasses += rayTracing || waterRayTracing ? 1u : 0u;
         }
     }
 #endif
-    if (shadows) {
-        QueryDesc shadowQuery{};
-        if (device->timingQueries) {
-            shadowQuery.mIndex = device->frameSlot * LuxForgeDevice::kTimingQueriesPerSlot +
-                                 ++device->shadowQueries[device->frameSlot];
-            cmdBeginQuery(cmd, device->timingQueries, &shadowQuery);
-        }
-        Transition(cmd, device->shadow, RESOURCE_STATE_DEPTH_WRITE);
-        BindRenderTargetsDesc bind = {};
-        bind.mDepthStencil.pDepthStencil = device->shadow.target;
-        bind.mDepthStencil.mLoadAction = LOAD_ACTION_CLEAR;
-        bind.mDepthStencil.mStoreAction = STORE_ACTION_STORE;
-        bind.mDepthStencil.mLoadActionStencil = LOAD_ACTION_DONTCARE;
-        bind.mDepthStencil.mStoreActionStencil = STORE_ACTION_DONTCARE;
-        cmdBindRenderTargets(cmd, &bind);
-        DrawVirtualShadowPages(device, cmd, visible, firstDraw, entry, shadowPlan);
-        device->frameStats.virtualShadowPages += shadowPlan.count;
-        device->frameStats.requestedShadowPages += shadowPlan.requestedPages;
-        cmdBindRenderTargets(cmd, nullptr);
-        Transition(cmd, device->shadow, RESOURCE_STATE_SHADER_RESOURCE);
-        if (device->timingQueries)
-            cmdEndQuery(cmd, device->timingQueries, &shadowQuery);
-        device->shadow.lastUsedFrame = thisFrame;
-    }
-
-    // HDR pass. Alpha 0 marks pixels no 3D geometry touched; the tone pass skips them.
-    Transition(cmd, device->hdr, RESOURCE_STATE_RENDER_TARGET);
-    Transition(cmd, device->sceneDepth, RESOURCE_STATE_DEPTH_WRITE);
-    {
-        BindRenderTargetsDesc bind = {};
-        bind.mRenderTargetCount = 1;
-        bind.mRenderTargets[0].pRenderTarget = device->hdr.target;
-        bind.mRenderTargets[0].mLoadAction = LOAD_ACTION_CLEAR;
-        bind.mRenderTargets[0].mStoreAction = STORE_ACTION_STORE;
-        bind.mRenderTargets[0].mClearValue = {{0.0f, 0.0f, 0.0f, 0.0f}};
-        bind.mRenderTargets[0].mOverrideClearValue = 1;
-        bind.mDepthStencil.pDepthStencil = device->sceneDepth.target;
-        bind.mDepthStencil.mLoadAction = LOAD_ACTION_CLEAR;
-        bind.mDepthStencil.mStoreAction = STORE_ACTION_STORE;
-        bind.mDepthStencil.mLoadActionStencil = LOAD_ACTION_DONTCARE;
-        bind.mDepthStencil.mStoreActionStencil = STORE_ACTION_DONTCARE;
-        cmdBindRenderTargets(cmd, &bind);
-    }
-    cmdSetViewport(cmd, 0.0f, 0.0f, static_cast<float>(device->width),
-                   static_cast<float>(device->height), 0.0f, 1.0f);
-    cmdSetScissor(cmd, 0, 0, device->width, device->height);
-    if (scene->options[3] > 0.5f) {
-        BindPipeline(device, cmd, device->pipelineSky);
-        BindDescriptors(device, cmd, entry, device->sceneSet);
-        cmdDraw(cmd, 3, 0);
-        ++device->frameStats.drawCalls;
-    }
-    DrawColorMeshes(device, cmd, visible, firstDraw, 0, water ? opaqueEnd : colorEnd, entry,
-                    rayTracing);
-    cmdBindRenderTargets(cmd, nullptr);
-    Transition(cmd, device->hdr, RESOURCE_STATE_SHADER_RESOURCE);
-    device->hdr.lastUsedFrame = device->sceneDepth.lastUsedFrame = thisFrame;
-
-    if (water) {
-        Transition(cmd, device->sceneDepth, RESOURCE_STATE_SHADER_RESOURCE);
-        Transition(cmd, device->waterHdr, RESOURCE_STATE_RENDER_TARGET);
-        Transition(cmd, device->waterDepth, RESOURCE_STATE_DEPTH_WRITE);
-        // D3D12 requires initialization before drawing to a non-zeroed target.
-        const LoadActionType loadAction =
-            device->waterHdr.lastUsedFrame == 0 ? LOAD_ACTION_CLEAR : LOAD_ACTION_DONTCARE;
-        BindRenderTargetsDesc bind = {};
-        bind.mRenderTargetCount = 1;
-        bind.mRenderTargets[0].pRenderTarget = device->waterHdr.target;
-        bind.mRenderTargets[0].mLoadAction = loadAction;
-        bind.mRenderTargets[0].mStoreAction = STORE_ACTION_STORE;
-        bind.mDepthStencil.pDepthStencil = device->waterDepth.target;
-        bind.mDepthStencil.mLoadAction = loadAction;
-        bind.mDepthStencil.mStoreAction = STORE_ACTION_STORE;
-        bind.mDepthStencil.mLoadActionStencil = LOAD_ACTION_DONTCARE;
-        bind.mDepthStencil.mStoreActionStencil = STORE_ACTION_DONTCARE;
-        cmdBindRenderTargets(cmd, &bind);
-        cmdSetViewport(cmd, 0.0f, 0.0f, static_cast<float>(device->width),
-                       static_cast<float>(device->height), 0.0f, 1.0f);
-        cmdSetScissor(cmd, 0, 0, device->width, device->height);
-        BindPipeline(device, cmd, device->pipelineOpaqueCopy);
-        BindDescriptors(device, cmd, waterEntry, device->sceneSet);
-        cmdDraw(cmd, 3, 0);
-        ++device->frameStats.drawCalls;
-        // Both the opaque snapshot and the composite are stable until subsequent frames on
-        // this queue. Water writes the composite's depth before standard transparent geometry.
-        DrawColorMeshes(device, cmd, visible, firstDraw, opaqueEnd,
-                        compositeBlend ? waterEnd : colorEnd, waterEntry, rayTracing);
-        cmdBindRenderTargets(cmd, nullptr);
-        Transition(cmd, device->waterHdr, RESOURCE_STATE_SHADER_RESOURCE);
-        device->waterHdr.lastUsedFrame = device->waterDepth.lastUsedFrame = thisFrame;
-    }
+    const ScenePass recording{device, cmd, drawList, firstDraw, thisFrame};
+    if (shadows)
+        DrawShadowPass(recording, entry, shadowPlan);
+    DrawHdrPass(recording, entry, scene->options[3] > 0.5f, water, rayTracing);
+    if (water)
+        DrawWaterPass(recording, waterEntry, waterRayTracing, rayTracing, compositeBlend);
 
     Texture* resolved = nullptr;
     if (temporal) {
@@ -3370,24 +3468,7 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxFor
             ResolveTemporal(device, cmd, *scene, currentColor, currentDepth,
                             water ? &device->sceneDepth : nullptr, composite, jitter, thisFrame);
         if (composite) {
-            Transition(cmd, currentDepth, RESOURCE_STATE_DEPTH_WRITE);
-            BindRenderTargetsDesc bind = {};
-            bind.mRenderTargetCount = 1;
-            bind.mRenderTargets[0].pRenderTarget = composite->target;
-            bind.mRenderTargets[0].mLoadAction = LOAD_ACTION_LOAD;
-            bind.mRenderTargets[0].mStoreAction = STORE_ACTION_STORE;
-            bind.mDepthStencil.pDepthStencil = currentDepth.target;
-            bind.mDepthStencil.mLoadAction = LOAD_ACTION_LOAD;
-            bind.mDepthStencil.mStoreAction = STORE_ACTION_STORE;
-            bind.mDepthStencil.mLoadActionStencil = LOAD_ACTION_DONTCARE;
-            bind.mDepthStencil.mStoreActionStencil = STORE_ACTION_DONTCARE;
-            cmdBindRenderTargets(cmd, &bind);
-            cmdSetViewport(cmd, 0.0f, 0.0f, static_cast<float>(device->width),
-                           static_cast<float>(device->height), 0.0f, 1.0f);
-            cmdSetScissor(cmd, 0, 0, device->width, device->height);
-            DrawColorMeshes(device, cmd, visible, firstDraw, waterEnd, colorEnd, entry, rayTracing);
-            cmdBindRenderTargets(cmd, nullptr);
-            Transition(cmd, *composite, RESOURCE_STATE_SHADER_RESOURCE);
+            DrawResolvedOverlays(recording, entry, currentDepth, *composite, rayTracing);
             resolved = composite->target->pTexture;
         }
         textures[5] = resolved;
@@ -3397,15 +3478,8 @@ int RenderScene(LuxForgeDevice* device, const LuxForgeScene* input, const LuxFor
 
     // Tone mapping onto the swap chain (keeps its contents and the main depth buffer).
     if (!RenderFog(device, *scene, pass, water, shadows, fogRays, shadowPlan.packed.data(),
-                   resolved)) {
-        BindPass(device, false, nullptr);
-        BindPipeline(device, cmd, device->pipelineTone);
-        BindDescriptors(device, cmd, toneEntry, device->sceneSet);
-        cmdDraw(cmd, 3, 0);
-        ++device->frameStats.drawCalls;
-        device->boundPipeline = device->pipelineTone;
-        device->boundTexture = 0;
-    }
+                   resolved))
+        DrawTonePass(recording, toneEntry);
     if (drawn)
         *drawn = static_cast<uint32_t>(visible.size());
     return 1;
@@ -3420,7 +3494,7 @@ const LuxForgeApi g_Api = {LUX_FORGE_API_VERSION,
                            Clear,
                            EndFrame,
                            Resize,
-                           SetVSync,
+                           SetVSyncInterval,
                            WaitIdle,
                            RequestCapture,
                            ReadCapture,
@@ -3450,6 +3524,16 @@ extern "C" LUX_FORGE_EXPORT const LuxForgeApi* LuxForgeGetApi(void) {
 }
 
 #if defined(LUX_FORGE_TESTING)
+extern "C" LUX_FORGE_EXPORT void LuxForgeTestFailNextSwapChainCreation() {
+    g_FailNextSwapChainCreation.store(true);
+}
+
+#if defined(DIRECT3D12)
+extern "C" LUX_FORGE_EXPORT void LuxForgeTestFailDeviceCheckAfterDepthTarget() {
+    g_FailDeviceCheckAfterDepthTarget.store(true);
+}
+#endif
+
 // Exercises the real Forge log callbacks and ABI counters without submitting invalid GPU work.
 extern "C" LUX_FORGE_EXPORT void LuxForgeTestValidationLog(int warning) {
     if (warning < 0)

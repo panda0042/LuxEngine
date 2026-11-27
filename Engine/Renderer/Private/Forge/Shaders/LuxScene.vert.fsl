@@ -1,4 +1,5 @@
 #include "LuxSceneResources.h"
+#include "LuxCoastalBreaker.h"
 
 STRUCT(VSInput)
 {
@@ -24,15 +25,43 @@ MeshOutput VS_MAIN(VSInput In)
 {
     INIT_MAIN;
     MeshOutput Out;
-    const float4 world = mul(gDraw.model, float4(In.position, 1.0f));
-    Out.position = mul(gDraw.viewProjection, world);
+    float4 world = mul(gDraw.model, float4(In.position, 1.0f));
     Out.color = In.color * gDraw.albedo;
+    if (gDraw.water.w > 1.0f)
+        Out.color.a = In.color.a;
     Out.uv = In.uv;
-    Out.world = world.xyz;
     Out.options = gDraw.colorOptions;
     const float3x3 m = float3x3(gDraw.model[0].xyz, gDraw.model[1].xyz, gDraw.model[2].xyz);
     const float3x3 cofactors = float3x3(cross(m[1], m[2]), cross(m[2], m[0]), cross(m[0], m[1]));
     const float determinant = dot(m[0], cofactors[0]);
     Out.normal = abs(determinant) > 1e-10f ? mul(cofactors, In.normal) / determinant : float3(0, 0, 0);
+    if (gDraw.coastalBreaker.z > 0.0f) {
+        Out.options.w = 0.0f;
+        const float2 xz = world.xz + gDraw.coastalBreaker.xy;
+        const float height = gDraw.coastalBreaker.z;
+        const float time = gDraw.coastalBreaker.w;
+        const CoastalBreakerSample breaker = EvaluateCoastalBreaker(xz.x, xz.y, time, height);
+        Out.color.a = min(Out.color.a, 1.0f - saturate(breaker.foam));
+        if (breaker.height > 0.0001f || abs(breaker.horizontal) > 0.0001f) {
+            const float delta = 0.08f;
+            const float span = delta * 2.0f;
+            const CoastalBreakerSample west = EvaluateCoastalBreaker(xz.x - delta, xz.y, time, height);
+            const CoastalBreakerSample east = EvaluateCoastalBreaker(xz.x + delta, xz.y, time, height);
+            const CoastalBreakerSample north = EvaluateCoastalBreaker(xz.x, xz.y - delta, time, height);
+            const CoastalBreakerSample south = EvaluateCoastalBreaker(xz.x, xz.y + delta, time, height);
+            const float baseSlope = span / max(Out.normal.y, 0.12f);
+            const float3 across = float3(span + east.horizontal - west.horizontal,
+                                         east.height - west.height - Out.normal.x * baseSlope, 0);
+            const float3 along = float3(south.horizontal - north.horizontal,
+                                        south.height - north.height - Out.normal.z * baseSlope, span);
+            world.xy += float2(breaker.horizontal, breaker.height);
+            Out.options.w = breaker.height;
+            const float3 normal = cross(along, across);
+            if (dot(normal, normal) > 1e-10f)
+                Out.normal = normalize(normal);
+        }
+    }
+    Out.world = world.xyz;
+    Out.position = mul(gDraw.viewProjection, world);
     RETURN(Out);
 }

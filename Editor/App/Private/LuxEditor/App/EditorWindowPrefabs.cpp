@@ -30,7 +30,7 @@ void EditorWindow::BuildPrefabMenus(LuxUI::Menu* parent) {
     add(LUX_UI_TEXT("선택 계층을 프리팹으로 저장..."), "savePrefab",
         [this] { SaveSelectedPrefab(); });
     add(LUX_UI_TEXT("프리팹 배치..."), "instantiatePrefab", [this] {
-        if (previewActive_ || !project_)
+        if (preview_.IsActive() || !project_)
             return;
         const auto file = LuxUI::FileDialog::getOpenFileName(
             this, LUX_UI_TEXT("프리팹 배치"),
@@ -48,7 +48,7 @@ void EditorWindow::BuildPrefabMenus(LuxUI::Menu* parent) {
 
 void EditorWindow::SaveSelectedPrefab() {
     const auto selected = document_.GetSelected();
-    if (previewActive_ || !selected || !project_)
+    if (preview_.IsActive() || !selected || !project_)
         return;
     const auto tab = document_.GetActiveTabId();
     const auto root = selected.GetId();
@@ -84,7 +84,7 @@ void EditorWindow::SaveSelectedPrefab() {
 }
 
 void EditorWindow::AddPrefabAsset(const std::filesystem::path& path) {
-    if (previewActive_ || !project_)
+    if (preview_.IsActive() || !project_)
         return;
     if (!InProject(path, project_->GetFile().parent_path())) {
         ShowError(LUX_UI_TEXT("프리팹 배치"),
@@ -104,7 +104,7 @@ void EditorWindow::AddPrefabAsset(const std::filesystem::path& path) {
 
 void EditorWindow::EditSelectedPrefab(int operation) {
     const auto selected = document_.GetSelected();
-    if (previewActive_ || !selected)
+    if (preview_.IsActive() || !selected)
         return;
     const auto root =
         LuxEngine::PrefabLibrary::FindInstanceRoot(document_.GetScene(), selected.GetId());

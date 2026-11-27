@@ -13,6 +13,7 @@ STRUCT(LuxDraw) {
     DATA(float4, materialOptions, None);
     DATA(float4, water, None); // RGB absorption per world unit and index of refraction
     DATA(float4, textureOptions, None);
+    DATA(float4, coastalBreaker, None);
 };
 
 // Lighting set with SetLighting (16 point lights, like the Vulkan backend).
@@ -29,9 +30,10 @@ STRUCT(LuxLights) {
 STRUCT(LuxSceneData) {
     DATA(float4, camera, None);      // xyz: position, w: exposure
     DATA(float4, environment, None); // rgb: ambient colour, w: intensity
-    DATA(float4, options, None);     // x: rotation (radians), y: IBL, z: flags (ACES 1, edge AA 2), w: sky
-    DATA(float4, right, None);       // w: perspective depth coefficient A
-    DATA(float4, up, None);          // w: perspective depth coefficient B
+    // x: rotation (radians), y: IBL, z: flags (ACES 1, edge AA 2), w: sky
+    DATA(float4, options, None);
+    DATA(float4, right, None); // w: perspective depth coefficient A
+    DATA(float4, up, None);    // w: perspective depth coefficient B
     DATA(float4, forward, None);
     DATA(float4x4, shadowMatrix, None);
     DATA(float4, shadowOptions, None); // x: on, y: 1/resolution, z: depth bias, w: normal bias

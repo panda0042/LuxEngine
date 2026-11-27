@@ -5,6 +5,7 @@ lux_engine_module(Renderer
         Private/Forge/ForgeBackend.hpp
         Private/Forge/LuxForgeApi.h
         Private/RHI/RenderBackend.hpp
+        Private/RHI/TextureMipChain.hpp
         Public/LuxEngine/Renderer/Lighting/TriangleRayScene.hpp
         Public/LuxEngine/Renderer/Renderer2D/Renderer2D.hpp
         Public/LuxEngine/Renderer/Renderer3D/Render3DSettings.hpp
@@ -18,6 +19,7 @@ lux_engine_module(Renderer
         Private/RHI/Buffer.cpp
         Private/RHI/GpuDevice.cpp
         Private/RHI/Texture.cpp
+        Private/RHI/TextureMipChain.cpp
         Private/Lighting/TriangleRayScene.cpp
         Private/Renderer2D/Renderer2D.cpp
         Private/Renderer3D/Render3DSettings.cpp
@@ -25,4 +27,3 @@ lux_engine_module(Renderer
         Private/Water/OceanSpectrum.cpp
         Private/Water/WaterSurface.cpp
 )
-target_include_directories(LuxModuleRenderer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../RHI/Private")

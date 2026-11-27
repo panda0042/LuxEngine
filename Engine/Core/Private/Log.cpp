@@ -19,6 +19,11 @@ std::deque<LogEntry> history;
 uint64_t nextSequence = 0;
 } // namespace
 
+uint64_t Log::LatestSequence() {
+    std::lock_guard lock(logMutex);
+    return nextSequence;
+}
+
 std::vector<LogEntry> Log::ReadAfter(uint64_t sequence) {
     std::lock_guard lock(logMutex);
     std::vector<LogEntry> result;

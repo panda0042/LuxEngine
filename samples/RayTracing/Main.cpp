@@ -129,10 +129,12 @@ private:
         const auto stats = GetGpuDevice().GetFrameStats();
         if (stats.volumetricFogPasses != 1)
             throw std::runtime_error("Froxel fog did not render");
-        if (GetGpuDevice().GetInfo().rayTracing &&
-            (stats.rayTracedPasses != 1 || stats.accelerationStructureBuilds == 0 ||
-             stats.rayVolumetricFogPasses != 1))
-            throw std::runtime_error("Hardware ray lighting or ray-traced fog did not render");
+        const auto info = GetGpuDevice().GetInfo();
+        if (info.rayTracing &&
+            (stats.rayTracedPasses != 1 || stats.accelerationStructureBuilds == 0))
+            throw std::runtime_error("Hardware ray lighting did not render");
+        if (stats.rayVolumetricFogPasses != unsigned(info.rayTracingCompute))
+            throw std::runtime_error("Fog did not use the expected visibility path");
         if (GetGpuDevice().GetCounters().validationErrors)
             throw std::runtime_error("GPU validation reported an error");
         Close();

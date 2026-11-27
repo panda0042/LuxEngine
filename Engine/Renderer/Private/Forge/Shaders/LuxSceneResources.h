@@ -78,23 +78,30 @@ float DirectionalShadow(float3 world, float3 normal) {
     if (uv.x < 0.0f || uv.y < 0.0f || uv.x > 1.0f || uv.y > 1.0f || p.z < 0.0f || p.z > 1.0f)
         return 1.0f;
     const int resolution = int(round(1.0f / gScene.shadowOptions.y));
-    const int2 center = int2(uv * float(resolution));
+    const float2 texel = uv * float(resolution);
+    const int2 center = int2(texel);
+    const float2 offset = texel - float2(center) - 0.5f;
+    const bool soften = gScene.waterReflection.w >= 1.0f;
     float visibility = 0.0f;
+    float kernelWeight = 0.0f;
     UNROLL for (int y = -1; y <= 1; ++y) {
         UNROLL for (int x = -1; x <= 1; ++x) {
             const int2 virtualPixel =
                 clamp(center + int2(x, y), int2(0, 0), int2(resolution - 1, resolution - 1));
             const int2 atlasPixel = ShadowAtlasPixel(virtualPixel, gScene.virtualShadowPages);
+            const float2 weight = 1.5f - abs(float2(x, y) - offset);
+            const float tap = soften ? max(weight.x, 0.0f) * max(weight.y, 0.0f) : 1.0f;
+            kernelWeight += tap;
             if (atlasPixel.x < 0)
-                visibility += 1.0f;
+                visibility += tap;
             else
                 visibility += p.z - gScene.shadowOptions.z <=
                                       LoadTex2D(gShadowMap, NO_SAMPLER, atlasPixel, 0).r
-                                  ? 1.0f
+                                  ? tap
                                   : 0.0f;
         }
     }
-    return visibility / 9.0f;
+    return visibility / kernelWeight;
 }
 
 #endif

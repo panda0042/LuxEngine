@@ -165,6 +165,8 @@ bool ForgeBackend::Initialize(Window& window, const GpuDeviceConfig& config) {
     info_.maxTextureSize = forgeInfo.maxTextureSize;
     info_.gpuTimestamps = forgeInfo.gpuTimestamps != 0;
     info_.rayTracing = forgeInfo.rayTracing != 0;
+    info_.rayTracingCompute = info_.rayTracing && std::string_view(forgeInfo.apiName) == "Vulkan";
+    info_.maxVSyncInterval = forgeInfo.maxVSyncInterval;
 
     auto release = CreateRef<std::function<void()>>([this] { ReleaseSurface(); });
     window.TrackSurfaceRelease(release);
@@ -415,12 +417,14 @@ bool ForgeBackend::EndFrame() {
     return true;
 }
 
-bool ForgeBackend::SetVSync(bool enabled) {
+bool ForgeBackend::SetVSyncInterval(uint32 interval) {
     if (!Usable())
         return false;
     if (frameOpen_)
-        return Reject("SetVSync called during a frame");
-    return lib_->api->setVSync(lib_->device, enabled ? 1 : 0) != 0 || ForgeFailure();
+        return Reject("SetVSyncInterval called during a frame");
+    if (interval > info_.maxVSyncInterval)
+        return Reject("VSync interval is not supported by the backend");
+    return lib_->api->setVSync(lib_->device, static_cast<int>(interval)) != 0 || ForgeFailure();
 }
 
 void ForgeBackend::NotifyResize() {
@@ -665,7 +669,7 @@ public:
     }
 
     bool Render(const PerspectiveCamera& camera, const Render3DSettings& settings, float exposure,
-                std::string& error) override {
+                const CoastalWaterFrame* coastalWater, std::string& error) override {
         auto lib = Library();
         if (!lib || !backend_->Usable() || !backend_->frameOpen_)
             return false;
@@ -698,6 +702,8 @@ public:
         CopyMatrix(scene.viewProjection, viewProjection);
         if (settings.temporalAntialiasing) {
             scene.temporalView = temporalView_;
+        }
+        if (settings.temporalAntialiasing || (coastalWater && coastalWater->breakerHeight > 0)) {
             scene.temporalOrigin[0] = origin.x;
             scene.temporalOrigin[1] = origin.y;
             scene.temporalOrigin[2] = origin.z;
@@ -723,6 +729,7 @@ public:
         }
         scene.right[3] = static_cast<float>(projection[10]);
         scene.up[3] = static_cast<float>(projection[14]);
+        scene.forward[3] = coastalWater ? coastalWater->breakerHeight : 0.f;
         if (settings.shadows) {
             CopyMatrix(scene.shadowMatrix, SceneShadowProjection(camera, settings));
             scene.shadowOptions[0] = 1;
@@ -737,10 +744,13 @@ public:
             Copy4(scene.waterReflection,
                   {1, water.rotation * std::numbers::pi_v<float> / 180, water.intensity, 0});
         }
+        if (coastalWater)
+            scene.waterReflection[3] = coastalWater->timeSeconds + 1.f;
         const auto& rays = settings.rayTracing;
         const unsigned effects = (rays.shadows ? 1u : 0u) | (rays.reflections ? 2u : 0u) |
                                  (rays.refractions ? 4u : 0u) | (rays.indirectDiffuse ? 8u : 0u) |
-                                 (rays.restirDirect ? 16u : 0u) | (rays.restirIndirect ? 32u : 0u);
+                                 (rays.restirDirect ? 16u : 0u) | (rays.restirIndirect ? 32u : 0u) |
+                                 (rays.waterReflections ? 128u : 0u);
         Copy4(scene.rayOptions, {static_cast<float>(effects), rays.maxDistance,
                                  static_cast<float>(rays.maxBounces), rays.indirectStrength});
         const auto& fog = settings.fog;

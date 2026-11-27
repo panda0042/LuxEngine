@@ -185,26 +185,30 @@ bool EditorDocument::Save(TabId tab) {
 }
 
 bool EditorDocument::SaveAs(const std::string& path) {
+    return SaveAs(GetActiveTabId(), path);
+}
+
+bool EditorDocument::SaveAs(TabId tab, const std::string& path) {
     error_.clear();
-    if (path.empty() || ConflictsWithOpenTab(path, GetActiveTabId())) {
+    auto* state = Find(tab);
+    if (!state || path.empty() || ConflictsWithOpenTab(path, tab)) {
         error_ = "다른 탭에서 사용하지 않는 씬 저장 경로를 지정해 주세요.";
         return false;
     }
     std::string nextPath = AnchoredPath(path);
     auto sourcePath = SourcePath(nextPath);
-    auto& active = Active();
-    auto disk = SameFile(nextPath, active.path)
-                    ? std::optional(active.diskRevision)
+    auto disk = SameFile(nextPath, state->path)
+                    ? std::optional(state->diskRevision)
                     : ReadSceneFileRevision(PathFromUtf8(nextPath), error_);
     if (!disk)
         return false;
-    if (!SaveAuthoredScene(*active.scene, PathFromUtf8(nextPath), PathFromUtf8(active.path), error_,
+    if (!SaveAuthoredScene(*state->scene, PathFromUtf8(nextPath), PathFromUtf8(state->path), error_,
                            true, &*disk))
         return false;
-    active.path.swap(nextPath);
-    active.diskRevision = std::move(*disk);
-    active.scene->SetSourcePath(std::move(sourcePath));
-    active.dirty = false;
+    state->path.swap(nextPath);
+    state->diskRevision = std::move(*disk);
+    state->scene->SetSourcePath(std::move(sourcePath));
+    state->dirty = false;
     return true;
 }
 

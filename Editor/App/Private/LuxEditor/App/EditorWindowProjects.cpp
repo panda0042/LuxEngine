@@ -45,6 +45,7 @@ void EditorWindow::NewProject() {
                   LUX_UI_TEXT("생성한 시작 장면을 열 수 없습니다."));
         return;
     }
+    StopPreview();
     ResetSceneWorkspace();
     project_ = std::move(created);
     sceneProjects_[document_.GetActiveTabId()] = project_;
@@ -89,6 +90,7 @@ void EditorWindow::OpenProjectFile(const std::filesystem::path& file,
             ShowError(LUX_UI_TEXT("프로젝트 열기 실패"), LUX_UI_TEXT("시작 씬을 열 수 없습니다."));
         return;
     }
+    StopPreview();
     document_ = std::move(candidate);
     ResetSceneWorkspace();
     project_ = std::move(opened);
@@ -224,7 +226,7 @@ void EditorWindow::RecoverAutosaveIfNeeded() {
 void EditorWindow::AutoSaveScene() {
     if (!viewportEditBefore_.isEmpty())
         return;
-    if (previewActive_)
+    if (preview_.IsActive())
         return;
     for (const auto& tab : document_.ListTabs()) {
         if (!tab.dirty || tab.path.empty())
@@ -250,7 +252,6 @@ void EditorWindow::AutoSaveScene() {
 }
 
 bool EditorWindow::ConfirmDiscardChanges() {
-    StopPreview();
     EndTimelineEdit();
     CancelViewportEdit();
     const auto tabs = document_.ListTabs();
@@ -269,9 +270,13 @@ bool EditorWindow::ConfirmDiscardChanges() {
 }
 
 bool EditorWindow::SaveScene(bool choosePath) {
-    CancelViewportEdit();
-    StopPreview();
-    const auto previous = document_.GetPath();
+    return SaveSceneTab(document_.GetActiveTabId(), choosePath);
+}
+
+bool EditorWindow::SaveSceneTab(EditorDocument::TabId tab, bool choosePath) {
+    if (tab == document_.GetActiveTabId())
+        CancelViewportEdit();
+    const auto previous = document_.GetPath(tab);
     bool saved = false;
     if (choosePath || previous.empty()) {
         LuxUI::String file = LuxUI::FileDialog::getSaveFileName(
@@ -280,24 +285,29 @@ bool EditorWindow::SaveScene(bool choosePath) {
             return false;
         if (LuxUI::FileInfo(file).suffix().isEmpty())
             file += LUX_UI_TEXT(".lux");
-        saved = document_.SaveAs(Utf8(file));
+        saved = document_.SaveAs(tab, Utf8(file));
     } else
-        saved = document_.Save();
+        saved = document_.Save(tab);
     if (!saved) {
         ShowError(LUX_UI_TEXT("저장 실패"), Q(document_.GetLastError()));
         return false;
     }
-    RefreshProjectExplorer();
-    if (project_) {
+    const auto path = PathFromUtf8(document_.GetPath(tab));
+    const bool active = tab == document_.GetActiveTabId();
+    auto context = active ? project_ : sceneProjects_[tab];
+    if (context) {
         if (!previous.empty())
-            project_->ClearAutosave(PathFromUtf8(previous));
-        project_->ClearAutosave(PathFromUtf8(document_.GetPath()));
+            context->ClearAutosave(PathFromUtf8(previous));
+        context->ClearAutosave(path);
+        if (!context->ContainsScene(path))
+            context.reset();
     }
+    if (active)
+        project_ = context;
+    sceneProjects_[tab] = std::move(context);
     undo_->setClean();
-    RememberSceneBaseline();
-    if (project_ && !project_->ContainsScene(PathFromUtf8(document_.GetPath())))
-        project_.reset();
-    sceneProjects_[document_.GetActiveTabId()] = project_;
+    RememberSceneBaseline(tab, true);
+    RefreshProjectExplorer();
     RefreshSceneTabs();
     UpdateChrome();
     Log(LUX_UI_TEXT("장면을 저장했습니다."));
@@ -400,6 +410,7 @@ void EditorWindow::RestoreCurrentProject() {
                                                 "복구 전 상태도 별도 백업합니다.")) !=
         LuxUI::MessageBox::Yes)
         return;
+    StopPreview();
     const auto projectFile = project_->GetFile();
     std::string error;
     bool success = false;

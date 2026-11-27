@@ -72,7 +72,9 @@ struct GpuDeviceInfo {
     bool validation = false;
     bool synchronizationValidation = false;
     bool presentFences = false;
-    bool rayTracing = false; // The renderer can use hardware-accelerated ray queries.
+    bool rayTracing = false;        // The renderer can use hardware-accelerated ray queries.
+    bool rayTracingCompute = false; // Ray-traced fog, ReSTIR and radiance cascades.
+    uint32 maxVSyncInterval = 1;
 };
 
 struct GpuFrameStats {
@@ -174,6 +176,7 @@ public:
     bool DrawTriangles(std::span<const RenderVertex> vertices, const Mat4& viewProjection,
                        GpuTexture* texture = nullptr, bool depth = false);
     bool SetVSync(bool enabled);
+    bool SetVSyncInterval(uint32 interval);
     void NotifyResize();
     bool FlushUploads();
     bool WaitIdle();

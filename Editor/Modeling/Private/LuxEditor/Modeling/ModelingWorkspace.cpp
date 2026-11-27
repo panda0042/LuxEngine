@@ -271,7 +271,7 @@ void EditorWindow::RefreshModelingWorkspace() {
                          !SameLifetime(lifetime, modelingLifetime_) ||
                          modelingSourcePath_ != path ||
                          modelingSourcePart_ != (renderer ? renderer->modelSubmesh : -1) ||
-                         (!previewActive_ && renderer && !modelingMesh_);
+                         (!preview_.IsActive() && renderer && !modelingMesh_);
     std::string failure;
     if (changed) {
         modelingMesh_.reset();
@@ -281,7 +281,7 @@ void EditorWindow::RefreshModelingWorkspace() {
         modelingLifetime_ = lifetime;
         modelingSourcePath_ = path;
         modelingSourcePart_ = renderer ? renderer->modelSubmesh : -1;
-        if (renderer && !previewActive_) {
+        if (renderer && !preview_.IsActive()) {
             auto mesh = std::make_shared<ModelingMesh>();
             if (LoadModelingMesh(document_.GetScene(), entity, *mesh, failure))
                 modelingMesh_ = std::move(mesh);
@@ -291,7 +291,7 @@ void EditorWindow::RefreshModelingWorkspace() {
             }
         }
     }
-    const bool available = renderer && modelingMesh_ && project_ && !previewActive_;
+    const bool available = renderer && modelingMesh_ && project_ && !preview_.IsActive();
     const bool needsBake = renderer && NeedsBake(entity, modelingSourceAsset_);
     const bool editable = available && !needsBake && document_.GetSelection().size() == 1;
     const auto mode = editable ? static_cast<ModelingEditMode>(modelingMode_->currentIndex())
@@ -314,7 +314,7 @@ void EditorWindow::RefreshModelingWorkspace() {
     auto* info = modelingDock_->findChild<LuxUI::Label*>(LUX_UI_TEXT("modelingSelection"));
     info->setText(!project_   ? LUX_UI_TEXT("프로젝트를 열어 주세요.")
                   : !renderer ? LUX_UI_TEXT("메시 오브젝트를 선택해 주세요.")
-                  : previewActive_
+                  : preview_.IsActive()
                       ? LUX_UI_TEXT("모델 편집은 게임 실행을 중지한 뒤 사용할 수 있습니다.")
                   : !failure.empty() ? LuxUI::String::fromUtf8(failure)
                   : document_.GetSelection().size() > 1
@@ -329,21 +329,21 @@ void EditorWindow::RefreshModelingWorkspace() {
                              : LUX_UI_TEXT("편집 메시를 읽을 수 없습니다."));
     modelingMode_->setEnabled(editable);
     modelingDock_->findChild<LuxUI::PushButton*>(LUX_UI_TEXT("modelingAddPrimitive"))
-        ->setEnabled(project_ && !previewActive_);
+        ->setEnabled(project_ && !preview_.IsActive());
     modelingDock_->findChild<LuxUI::PushButton*>(LUX_UI_TEXT("modelingExtrude"))
         ->setEnabled(editable && mode == ModelingEditMode::Face && !selection.faces.empty());
     modelingDock_->findChild<LuxUI::PushButton*>(LUX_UI_TEXT("modelingMerge"))
-        ->setEnabled(project_ && !previewActive_ && document_.GetSelection().size() > 1);
+        ->setEnabled(project_ && !preview_.IsActive() && document_.GetSelection().size() > 1);
     modelingDock_->findChild<LuxUI::PushButton*>(LUX_UI_TEXT("modelingBake"))
         ->setEnabled(available);
     modelingDock_->findChild<LuxUI::PushButton*>(LUX_UI_TEXT("modelingReload"))
-        ->setEnabled(renderer && !previewActive_);
+        ->setEnabled(renderer && !preview_.IsActive());
 }
 
 void EditorWindow::CommitModelingEdit(const ModelingMesh& mesh,
                                       const ModelingSelection& selection) {
     const auto entity = document_.GetSelected();
-    if (!project_ || previewActive_ || !entity || entity.GetId() != modelingEntity_ ||
+    if (!project_ || preview_.IsActive() || !entity || entity.GetId() != modelingEntity_ ||
         modelingTab_ != document_.GetActiveTabId() ||
         !SameLifetime(modelingLifetime_, document_.GetScene().Lifetime()) ||
         !entity.HasComponent<MeshRendererComponent>() || NeedsBake(entity, modelingSourceAsset_)) {
@@ -381,7 +381,7 @@ void EditorWindow::CommitModelingEdit(const ModelingMesh& mesh,
 }
 
 void EditorWindow::ExtrudeModelingSelection() {
-    if (!modelingMesh_ || !project_ || previewActive_)
+    if (!modelingMesh_ || !project_ || preview_.IsActive())
         return;
     auto selection = canvas3D_->GetModelingSelection();
     auto mesh = *modelingMesh_;
@@ -398,7 +398,7 @@ void EditorWindow::ExtrudeModelingSelection() {
 }
 
 void EditorWindow::MergeModelingSelection() {
-    if (!project_ || previewActive_ || document_.GetSelection().size() < 2)
+    if (!project_ || preview_.IsActive() || document_.GetSelection().size() < 2)
         return;
     const auto active = document_.GetSelected();
     auto& scene = document_.GetScene();
@@ -478,7 +478,7 @@ void EditorWindow::MergeModelingSelection() {
 }
 
 void EditorWindow::BakeModelingSelection() {
-    if (!project_ || previewActive_)
+    if (!project_ || preview_.IsActive())
         return;
     const auto entity = document_.GetSelected();
     if (!entity || !entity.HasComponent<MeshRendererComponent>())

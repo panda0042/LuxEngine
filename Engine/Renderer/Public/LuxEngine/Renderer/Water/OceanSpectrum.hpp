@@ -1,12 +1,20 @@
 #pragma once
 
 #include <LuxEngine/Core/Math.hpp>
+#include <array>
 #include <memory>
 #include <optional>
 #include <span>
 #include <vector>
 
 namespace LuxEngine {
+
+struct OceanSwell {
+    int32 modeX = 0;
+    int32 modeZ = 0;
+    double amplitude = 0;
+    double phase = 0;
+};
 
 struct OceanSpectrumSettings {
     uint32 resolution = 64;
@@ -18,6 +26,7 @@ struct OceanSpectrumSettings {
     double foamThreshold = 0.85;
     double foamSoftness = 0.35;
     uint32 seed = 1;
+    std::array<OceanSwell, 3> swells{};
 };
 
 struct OceanSample {
@@ -27,6 +36,9 @@ struct OceanSample {
     double jacobian = 1;
     double foam = 0;
 };
+
+LUX_API OceanSample SampleCoastalBreaker(Vec2 xz, double time, float height);
+LUX_API double SampleCoastalBreakerHorizontal(Vec2 xz, double time, float height);
 
 // Periodic spectral ocean reference. Initialization seeds the wind spectrum and
 // allocates the transform workspace. Update uses a separable inverse FFT on the CPU.

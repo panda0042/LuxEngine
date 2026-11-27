@@ -10,6 +10,7 @@
 namespace LuxEngine {
 class GpuBuffer;
 class PerspectiveCamera;
+struct CoastalWaterFrame;
 struct Render3DSettings;
 
 namespace Rhi {
@@ -46,7 +47,8 @@ public:
     virtual size_t DrawCount() const = 0;
     virtual void ClearDraws() = 0;
     virtual bool Render(const PerspectiveCamera& camera, const Render3DSettings& settings,
-                        float exposure, std::string& error) = 0;
+                        float exposure, const CoastalWaterFrame* coastalWater,
+                        std::string& error) = 0;
     virtual bool EnvironmentReady() const = 0;
     virtual double EnvironmentPreparationMs() const = 0;
 };
@@ -86,7 +88,7 @@ public:
                              const Mat4& viewProjection, const Mat4& model, const Vec4& albedo,
                              uint64 texture, float metallic, float roughness, bool pbr) = 0;
     virtual bool EndFrame() = 0;
-    virtual bool SetVSync(bool enabled) = 0;
+    virtual bool SetVSyncInterval(uint32 interval) = 0;
     virtual void NotifyResize() = 0;
     virtual bool FlushUploads() = 0;
     virtual bool WaitIdle() = 0;

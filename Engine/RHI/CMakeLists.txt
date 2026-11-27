@@ -4,9 +4,7 @@ lux_engine_module(RHI
     SOURCES
         Private/Buffer.cpp
         Private/Texture.cpp
-        Private/TextureMipChain.cpp
     HEADERS
-        Private/TextureMipChain.hpp
         Public/LuxEngine/Renderer/RHI/Buffer.hpp
         Public/LuxEngine/Renderer/RHI/GpuDevice.hpp
         Public/LuxEngine/Renderer/RHI/Texture.hpp

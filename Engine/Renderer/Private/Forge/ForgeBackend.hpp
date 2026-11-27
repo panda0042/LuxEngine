@@ -42,7 +42,7 @@ public:
                      const Mat4& viewProjection, const Mat4& model, const Vec4& albedo,
                      uint64 texture, float metallic, float roughness, bool pbr) override;
     bool EndFrame() override;
-    bool SetVSync(bool enabled) override;
+    bool SetVSyncInterval(uint32 interval) override;
     void NotifyResize() override;
     bool FlushUploads() override;
     bool WaitIdle() override;

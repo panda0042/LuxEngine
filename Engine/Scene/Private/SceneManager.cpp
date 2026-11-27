@@ -193,6 +193,10 @@ SceneSettings InheritedSettings(const SceneSettings& current, const SceneSetting
     inherit(render.imageBasedLighting, oldRender.imageBasedLighting, newRender.imageBasedLighting);
     inherit(render.showSkybox, oldRender.showSkybox, newRender.showSkybox);
     inherit(render.toneMapping, oldRender.toneMapping, newRender.toneMapping);
+    inherit(render.screenSpaceAntialiasing, oldRender.screenSpaceAntialiasing,
+            newRender.screenSpaceAntialiasing);
+    inherit(render.temporalAntialiasing, oldRender.temporalAntialiasing,
+            newRender.temporalAntialiasing);
     inherit(render.shadows, oldRender.shadows, newRender.shadows);
     inherit(render.virtualShadows, oldRender.virtualShadows, newRender.virtualShadows);
     inherit(render.shadowResolution, oldRender.shadowResolution, newRender.shadowResolution);
@@ -211,6 +215,7 @@ SceneSettings InheritedSettings(const SceneSettings& current, const SceneSetting
     inherit(rays.indirectStrength, oldRays.indirectStrength, newRays.indirectStrength);
     inherit(rays.restirDirect, oldRays.restirDirect, newRays.restirDirect);
     inherit(rays.restirIndirect, oldRays.restirIndirect, newRays.restirIndirect);
+    inherit(rays.waterReflections, oldRays.waterReflections, newRays.waterReflections);
     auto& water = render.waterReflection;
     inherit(water.environmentPath, oldRender.waterReflection.environmentPath,
             newRender.waterReflection.environmentPath);
