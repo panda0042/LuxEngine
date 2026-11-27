@@ -140,6 +140,7 @@ struct EngineSceneRenderer::State {
             spriteMeshes.erase(spriteMeshes.begin());
         return &spriteMeshes.emplace(key, std::move(mesh)).first->second;
     }
+
     LuxEngine::uint64 previewRevision = 0;
     LuxEngine::uint64 previewTopology = 0;
 
