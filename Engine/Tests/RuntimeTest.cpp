@@ -136,7 +136,7 @@ void Parse() {
               pathFromUtf8(
                   ordinary.scene->GetComponent<LuxEngine::SpriteRendererComponent>(entity.GetId())
                       .texturePath)
-                      .parent_path() == authored / "images",
+                      .parent_path() == fs::weakly_canonical(authored / "images"),
           "custom asset root leaves ordinary scene resolution intact");
     Check(!manager.LoadWithSpriteAssetRoot(file, files.root / "missing"),
           "missing sprite asset directory is rejected");
