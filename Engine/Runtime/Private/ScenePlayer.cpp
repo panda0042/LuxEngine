@@ -70,7 +70,7 @@ struct Bounds {
     Vec3 minimum;
     Vec3 maximum;
 
-    void Include(Vec3 point) {
+    void Include(const Vec3& point) {
         minimum = {std::min(minimum.x, point.x), std::min(minimum.y, point.y),
                    std::min(minimum.z, point.z)};
         maximum = {std::max(maximum.x, point.x), std::max(maximum.y, point.y),
