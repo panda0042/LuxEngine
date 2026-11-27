@@ -32,7 +32,7 @@ float OpaqueDepthAt(float2 uv)
 }
 
 float4 WaterSceneColor(float2 uv, float surfaceDepth, float referenceDepth, float tolerance,
-                       out float accepted)
+                       out(float) accepted)
 {
     const float2 position = uv * gScene.frameSize.xy - 0.5f;
     const float2 basePosition = floor(position);
@@ -73,7 +73,7 @@ float4 SampleCoastalPlane(float2 uv)
     return SampleGradTex2D(gNormalTexture, gMaterialAnisotropicRepeat, uv, ddx(uv), ddy(uv));
 }
 
-float3 CoastalDetailNormal(MeshOutput In, float3 waveNormal, out float foamDetail)
+float3 CoastalDetailNormal(MeshOutput In, float3 waveNormal, out(float) foamDetail)
 {
     const float3 tileOrigin = mul(gDraw.model, float4(0, 0, 0, 1)).xyz;
     const float3 position = (In.world - tileOrigin) / 64.0f;
@@ -124,7 +124,7 @@ float CoastalCaustic(float2 uv, float phase)
 }
 
 #ifdef LUX_RAY_QUERY
-float ReprojectWaterHit(float3 position, float3 normal, out float3 color)
+float ReprojectWaterHit(float3 position, float3 normal, out(float3) color)
 {
     color = float3(0, 0, 0);
     const float4 clip = mul(gDraw.viewProjection, float4(position, 1));
