@@ -1,3 +1,6 @@
+include(CheckCSourceCompiles)
+include(CMakePushCheckState)
+
 file(READ "${TF}/Graphics/Direct3D12/Direct3D12.c" _forge_d3d12)
 
 function(lux_patch_d3d12 original replacement)
@@ -8,6 +11,39 @@ function(lux_patch_d3d12 original replacement)
     string(REPLACE "${original}" "${replacement}" _forge_d3d12 "${_forge_d3d12}")
     set(_forge_d3d12 "${_forge_d3d12}" PARENT_SCOPE)
 endfunction()
+
+function(lux_patch_d3d12_sdk_guids)
+    cmake_push_check_state(RESET)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE EXECUTABLE)
+    set(CMAKE_REQUIRED_LIBRARIES dxguid)
+    string(SHA256 sdk_key
+        "${CMAKE_C_COMPILER};${CMAKE_C_COMPILER_VERSION};${CMAKE_GENERATOR_PLATFORM};${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION};$ENV{WindowsSdkDir};$ENV{WindowsSDKVersion};$ENV{LIB}")
+
+    foreach(iid IID_ID3D12StateObjectProperties1 IID_ID3D12WorkGraphProperties
+                IID_ID3D12GraphicsCommandList10)
+        set(result "LUX_DXGUID_HAS_${iid}_${sdk_key}")
+        check_c_source_compiles("
+            #include <guiddef.h>
+            extern const GUID ${iid};
+            int main(void) {
+                const GUID* volatile guid = &${iid};
+                return guid == 0;
+            }
+        " ${result})
+        if(${result})
+            string(REGEX MATCH "DO_DEFINE_GUID\\(${iid},[^\r\n]*\\);\r?\n" definition "${_forge_d3d12}")
+            if(NOT definition)
+                message(FATAL_ERROR "The Forge D3D12 GUID patch could not find ${iid}.")
+            endif()
+            lux_patch_d3d12("${definition}" "")
+        endif()
+    endforeach()
+
+    cmake_pop_check_state()
+    set(_forge_d3d12 "${_forge_d3d12}" PARENT_SCOPE)
+endfunction()
+
+lux_patch_d3d12_sdk_guids()
 
 lux_patch_d3d12([[    for (UINT i = 0; DXGI_ERROR_NOT_FOUND != COM_CALL(EnumAdapterByGpuPreference, dxgiFactory, i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
                                                       IID_REF(IDXGIAdapter4_Copy), &adapter);

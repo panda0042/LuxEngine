@@ -64,7 +64,10 @@ void Test() {
     child.AddComponent<InstanceSourceComponent>() = {root.GetId(), 9};
     auto settings = scene.GetSettings();
     settings.render3D.environmentPath = "Assets/환경.hdr";
+    settings.render3D.screenSpaceAntialiasing = true;
+    settings.render3D.temporalAntialiasing = true;
     settings.render3D.rayTracing.shadows = true;
+    settings.render3D.rayTracing.waterReflections = true;
     settings.render3D.rayTracing.restirIndirect = true;
     settings.render3D.rayTracing.maxBounces = 3;
     settings.render3D.fog.density = .0625f;
@@ -89,6 +92,8 @@ void Test() {
     legacyJson["settings"]["render3d"]["mode"] = 0;
     legacyJson["settings"]["render3d"]["tone_mapping"] = false;
     legacyJson["settings"]["render3d"]["shadow_resolution"] = 4096;
+    legacyJson["settings"]["render3d"].erase("screen_space_antialiasing");
+    legacyJson["settings"]["render3d"].erase("temporal_antialiasing");
     legacyJson["settings"]["render3d"].erase("ray_tracing");
     legacyJson["settings"]["render3d"].erase("volumetric_fog");
     legacyJson["settings"]["render3d"].erase("virtual_shadows");
@@ -100,16 +105,28 @@ void Test() {
     Check(migratedRender.mode == Render3DMode::Pbr && !migratedRender.toneMapping &&
               migratedRender.shadowResolution == 4096 &&
               migratedRender.environmentPath == settings.render3D.environmentPath &&
-              !migratedRender.rayTracing.Enabled() && migratedRender.fog.density == 0,
+              !migratedRender.rayTracing.Enabled() && migratedRender.fog.density == 0 &&
+              !migratedRender.screenSpaceAntialiasing && !migratedRender.temporalAntialiasing,
           "old scenes render as PBR and preserve their authored controls");
     std::string migratedText;
     Check(migrated.SerializeToString(migratedText) &&
               Json::parse(migratedText)["settings"]["render3d"]["mode"] == 1,
           "saving an old scene writes the canonical PBR mode");
 
+    auto previousRayJson = json;
+    previousRayJson["settings"]["render3d"]["ray_tracing"].erase("water_reflections");
+    Scene previousRayScene;
+    Check(previousRayScene.DeserializeFromString(previousRayJson.dump()) &&
+              previousRayScene.GetSettings().render3D.rayTracing.shadows &&
+              !previousRayScene.GetSettings().render3D.rayTracing.waterReflections,
+          "legacy ray tracing blocks load with water reflections disabled");
+
     Scene restored;
     Check(restored.DeserializeFromString(text), "all component types load");
     const auto& render = restored.GetSettings().render3D;
+    Check(render.screenSpaceAntialiasing && render.temporalAntialiasing &&
+              render.rayTracing.waterReflections,
+          "antialiasing and water reflection options survive a save and reload");
     Check(render.rayTracing.shadows && render.rayTracing.maxBounces == 3 &&
               render.fog.density == .0625f && render.fog.baseHeight == 1000000000.25 &&
               render.fog.rayTracedShadows && render.virtualShadows &&

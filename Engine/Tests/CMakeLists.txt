@@ -134,6 +134,7 @@ foreach(module Core Platform Environment RHI Assets Renderer ECS Physics Animati
     endforeach()
     add_library(LuxHeaderCheck${module} OBJECT ${sources})
     target_link_libraries(LuxHeaderCheck${module} PRIVATE LuxModule${module})
+    target_compile_options(LuxHeaderCheck${module} PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 endforeach()
 
 add_executable(LuxScriptRuntimeTests ScriptRuntimeTest.cpp)

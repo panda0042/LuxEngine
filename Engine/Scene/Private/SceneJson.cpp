@@ -56,7 +56,8 @@ Json ToJson(const RayTracingSettings& rays) {
             {"max_distance", rays.maxDistance},
             {"indirect_strength", rays.indirectStrength},
             {"restir_direct", rays.restirDirect},
-            {"restir_indirect", rays.restirIndirect}};
+            {"restir_indirect", rays.restirIndirect},
+            {"water_reflections", rays.waterReflections}};
 }
 
 Json ToJson(const VolumetricFogSettings& fog) {
@@ -159,6 +160,8 @@ void ReadJsonValue(const Json& json, RayTracingSettings& rays) {
         ReadJsonValue(json.at("restir_direct"), rays.restirDirect);
     if (json.contains("restir_indirect"))
         ReadJsonValue(json.at("restir_indirect"), rays.restirIndirect);
+    if (json.contains("water_reflections"))
+        ReadJsonValue(json.at("water_reflections"), rays.waterReflections);
 }
 
 void ReadJsonValue(const Json& json, VolumetricFogSettings& fog) {

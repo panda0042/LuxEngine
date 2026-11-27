@@ -17,8 +17,11 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
+#include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -253,6 +256,8 @@ void Misuse() {
         return Check(false, "session for misuse");
     Check(!s.gpu.Clear(0, 0, 0, 1), "clear outside a frame rejected");
     Check(!s.gpu.EndFrame(), "end without begin rejected");
+    Check(!s.gpu.SetVSyncInterval(s.gpu.GetInfo().maxVSyncInterval + 1),
+          "unsupported VSync interval rejected");
     GpuFrameCapture capture;
     Check(!s.gpu.ReadFrameCapture(capture), "read without capture rejected");
     Check(Begin(s.window, s.gpu), "frame begins");
@@ -514,6 +519,12 @@ void ManyFrames() {
     std::printf("  %llu frames in %llu ms\n", static_cast<unsigned long long>(frames),
                 static_cast<unsigned long long>(elapsed));
     Check(frames == 500, "500 frames without vsync");
+    if (s.gpu.GetInfo().maxVSyncInterval >= 2) {
+        GpuFrameCapture capture;
+        Check(s.gpu.SetVSyncInterval(2) && CaptureClear(s.window, s.gpu, 0, 0, 1, capture) &&
+                  CentreIs(capture, 0, 0, 255),
+              "the swapchain presents with a two-refresh VSync interval");
+    }
     Check(s.gpu.SetVSync(true) && s.gpu.WaitIdle(), "vsync back on, idle");
     Check(s.gpu.GetStatus() == GpuStatus::Ready, "still ready");
 }
@@ -3098,12 +3109,14 @@ void WaterComposite() {
     camera.SetPosition({0, 0, 3});
 
     const auto draw = [&](const Mesh3D* surface, Vec3 absorption, double floorDepth,
-                          Vec4 floorColor, bool foreground, bool stripes) {
+                          Vec4 floorColor, bool foreground, bool stripes, double markerX = 0.,
+                          Vec4 waterColor = {0, 0, 0, 1},
+                          std::optional<CoastalWaterFrame> coastalWater = std::nullopt) {
         GpuFrameCapture result;
         if (!CaptureFrame(session, result, [&] {
                 if (!session.gpu.Clear(0, 0, 0, 1))
                     return false;
-                context.BeginScene(camera, settings, 1);
+                context.BeginScene(camera, settings, 1, {}, coastalWater);
                 Material3D floor;
                 floor.albedoColor = floorColor;
                 if (stripes) {
@@ -3121,12 +3134,12 @@ void WaterComposite() {
                 if (foreground) {
                     Material3D marker;
                     marker.albedoColor = {1, 0, 0, 1};
-                    context.DrawMesh(mesh, Mat4::Translate({0, 0, .5}) * Mat4::Scale({.5, .5, 1}),
-                                     marker);
+                    context.DrawMesh(
+                        mesh, Mat4::Translate({markerX, 0, .5}) * Mat4::Scale({.5, .5, 1}), marker);
                 }
                 if (surface) {
                     Material3D water;
-                    water.albedoColor = {0, 0, 0, 1};
+                    water.albedoColor = waterColor;
                     water.roughness = .06f;
                     water.water = WaterMaterial3D{absorption, 1.333f};
                     context.DrawMesh(*surface, Mat4::Scale({2, 2, 1}), water);
@@ -3164,6 +3177,29 @@ void WaterComposite() {
           "water uses scene depth and per-channel Beer-Lambert absorption");
     Check(shore[0] > deep[0] + 45 && crestFoam[0] > deep[0] + 45,
           "shore and crest foam brighten water independently");
+    const Vec4 nearlyTransparent{0, 0, 0, .02f};
+    const auto nearClear =
+        read(draw(&mesh, {1.2, 0, 0}, 1.5, {1, 1, 1, 1}, false, false, 0., nearlyTransparent));
+    const auto thinWater =
+        read(draw(&mesh, {}, 1.5, {0, 0, 0, 1}, false, false, 0., nearlyTransparent));
+    const auto thinCrest =
+        read(draw(&crest, {}, 1.5, {0, 0, 0, 1}, false, false, 0., nearlyTransparent));
+    std::printf("  water opacity 1.00 red=%d, 0.02 red=%d, unabsorbed red=%d\n", absorbed[0],
+                nearClear[0], clearWater[0]);
+    Check(std::abs(nearClear[0] - clearWater[0]) <= 4 && nearClear[0] > absorbed[0] + 60,
+          "near-zero water opacity transmits background light through the water body");
+    Check(thinWater == deep && thinCrest == crestFoam,
+          "water opacity leaves the independent foam coverage and surface reflection intact");
+    const Vec4 oceanTint{.034f, .22f, .40f, .12f};
+    const Vec4 warmSurface{1, .25f, .05f, 1};
+    const auto deepOcean = read(draw(&mesh, {1.2, .3, .15}, 150, warmSurface, false, false, 0.,
+                                     oceanTint, CoastalWaterFrame{}));
+    const auto shallowOcean = read(draw(&mesh, {1.2, .3, .15}, 1.5, warmSurface, false, false, 0.,
+                                        oceanTint, CoastalWaterFrame{}));
+    std::printf("  ocean background rgb=%d,%d,%d, submerged geometry rgb=%d,%d,%d\n", deepOcean[0],
+                deepOcean[1], deepOcean[2], shallowOcean[0], shallowOcean[1], shallowOcean[2]);
+    Check(deepOcean[2] > deepOcean[0] + 35 && shallowOcean[0] > shallowOcean[2] + 35,
+          "ocean refraction transmits submerged objects and tints rays with no geometry");
     Check(markerOverWater == marker && marker[0] > 150 && marker[1] == 0,
           "opaque geometry in front of water retains its color and depth");
     Check(baseSide[1] > baseSide[0] + 40 && bentSide[0] > bentSide[1] + 30,
@@ -3171,6 +3207,23 @@ void WaterComposite() {
 
     const auto backgroundRed = Vec4{1, 0, 0, 1};
     const auto backgroundBlue = Vec4{0, 0, 1, 1};
+    const auto waterWithoutMarker = draw(&sloped, {}, 1.5, backgroundBlue, false, false);
+    int edgeBleed = 0;
+    for (double offset : {0., .006, .012}) {
+        const auto markerMask = draw(nullptr, {}, 1.5, backgroundBlue, true, false, offset);
+        const auto waterWithMarker = draw(&sloped, {}, 1.5, backgroundBlue, true, false, offset);
+        if (waterWithoutMarker.rgba.empty() ||
+            markerMask.rgba.size() != waterWithoutMarker.rgba.size() ||
+            waterWithMarker.rgba.size() != waterWithoutMarker.rgba.size())
+            return Check(false, "silhouette filtering frames capture");
+        for (size_t pixel = 0; pixel < markerMask.rgba.size(); pixel += 4) {
+            if (markerMask.rgba[pixel] < 20)
+                edgeBleed = std::max(edgeBleed, int(waterWithMarker.rgba[pixel]) -
+                                                    int(waterWithoutMarker.rgba[pixel]));
+        }
+    }
+    std::printf("  foreground red leaked into refracted water by %d levels\n", edgeBleed);
+    Check(edgeBleed <= 5, "water does not sample foreground colors across the depth edge");
 
     const auto waterOnly = draw(&mesh, {}, 1.5, backgroundBlue, false, false);
     settings.temporalAntialiasing = true;
@@ -3245,6 +3298,16 @@ void WaterComposite() {
     Check(transmittedRed[0] > transmittedRed[2] + 40 &&
               transmittedBlue[2] > transmittedBlue[0] + 40,
           "an underwater ray below the critical angle transmits the background color");
+    const Vec3 underwaterAbsorption{.72, .25, .15};
+    const auto nearAir = read(draw(&mesh, underwaterAbsorption, -1, backgroundRed, false, false));
+    const auto farAir = read(draw(&mesh, underwaterAbsorption, -3, backgroundRed, false, false));
+    camera.SetPosition({0, 0, -2});
+    const auto deeperCamera =
+        read(draw(&mesh, underwaterAbsorption, -1, backgroundRed, false, false));
+    std::printf("  underwater absorption near air=%d far air=%d deeper camera=%d\n", nearAir[0],
+                farAir[0], deeperCamera[0]);
+    Check(std::abs(nearAir[0] - farAir[0]) <= 2 && nearAir[0] > deeperCamera[0] + 18,
+          "underwater absorption depends on the camera distance in water");
     camera.SetPosition({2.5, 0, -1});
     const auto reflectedRed = read(draw(&mesh, {}, -1, backgroundRed, false, false));
     const auto reflectedBlue = read(draw(&mesh, {}, -1, backgroundBlue, false, false));
@@ -3382,7 +3445,7 @@ void FroxelFog() {
     sun.fog.rayTracedShadows = true;
     if (!render(sun, 12, false, true, shadowed))
         return Check(false, "ray-traced froxel scattering captures");
-    if (session.gpu.GetInfo().rayTracing) {
+    if (session.gpu.GetInfo().rayTracingCompute) {
         std::printf("  froxel sunlight unoccluded=%d occluded=%d\n", unshadowed[0], shadowed[0]);
         Check(session.gpu.GetFrameStats().rayVolumetricFogPasses == 1 &&
                   shadowed[0] + 20 < unshadowed[0],
@@ -3406,6 +3469,7 @@ void OceanFft() {
     spectrumSettings.spectrumAmplitude = .025;
     spectrumSettings.choppiness = 1.6;
     spectrumSettings.foamThreshold = .97;
+    spectrumSettings.swells[0] = {2, -1, .18, .65};
     OceanSpectrum spectrum;
     Mesh3D gpuMesh, cpuMesh;
     if (!spectrum.Initialize(spectrumSettings) || !gpuMesh.UploadOcean(&session.gpu, spectrum))
@@ -3448,11 +3512,15 @@ void OceanFft() {
     camera.SetPosition({8, 10, 13});
     camera.SetTarget({0, 0, 0});
     const auto material = WaterSurface::MakeMaterial();
-    const auto capture = [&](GpuFrameCapture& frame, Mesh3D& mesh, float time, bool compute) {
+    const auto capture = [&](GpuFrameCapture& frame, Mesh3D& mesh, float time, bool compute,
+                             std::optional<CoastalWaterFrame> coastalWater = std::nullopt) {
         return CaptureFrame(session, frame, [&] {
             if ((compute && !mesh.UpdateOcean(time)) || !session.gpu.Clear(.04f, .05f, .07f, 1))
                 return false;
-            context.BeginScene(camera, settings, 1);
+            if (coastalWater)
+                context.BeginScene(camera, settings, 1, {}, coastalWater);
+            else
+                context.BeginScene(camera, settings, 1);
             Material3D bottom;
             bottom.albedoColor = {.1f, .18f, .28f, 1};
             context.DrawCube({0, -3, 0}, {30, 1, 30}, bottom);
@@ -3494,6 +3562,43 @@ void OceanFft() {
                   "GPU ocean changes between simulation times");
         previousGpu = std::move(gpu);
     }
+    GpuFrameCapture plainWater, beforeBreaker, withBreaker, plainAfter;
+    if (!capture(plainWater, gpuMesh, 2, true) ||
+        !capture(beforeBreaker, gpuMesh, 2, true, CoastalWaterFrame{2, 0}))
+        return Check(false, "water with and without coastal shading captures");
+    if (!capture(withBreaker, gpuMesh, 2, true, CoastalWaterFrame{2, 1.28f}) ||
+        beforeBreaker.rgba.size() != withBreaker.rgba.size())
+        return Check(false, "water with the coastal breaker captures");
+    Check(differentPixels(beforeBreaker, withBreaker) * 40 > withBreaker.rgba.size() / 4,
+          "coastal breaker changes the GPU water at a fixed FFT time");
+    if (!capture(plainAfter, gpuMesh, 2, true) || plainWater.rgba.size() != plainAfter.rgba.size())
+        return Check(false, "water after the coastal breaker captures");
+    Check(differentPixels(plainWater, plainAfter) == 0,
+          "the next scene uses plain water when no coastal frame is supplied");
+    if (!Begin(session.window, session.gpu))
+        return Check(false, "begin frame for coastal input validation and abort");
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    for (const auto invalid :
+         {CoastalWaterFrame{-1, 0}, CoastalWaterFrame{257, 0}, CoastalWaterFrame{2, -1},
+          CoastalWaterFrame{2, 5}, CoastalWaterFrame{nan, 0}, CoastalWaterFrame{2, nan}}) {
+        bool rejected = false;
+        try {
+            context.BeginScene(camera, settings, 1, {}, invalid);
+            context.AbortScene();
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        Check(rejected, "invalid coastal time or height is rejected");
+    }
+    context.BeginScene(camera, settings, 1, {}, CoastalWaterFrame{256, 4});
+    context.AbortScene();
+    if (!session.gpu.EndFrame())
+        return Check(false, "finish frame after aborting the coastal scene");
+    GpuFrameCapture afterAbort;
+    if (!capture(afterAbort, gpuMesh, 2, true) || plainWater.rgba.size() != afterAbort.rgba.size())
+        return Check(false, "water after aborting the coastal scene captures");
+    Check(differentPixels(plainWater, afterAbort) == 0,
+          "aborting a coastal scene preserves plain water on the next draw");
     Check(session.gpu.GetCounters().validationErrors == 0, "GPU ocean barriers validate");
 }
 
@@ -3613,6 +3718,15 @@ void RayTracedLighting() {
                 twice[1], twice[2]);
     Check(std::abs(once[0] - once[1]) < 10 && twice[0] > twice[1] + 25,
           "the second specular bounce reaches the off-screen red plane");
+
+    settings.rayTracing = {};
+    settings.rayTracing.waterReflections = true;
+    GpuFrameCapture opaqueOnly;
+    if (!capture(opaqueOnly, reflectionScene))
+        return Check(false, "water-only reflection settings render an opaque scene");
+    Check(session.gpu.GetFrameStats().rayTracedPasses == 0 &&
+              session.gpu.GetFrameStats().accelerationStructureBuilds == 0,
+          "water-only reflections skip ray dispatch and AS builds without water");
 
     settings.rayTracing = {};
     Material3D water;
@@ -3779,7 +3893,7 @@ void RadianceCascades() {
     const auto stats = session.gpu.GetFrameStats();
     std::printf("  far-wall transfer RGB %d,%d,%d -> %d,%d,%d, cascade passes %u\n", without[0],
                 without[1], without[2], with[0], with[1], with[2], stats.radianceCascadePasses);
-    if (session.gpu.GetInfo().rayTracing) {
+    if (session.gpu.GetInfo().rayTracingCompute) {
         Check(stats.radianceCascadePasses == 1 && stats.computeDispatches == 4,
               "three interval dispatches and a probe irradiance projection");
         Check(with[0] > without[0] + 15 && with[0] > with[1] + 15,
@@ -3853,7 +3967,7 @@ void RestirLighting() {
     auto stats = session.gpu.GetFrameStats();
     std::printf("  ReSTIR DI point shadow %d -> %d, passes %u\n", reference[0], blocked[0],
                 stats.restirPasses);
-    if (!session.gpu.GetInfo().rayTracing) {
+    if (!session.gpu.GetInfo().rayTracingCompute) {
         Check(stats.restirPasses == 0 && reference == blocked,
               "ReSTIR preserves raster output without ray query support");
         return;

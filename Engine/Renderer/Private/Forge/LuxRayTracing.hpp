@@ -15,6 +15,7 @@ struct ForgeRayDraw {
     const LuxForgeSceneDraw* draw;
     Buffer* vertices;
     Buffer* indices;
+    const float* textureColor;
 };
 
 struct ForgeRayScene {

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <numbers>
 #include <stdexcept>
 
 using namespace LuxEngine;
@@ -78,6 +79,26 @@ void TestSpectrum() {
     for (const auto& p : ocean.Grid())
         Check(p.displacement.Dot(p.displacement) == 0 && p.normal.y == 1,
               "still water is not flat");
+
+    constexpr double amplitude = .28, phase = .3, swellTime = .75;
+    constexpr int32 modeX = 2, modeZ = -3;
+    settings.swells[0] = {modeX, modeZ, amplitude, phase};
+    const double frequency =
+        std::sqrt(9.81 * 2 * std::numbers::pi * std::hypot(modeX, modeZ) / settings.patchLength);
+    for (const uint32 resolution : {8u, 16u, 32u, 64u, 128u, 256u}) {
+        settings.resolution = resolution;
+        const double x = resolution - 2, z = 3;
+        const double spacing = settings.patchLength / resolution;
+        const double angle = phase + frequency * swellTime +
+                             2 * std::numbers::pi * (x * modeX + z * modeZ) / resolution;
+        Check(ocean.Initialize(settings) && ocean.Update(swellTime), "initialize diagonal swell");
+        const auto swell = ocean.Sample({x * spacing, z * spacing}).value();
+        Check(std::abs(swell.displacement.y - amplitude * std::cos(angle)) < 1e-10 &&
+                  std::abs(swell.velocity.y + amplitude * frequency * std::sin(angle)) < 1e-10,
+              "swell phase or velocity differs from its spectral mode across FFT rows or columns");
+    }
+    settings.swells[0].modeX = static_cast<int32>(settings.resolution / 2);
+    Check(!ocean.Initialize(settings), "Nyquist swell mode must be rejected");
 }
 
 void TestBuoyancy() {
@@ -108,11 +129,81 @@ void TestBuoyancy() {
           "buoyancy impulse did not lift the Jolt body against gravity");
 }
 
+void TestCoastalBreaker() {
+    const auto crest = SampleCoastalBreaker({-3.52, 0}, 2, 1.28f);
+    const auto advanced = SampleCoastalBreaker({-5.32, 0}, 2.4, 1.28f);
+    Check(crest.displacement.y > 1 && crest.displacement.x < -.6 && crest.foam > .4,
+          "the breaking crest must lift, pitch landward and produce foam");
+    Check(advanced.displacement.y > .8 && advanced.foam > crest.foam,
+          "the breaker and its foam must progress shoreward");
+    const auto leftLip = SampleCoastalBreaker({-4.5, 0}, 2, 1.6f);
+    const auto rightLip = SampleCoastalBreaker({-4, 0}, 2, 1.6f);
+    Check(rightLip.displacement.x + .5 < leftLip.displacement.x,
+          "the crest must fold over the shoreward face at the coastal preset height");
+    const auto highCrest = SampleCoastalBreaker({-3.52, 0}, 2, 1.6f);
+    Check(highCrest.displacement.y > crest.displacement.y + .2 &&
+              highCrest.displacement.x >= -1.1 * 1.6,
+          "a higher breaker must grow without exceeding the horizontal solver interval");
+    constexpr float surfHeight = 2.05f;
+    const auto tallCrest = SampleCoastalBreaker({-3.52, 0}, 2, surfHeight);
+    const auto barrelFace = SampleCoastalBreaker({-4.77, 0}, 2, surfHeight);
+    const auto barrelLip = SampleCoastalBreaker({-4.27, 0}, 2, surfHeight);
+    Check(tallCrest.displacement.y > 2.3 && barrelLip.displacement.y > 1 &&
+              barrelLip.displacement.x + .5 < barrelFace.displacement.x &&
+              tallCrest.displacement.x >= -1.1 * surfHeight,
+          "the surf crest must noticeably overhang the taller plunging face");
+    const auto fallingLip = SampleCoastalBreaker({-6.58, 0}, 2.6, surfHeight);
+    const auto shoulder = SampleCoastalBreaker({-5.32, 0}, 2.6, surfHeight);
+    Check(fallingLip.displacement.y < shoulder.displacement.y - .4 &&
+              fallingLip.foam > shoulder.foam + .4,
+          "the lip must fall ahead of the shoulder and leave thicker whitewater");
+    constexpr float largeSwellHeight = 3.60f;
+    const auto largeCrest = SampleCoastalBreaker({-3.52, 0}, 2, largeSwellHeight);
+    const auto largeShoulder = SampleCoastalBreaker({-1.75, 0}, 2, largeSwellHeight);
+    const auto largeFront = SampleCoastalBreaker({-4.5, 0}, 2, largeSwellHeight);
+    const auto largeLip = SampleCoastalBreaker({-4, 0}, 2, largeSwellHeight);
+    Check(largeCrest.displacement.y > 4 && largeShoulder.displacement.y > 2.8 &&
+              largeLip.displacement.x + .5 < largeFront.displacement.x &&
+              largeCrest.displacement.x >= -1.1 * largeSwellHeight,
+          "a large swell must have a broad shoulder and an overturning crest within the solver "
+          "interval");
+    constexpr double landingTime = 2.72, lipX = -7.56;
+    const auto landingLip = SampleCoastalBreaker({lipX, 0}, landingTime, largeSwellHeight);
+    const double noseX = lipX + landingLip.displacement.x;
+    const auto receivingWater =
+        SampleCoastalBreaker({noseX - .24, 0}, landingTime, largeSwellHeight);
+    Check(landingLip.displacement.x < -2 && landingLip.foam > .7 &&
+              std::abs(landingLip.displacement.y - receivingWater.displacement.y) < .35,
+          "the plunging lip must reach the water below while the crest is still folded");
+    const auto spreadingFoam = SampleCoastalBreaker({-10.5, 0}, 3, largeSwellHeight);
+    const auto fadingEdge = SampleCoastalBreaker({-13.999, 0}, 3, largeSwellHeight);
+    Check(spreadingFoam.foam > .5 && spreadingFoam.displacement.y < .24 &&
+              fadingEdge.displacement.Dot(fadingEdge.displacement) < 1e-8,
+          "the large breaker must leave low spreading foam and fade smoothly at the strip edge");
+    const auto runup = SampleCoastalBreaker({-11, 0}, 2.9, 1.28f);
+    Check(runup.displacement.y < .18 && runup.foam > .45,
+          "foam must move onto the shoreward side after the crest falls");
+    const auto boundary = SampleCoastalBreaker({0, 32}, 2.4, 1.28f);
+    const auto inactive = SampleCoastalBreaker({-3.52, 0}, 2, 0);
+    Check(boundary.displacement.Dot(boundary.displacement) == 0 && boundary.foam == 0 &&
+              inactive.displacement.Dot(inactive.displacement) == 0,
+          "the breaker must fade out by the end of the coastal strip and allow disabling");
+
+    for (float height : {0.f, 1.28f, largeSwellHeight, 4.f})
+        for (double time : {-253.28, 0., 2., 2.72, 3.1, 258.72})
+            for (double z : {-31., -23.5, -8., 0., 12., 30., 31.})
+                for (double x = -14.5; x <= 16.5; x += .25)
+                    Check(SampleCoastalBreakerHorizontal({x, z}, time, height) ==
+                              SampleCoastalBreaker({x, z}, time, height).displacement.x,
+                          "the position-only query must match full breaker deformation");
+}
+
 } // namespace
 
 int main() {
     try {
         TestSpectrum();
+        TestCoastalBreaker();
         TestBuoyancy();
         std::cout << "Ocean FFT, surface queries, Jacobian foam and Jolt buoyancy verified\n";
         return 0;

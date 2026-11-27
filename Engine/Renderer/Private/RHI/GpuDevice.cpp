@@ -158,7 +158,11 @@ bool GpuDevice::EndFrame() {
 }
 
 bool GpuDevice::SetVSync(bool enabled) {
-    return backend_ && backend_->SetVSync(enabled);
+    return SetVSyncInterval(enabled ? 1u : 0u);
+}
+
+bool GpuDevice::SetVSyncInterval(uint32 interval) {
+    return backend_ && backend_->SetVSyncInterval(interval);
 }
 
 void GpuDevice::NotifyResize() {

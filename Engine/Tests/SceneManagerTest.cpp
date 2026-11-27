@@ -174,6 +174,9 @@ void TestInheritanceAndInstances(const fs::path& directory) {
     settings.render3D.environmentIntensity = 2.5f;
     settings.render3D.environmentPath = "../Assets/new.hdr";
     settings.render3D.showSkybox = true;
+    settings.render3D.screenSpaceAntialiasing = true;
+    settings.render3D.temporalAntialiasing = true;
+    settings.render3D.rayTracing.waterReflections = true;
     Check(source.SetSettings(settings), "updated settings are valid");
     Save(source, file);
     Check(manager.RefreshInstances(target, error), "inheritance refresh succeeds: " + error);
@@ -190,9 +193,18 @@ void TestInheritanceAndInstances(const fs::path& directory) {
               render.sun.color.x == .4f && render.sun.color.y == .7f &&
               render.sun.direction.x == 0 && render.sun.direction.y == 1 && !render.shadows,
           "rendering settings inherit independently while local overrides survive");
+    Check(render.screenSpaceAntialiasing && render.temporalAntialiasing &&
+              render.rayTracing.waterReflections,
+          "inherited antialiasing and water reflections follow source changes");
     auto overriddenSettings = target.GetSettings();
     overriddenSettings.exposure = .3f;
+    overriddenSettings.render3D.screenSpaceAntialiasing = false;
+    overriddenSettings.render3D.temporalAntialiasing = false;
+    overriddenSettings.render3D.rayTracing.waterReflections = false;
     Check(target.SetSettings(overriddenSettings), "local settings override configures");
+    const auto savedTarget = directory / "Scenes/derived.lux";
+    Save(target, savedTarget);
+    Check(target.Deserialize(Utf8(savedTarget)), "saved inherited scene reloads");
     settings.exposure = 2.5f;
     settings.clearColor.x = .7f;
     Check(source.SetSettings(settings), "source updates an independent settings field");
@@ -200,6 +212,10 @@ void TestInheritanceAndInstances(const fs::path& directory) {
     Check(manager.RefreshInstances(target, error) && target.GetSettings().exposure == .3f &&
               target.GetSettings().clearColor.x == .7f,
           "settings inherit field-by-field without overwriting local overrides");
+    const auto& refreshedRender = target.GetSettings().render3D;
+    Check(!refreshedRender.screenSpaceAntialiasing && !refreshedRender.temporalAntialiasing &&
+              !refreshedRender.rayTracing.waterReflections,
+          "local antialiasing and water reflection overrides survive save, reload, and refresh");
     const auto group = target.CreateEntity("editor group").GetId();
     Check(target.SetParent(root, group, false), "an inherited root can be organized into a group");
     settings.clearColor.y = .6f;

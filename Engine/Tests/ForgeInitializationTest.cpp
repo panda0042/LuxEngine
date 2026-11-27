@@ -97,6 +97,60 @@ private:
     ULONG_PTR* slot_ = nullptr;
     ULONG_PTR original_ = 0;
 };
+
+bool TestSwapChainRecovery(HMODULE module, const LuxForgeApi& api, LuxForgeDevice* device) {
+    const auto failNext = reinterpret_cast<void (*)()>(
+        GetProcAddress(module, "LuxForgeTestFailNextSwapChainCreation"));
+    if (!failNext) {
+        std::puts("Missing swap chain failure hook");
+        return false;
+    }
+    uint32_t width = 0, height = 0;
+    api.size(device, &width, &height);
+    const uint32_t resizeWidth = width + 16, resizeHeight = height + 16;
+    failNext();
+    const bool resizeFailed = !api.resize(device, resizeWidth, resizeHeight) &&
+                              std::strstr(api.lastError(device), "Swap chain could not be resized");
+    api.size(device, &width, &height);
+    if (!resizeFailed || width || height || !api.resize(device, resizeWidth, resizeHeight)) {
+        std::printf("Swap chain resize recovery failed: %s\n", api.lastError(device));
+        return false;
+    }
+
+    api.size(device, &width, &height);
+    if (!width || !height)
+        return false;
+    const uint32_t recoveredWidth = width, recoveredHeight = height;
+    failNext();
+    const bool vsyncFailed =
+        !api.setVSync(device, 1) && std::strstr(api.lastError(device), "VSync change failed");
+    api.size(device, &width, &height);
+    if (!vsyncFailed || width || height || !api.resize(device, recoveredWidth, recoveredHeight)) {
+        std::printf("Swap chain VSync recovery failed: %s\n", api.lastError(device));
+        return false;
+    }
+
+    LuxForgeStats before = {}, after = {};
+    api.stats(device, &before);
+    if (!api.setVSync(device, 0))
+        return false;
+    api.stats(device, &after);
+    if (before.swapchainRecreations != 2 ||
+        before.swapchainRecreations != after.swapchainRecreations)
+        return false;
+
+    failNext();
+    if (api.setVSync(device, 1) || !api.setVSync(device, 1)) {
+        std::printf("Swap chain VSync retry failed: %s\n", api.lastError(device));
+        return false;
+    }
+    api.stats(device, &after);
+    const bool ready = after.swapchainRecreations == 3 &&
+                       api.beginFrame(device) == LUX_FORGE_FRAME_READY &&
+                       api.clear(device, 0, 0, 0, 1) && api.endFrame(device);
+    std::printf("%s: swap chain resize and VSync failure recovery\n", ready ? "PASS" : "FAIL");
+    return ready;
+}
 } // namespace
 
 int main() {
@@ -148,6 +202,24 @@ int main() {
         }
     }
     passed = passed && g_FailedDeviceCalls >= 8;
+    const auto failAfterDepth = reinterpret_cast<void (*)()>(
+        GetProcAddress(module, "LuxForgeTestFailDeviceCheckAfterDepthTarget"));
+    if (!failAfterDepth) {
+        std::puts("Missing late initialization failure hook");
+        passed = false;
+    } else {
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            failAfterDepth();
+            char error[512] = {};
+            auto* device = api->create(&desc, error, sizeof(error));
+            passed = !device &&
+                     std::strstr(error, "GPU device was lost after depth target creation") &&
+                     passed;
+            std::printf("Injected depth target device loss %d: %s\n", attempt + 1, error);
+            if (device)
+                api->destroy(device);
+        }
+    }
     char error[512] = {};
     auto* device = api->create(&desc, error, sizeof(error));
     if (!device) {
@@ -157,6 +229,7 @@ int main() {
         LuxForgeInfo info = {};
         api->getInfo(device, &info);
         std::printf("Recovered GPU: %s (%s)\n", info.deviceName, info.apiName);
+        passed = TestSwapChainRecovery(module, *api, device) && passed;
         api->destroy(device);
     }
     DestroyWindow(window);

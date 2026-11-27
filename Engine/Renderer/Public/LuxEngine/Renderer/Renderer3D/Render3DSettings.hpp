@@ -25,10 +25,11 @@ struct RayTracingSettings {
     float indirectStrength = .35f;
     bool restirDirect = false;
     bool restirIndirect = false;
+    bool waterReflections = false;
 
     bool Enabled() const {
         return shadows || reflections || refractions || indirectDiffuse || restirDirect ||
-               restirIndirect;
+               restirIndirect || waterReflections;
     }
 };
 

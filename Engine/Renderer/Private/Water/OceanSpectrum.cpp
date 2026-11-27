@@ -1,3 +1,4 @@
+#include "../Forge/Shaders/LuxCoastalBreaker.h"
 #include <LuxEngine/Renderer/Water/OceanSpectrum.hpp>
 #include <algorithm>
 #include <array>
@@ -35,6 +36,11 @@ bool InRange(double value, double min, double max) {
     return value >= min && value <= max;
 }
 
+bool ValidCoastalBreakerInput(Vec2 xz, double time, float height) {
+    return std::isfinite(xz.x) && std::isfinite(xz.y) && std::isfinite(time) &&
+           InRange(height, 0, 4.0);
+}
+
 bool Finite(Vec3 value) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
@@ -52,11 +58,18 @@ Vec3 UpwardNormal(const Vec3& direction) {
 }
 
 bool Valid(const OceanSpectrumSettings& s) {
+    const int32 half = static_cast<int32>(std::min(s.resolution, 256u) / 2);
+    const bool validSwells = std::ranges::all_of(s.swells, [half](const OceanSwell& wave) {
+        return InRange(wave.amplitude, 0, 8) && std::isfinite(wave.phase) &&
+               (wave.amplitude == 0 ||
+                ((wave.modeX || wave.modeZ) && wave.modeX > -half && wave.modeX < half &&
+                 wave.modeZ > -half && wave.modeZ < half));
+    });
     return s.resolution >= 8 && s.resolution <= 256 && std::has_single_bit(s.resolution) &&
            InRange(s.patchLength, 1, 10000) && InRange(s.windSpeed, 0, 80) &&
            InRange(s.spectrumAmplitude, 0, .04) && InRange(s.choppiness, 0, 4) &&
            InRange(s.foamThreshold, 0, 1) && InRange(s.foamSoftness, .001, 1) &&
-           InRange(std::hypot(s.windDirection.x, s.windDirection.y), 1e-6, 1e6);
+           InRange(std::hypot(s.windDirection.x, s.windDirection.y), 1e-6, 1e6) && validSwells;
 }
 
 } // namespace
@@ -74,7 +87,11 @@ struct OceanSpectrum::State {
                 bitReverse[i] = (bitReverse[i] << 1) | (value & 1);
         }
 
-        if (settings.windSpeed == 0 || settings.spectrumAmplitude == 0)
+        const bool windActive = settings.windSpeed > 0 && settings.spectrumAmplitude > 0;
+        active = windActive || std::ranges::any_of(settings.swells, [](const OceanSwell& wave) {
+                     return wave.amplitude > 0;
+                 });
+        if (!active)
             return;
         const double step = Tau / settings.patchLength;
         const Vec2 wind = settings.windDirection *
@@ -96,16 +113,18 @@ struct OceanSpectrum::State {
                 const double magnitude = step * std::sqrt(radiusSquared);
                 angularFrequencies[radiusSquared] = std::sqrt(Gravity * magnitude);
                 const Vec2 direction{step * ix / magnitude, step * iz / magnitude};
-                const auto alongWind = direction.x * wind.x + direction.y * wind.y;
-                const double largeWave = magnitude * windLength;
-                const double smallWave = magnitude * damping;
-                const double spectrum =
-                    settings.spectrumAmplitude * alongWind * alongWind *
-                    std::exp(-1 / (largeWave * largeWave) - smallWave * smallWave) /
-                    std::pow(magnitude, 4) * (alongWind < 0 ? .07 : 1);
-                const double radius = std::sqrt(-std::log(uniform()) * spectrum) * step;
                 auto& mode = modes[Index(x, z)];
-                mode.seed = std::polar(radius, Tau * uniform());
+                if (windActive) {
+                    const auto alongWind = direction.x * wind.x + direction.y * wind.y;
+                    const double largeWave = magnitude * windLength;
+                    const double smallWave = magnitude * damping;
+                    const double spectrum =
+                        settings.spectrumAmplitude * alongWind * alongWind *
+                        std::exp(-1 / (largeWave * largeWave) - smallWave * smallWave) /
+                        std::pow(magnitude, 4) * (alongWind < 0 ? .07 : 1);
+                    const double radius = std::sqrt(-std::log(uniform()) * spectrum) * step;
+                    mode.seed = std::polar(radius, Tau * uniform());
+                }
                 mode.frequency = radiusSquared;
                 // The Nyquist coordinate mirrors onto itself. A derivative multiplier on
                 // that axis would break Hermitian symmetry and leak into the packed field.
@@ -113,6 +132,10 @@ struct OceanSpectrum::State {
                                         z == n / 2 ? 0 : direction.y * settings.choppiness};
             }
         }
+        for (const auto& wave : settings.swells)
+            if (wave.amplitude > 0)
+                modes[Index(static_cast<uint32>(wave.modeX), static_cast<uint32>(wave.modeZ))]
+                    .seed += std::polar(.5 * wave.amplitude, wave.phase);
     }
 
     size_t Index(uint32 x, uint32 z) const {
@@ -161,7 +184,7 @@ struct OceanSpectrum::State {
     }
 
     void Evolve(double time) {
-        if (settings.windSpeed == 0 || settings.spectrumAmplitude == 0)
+        if (!active)
             return;
         for (size_t i = 0; i < angularFrequencies.size(); ++i) {
             const double frequency = angularFrequencies[i];
@@ -253,6 +276,7 @@ struct OceanSpectrum::State {
     }
 
     OceanSpectrumSettings settings;
+    bool active = false;
     uint32 n, mask;
     double spacing;
     std::vector<WaveMode> modes;
@@ -264,6 +288,39 @@ struct OceanSpectrum::State {
 };
 
 OceanSpectrum::OceanSpectrum() = default;
+
+OceanSample SampleCoastalBreaker(Vec2 xz, double time, float height) {
+    if (!ValidCoastalBreakerInput(xz, time, height))
+        return {};
+    const auto evaluate = [&](double x, double z, double at) {
+        return CoastalBreakerDetail::EvaluateCoastalBreaker(
+            static_cast<float>(x), static_cast<float>(z),
+            static_cast<float>(std::remainder(at, 256.)), height);
+    };
+    constexpr double delta = .025;
+    const auto wave = evaluate(xz.x, xz.y, time);
+    const auto x = evaluate(xz.x + delta, xz.y, time);
+    const auto z = evaluate(xz.x, xz.y + delta, time);
+    const auto future = evaluate(xz.x, xz.y, time + delta);
+    const Vec3 across{delta + x.horizontal - wave.horizontal, x.height - wave.height, 0};
+    const Vec3 along{z.horizontal - wave.horizontal, z.height - wave.height, delta};
+    return {
+        {wave.horizontal, wave.height, 0},
+        UpwardNormal(along.Cross(across)),
+        {(future.horizontal - wave.horizontal) / delta, (future.height - wave.height) / delta, 0},
+        1,
+        wave.foam};
+}
+
+double SampleCoastalBreakerHorizontal(Vec2 xz, double time, float height) {
+    if (!ValidCoastalBreakerInput(xz, time, height))
+        return 0;
+    return CoastalBreakerDetail::EvaluateCoastalBreakerSample(
+               static_cast<float>(xz.x), static_cast<float>(xz.y),
+               static_cast<float>(std::remainder(time, 256.)), height, true)
+        .horizontal;
+}
+
 OceanSpectrum::~OceanSpectrum() = default;
 OceanSpectrum::OceanSpectrum(OceanSpectrum&&) noexcept = default;
 OceanSpectrum& OceanSpectrum::operator=(OceanSpectrum&&) noexcept = default;

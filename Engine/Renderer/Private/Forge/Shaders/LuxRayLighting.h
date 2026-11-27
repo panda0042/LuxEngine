@@ -94,13 +94,17 @@ LuxRayHit TraceClosestSurface(float3 origin, float3 direction) {
         const float4 material = gRayInstances[instance];
         const float4 optics = gRayInstances[instance + 1u];
         const uint primitive = asuint(optics.z) + RayQueryPrimitiveIndex(hit);
-        const float3 local = gRayTriangles[primitive].xyz;
+        const float4 surfaceData = gRayTriangles[primitive];
+        const float3 local = surfaceData.xyz;
         const float3 geometricNormal = float3(dot(gRayInstances[instance + 2u].xyz, local),
                                               dot(gRayInstances[instance + 3u].xyz, local),
                                               dot(gRayInstances[instance + 4u].xyz, local));
         surface.distance = RayQueryRayT(hit);
         surface.normal = SafeDirection(geometricNormal, -direction);
-        surface.base = material.rgb;
+        const uint packedColor = asuint(surfaceData.w);
+        const uint3 vertexColor =
+            (uint3(packedColor, packedColor, packedColor) >> uint3(0u, 10u, 20u)) & 1023u;
+        surface.base = material.rgb * (float3(vertexColor) / 1023.0f);
         surface.metal = material.w;
         surface.roughness = optics.x;
         surface.ior = optics.y;
@@ -149,16 +153,14 @@ float3 ShadeRayHit(float3 position, float3 normal, float3 view, LuxRayHit surfac
 
 // RGB contains incident radiance. W contains the first geometric hit distance or -1
 // for a miss, allowing primary water refraction to retain the opaque-screen fallback.
-float4 TraceRayRadiance(float3 origin, float3 direction, float roughness, uint bounces) {
+float4 TraceRayPath(float3 origin, float3 direction, float roughness, uint bounces,
+                    LuxRayHit surface) {
     float3 radiance = float3(0.0f, 0.0f, 0.0f);
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
-    float firstDistance = -1.0f;
+    const float firstDistance = surface.distance;
     for (uint bounce = 0u; bounce < bounces; ++bounce) {
-        const LuxRayHit surface = TraceClosestSurface(origin, direction);
         if (surface.distance < 0.0f)
             break;
-        if (bounce == 0u)
-            firstDistance = surface.distance;
         const float3 hitPosition = origin + direction * surface.distance;
         const bool entering = dot(surface.normal, direction) < 0.0f;
         const float3 normal = entering ? surface.normal : -surface.normal;
@@ -185,9 +187,16 @@ float4 TraceRayRadiance(float3 origin, float3 direction, float roughness, uint b
         }
         origin = BiasRayOrigin(hitPosition, normal, direction);
         roughness = max(roughness, surface.roughness);
+        if (bounce + 1u < bounces)
+            surface = TraceClosestSurface(origin, direction);
     }
     radiance += throughput * RayEnvironment(direction, roughness);
     return float4(radiance, firstDistance);
+}
+
+float4 TraceRayRadiance(float3 origin, float3 direction, float roughness, uint bounces) {
+    return TraceRayPath(origin, direction, roughness, bounces,
+                        TraceClosestSurface(origin, direction));
 }
 
 uint PixelRayHash(uint value) {

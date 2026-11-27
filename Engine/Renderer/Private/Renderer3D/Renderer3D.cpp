@@ -1,7 +1,7 @@
 #include "LuxVirtualShadowPages.hpp"
 #include "RHI/RenderBackend.hpp"
+#include "RHI/TextureMipChain.hpp"
 #include "ShadowProjection.hpp"
-#include "TextureMipChain.hpp"
 #include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/Core/Log.hpp>
@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 namespace LuxEngine {
 namespace {
@@ -113,6 +114,7 @@ struct Renderer3D::Context::Impl {
     bool active = false;
     Vec3 camera;
     Render3DSettings settings;
+    std::optional<CoastalWaterFrame> coastalWater;
     float exposure = 1;
     PerspectiveCamera sceneCamera;
     std::optional<Mat4> shadowProjection;
@@ -413,6 +415,7 @@ void Renderer3D::Context::Shutdown() {
     impl_->textures.clear();
     impl_->warnings.clear();
     impl_->settings = {};
+    impl_->coastalWater.reset();
     impl_->exposure = 1.0f;
     impl_->lastError.clear();
     impl_->textureBytes = 0;
@@ -457,6 +460,13 @@ void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera, const Dire
 void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera,
                                      const Render3DSettings& settings, float exposure,
                                      std::span<const PointLight> points) {
+    BeginScene(camera, settings, exposure, points, std::nullopt);
+}
+
+void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera,
+                                     const Render3DSettings& settings, float exposure,
+                                     std::span<const PointLight> points,
+                                     std::optional<CoastalWaterFrame> coastalWater) {
     if (!impl_)
         impl_ = std::make_unique<Impl>();
     if (impl_->active)
@@ -464,8 +474,12 @@ void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera,
     if (!ValidateRender3DSettings(settings) || !std::isfinite(exposure) || exposure < 0 ||
         exposure > 16)
         throw std::invalid_argument("Invalid 3D rendering settings");
+    if (coastalWater && !(coastalWater->timeSeconds >= 0 && coastalWater->timeSeconds <= 256 &&
+                          coastalWater->breakerHeight >= 0 && coastalWater->breakerHeight <= 4))
+        throw std::invalid_argument("Invalid coastal water frame");
     impl_->settings = settings;
     impl_->settings.mode = Render3DMode::Pbr;
+    impl_->coastalWater = coastalWater;
     impl_->exposure = exposure;
     impl_->camera = camera.GetPosition();
     impl_->sceneCamera = camera;
@@ -507,6 +521,7 @@ void Renderer3D::Context::EndScene() {
     if (!impl_ || !impl_->active)
         return;
     impl_->active = false;
+    const auto coastalWater = std::exchange(impl_->coastalWater, std::nullopt);
     if ((!impl_->modern || !impl_->modern->DrawCount()) && !impl_->settings.showSkybox)
         return;
     if (auto state = impl_->LockValidState()) {
@@ -514,7 +529,8 @@ void Renderer3D::Context::EndScene() {
             impl_->modern = state->CreateScene3DRenderer();
         if (impl_->modern) {
             std::string error;
-            impl_->modern->Render(impl_->sceneCamera, impl_->settings, impl_->exposure, error);
+            impl_->modern->Render(impl_->sceneCamera, impl_->settings, impl_->exposure,
+                                  coastalWater ? &*coastalWater : nullptr, error);
             impl_->Report("render3D", error);
         }
     }
@@ -526,6 +542,7 @@ void Renderer3D::Context::AbortScene() {
     if (!impl_)
         return;
     impl_->active = false;
+    impl_->coastalWater.reset();
     if (impl_->modern)
         impl_->modern->ClearDraws();
     impl_->frameTextures.clear();
@@ -579,8 +596,19 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
         return;
     const auto model = transform * Mat4::Translate(mesh.origin_);
     const auto relativeModel = Mat4::Translate(impl_->camera * -1) * model;
+    Vec3 breakerMargin;
+    if (mesh.ocean_ && material.water && impl_->coastalWater &&
+        impl_->coastalWater->breakerHeight > 0) {
+        const double height = impl_->coastalWater->breakerHeight;
+        const auto inverse = relativeModel.InverseAffine();
+        const auto sweep = inverse.TransformDirection({1.1 * height, 0, 0});
+        const auto lift = inverse.TransformDirection({0, 1.6 * height, 0});
+        breakerMargin = {std::abs(sweep.x) + std::abs(lift.x), std::abs(sweep.y) + std::abs(lift.y),
+                         std::abs(sweep.z) + std::abs(lift.z)};
+    }
     const bool shadowOnly =
-        OutsideClipVolume(impl_->viewProjection * relativeModel, mesh.minimum_, mesh.maximum_);
+        OutsideClipVolume(impl_->viewProjection * relativeModel, mesh.minimum_ - breakerMargin,
+                          mesh.maximum_ + breakerMargin);
     const bool outsideShadow =
         impl_->shadowProjection &&
         OutsideClipVolume(*impl_->shadowProjection * relativeModel, mesh.minimum_, mesh.maximum_);
@@ -1084,12 +1112,18 @@ void Renderer3D::BeginScene(const PerspectiveCamera& camera, const DirectionalLi
 
 void Renderer3D::BeginScene(const PerspectiveCamera& camera, const Render3DSettings& settings,
                             float exposure, std::span<const PointLight> points) {
+    BeginScene(camera, settings, exposure, points, std::nullopt);
+}
+
+void Renderer3D::BeginScene(const PerspectiveCamera& camera, const Render3DSettings& settings,
+                            float exposure, std::span<const PointLight> points,
+                            std::optional<CoastalWaterFrame> coastalWater) {
     if (t_ActiveContext3D) {
-        t_ActiveContext3D->BeginScene(camera, settings, exposure, points);
+        t_ActiveContext3D->BeginScene(camera, settings, exposure, points, coastalWater);
         return;
     }
     std::lock_guard<std::recursive_mutex> lock(s_DefaultContext3DMutex);
-    DefaultContext3D().BeginScene(camera, settings, exposure, points);
+    DefaultContext3D().BeginScene(camera, settings, exposure, points, coastalWater);
 }
 
 void Renderer3D::EndScene() {

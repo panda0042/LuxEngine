@@ -31,10 +31,133 @@ float OpaqueDepthAt(float2 uv)
     return LoadTex2D(gOpaqueDepth, NO_SAMPLER, clamp(int2(uv * gScene.frameSize.xy), int2(0, 0), maximum), 0).r;
 }
 
-float3 WaterSurface(MeshOutput In, float3 normal, float3 tint, float roughness, bool frontFacing)
+float4 WaterSceneColor(float2 uv, float surfaceDepth, float referenceDepth, float tolerance,
+                       out float accepted)
+{
+    const float2 position = uv * gScene.frameSize.xy - 0.5f;
+    const float2 basePosition = floor(position);
+    const int2 first = int2(basePosition);
+    const float2 subpixel = position - basePosition;
+    const int2 last = int2(gScene.frameSize.xy) - int2(1, 1);
+    float4 color = float4(0, 0, 0, 0);
+    accepted = 0.0f;
+    UNROLL for (int y = 0; y < 2; ++y)
+    {
+        UNROLL for (int x = 0; x < 2; ++x)
+        {
+            const int2 pixel = clamp(first + int2(x, y), int2(0, 0), last);
+            const float depth = WaterDepth(LoadTex2D(gOpaqueDepth, NO_SAMPLER, pixel, 0).r);
+            const float difference = abs(depth - referenceDepth);
+            if (depth >= surfaceDepth && difference < tolerance) {
+                const float sx = x == 0 ? 1.0f - subpixel.x : subpixel.x;
+                const float sy = y == 0 ? 1.0f - subpixel.y : subpixel.y;
+                const float weight = sx * sy * (1.0f - smoothstep(0.50f * tolerance,
+                                                                  tolerance, difference));
+                color += LoadTex2D(gHdrImage, NO_SAMPLER, pixel, 0) * weight;
+                accepted += weight;
+            }
+        }
+    }
+    return color / max(accepted, 1e-5f);
+}
+
+float WaterFresnel(float cosine, float transmittedCosine, float eta)
+{
+    const float s = (eta * cosine - transmittedCosine) / max(eta * cosine + transmittedCosine, 1e-6f);
+    const float p = (cosine - eta * transmittedCosine) / max(cosine + eta * transmittedCosine, 1e-6f);
+    return saturate(0.5f * (s * s + p * p));
+}
+
+float4 SampleCoastalPlane(float2 uv)
+{
+    return SampleGradTex2D(gNormalTexture, gMaterialAnisotropicRepeat, uv, ddx(uv), ddy(uv));
+}
+
+float3 CoastalDetailNormal(MeshOutput In, float3 waveNormal, out float foamDetail)
+{
+    const float3 tileOrigin = mul(gDraw.model, float4(0, 0, 0, 1)).xyz;
+    const float3 position = (In.world - tileOrigin) / 64.0f;
+    const float time = (gScene.waterReflection.w - 1.0f) / 256.0f;
+    float3 weights = waveNormal * waveNormal;
+    weights *= weights;
+    weights /= max(weights.x + weights.y + weights.z, 1e-5f);
+    const float4 alongX = SampleCoastalPlane(position.yz + float2(0.37f, 0.71f) + time * float2(2, -1));
+    const float4 alongY = SampleCoastalPlane(position.xz + float2(0.50f, 0.50f) + time * float2(3, -1));
+    const float4 alongZ = SampleCoastalPlane(position.xy + float2(0.13f, 0.59f) + time * float2(3, 2));
+    const float2 slopeX = alongX.xy * 2.0f - 1.0f;
+    const float2 slopeY = alongY.xy * 2.0f - 1.0f;
+    const float2 slopeZ = alongZ.xy * 2.0f - 1.0f;
+    const bool projectX = weights.x > max(weights.y, weights.z);
+    const bool projectY = !projectX && weights.y >= weights.z;
+    const float3 dx = ddx(position), dy = ddy(position);
+    const float2 plane = projectX ? position.yz : (projectY ? position.xz : position.xy);
+    const float2 planeDx = projectX ? dx.yz : (projectY ? dx.xz : dx.xy);
+    const float2 planeDy = projectX ? dy.yz : (projectY ? dy.xz : dy.xy);
+    const float scale = 10.0f;
+    const float2 bubbleUv = plane * scale + float2(0.17f, 0.31f) + time * float2(11, -3);
+    const float4 bubbles = SampleGradTex2D(gNormalTexture, gMaterialAnisotropicRepeat, bubbleUv,
+                                           planeDx * scale, planeDy * scale);
+    const float projection = smoothstep(0.50f, 0.72f, max(weights.x, max(weights.y, weights.z)));
+    const float2 ripple = (bubbles.xy * 2.0f - 1.0f) * projection;
+    foamDetail = lerp(0.22f, bubbles.a, projection);
+    const float whiteWater = smoothstep(0.20f, 0.78f, 1.0f - In.color.a);
+    const float3 fineGradient = projectX ? float3(0, ripple.x, ripple.y) :
+                              (projectY ? float3(ripple.x, 0, ripple.y) :
+                                          float3(ripple.x, ripple.y, 0));
+    const float3 gradient = weights.x * float3(0, slopeX.x, slopeX.y) +
+                            weights.y * float3(slopeY.x, 0, slopeY.y) +
+                            weights.z * float3(slopeZ.x, slopeZ.y, 0) +
+                            lerp(0.32f, 0.08f, whiteWater) * fineGradient;
+    const float3 tangentGradient = gradient - waveNormal * dot(gradient, waveNormal);
+    const float normalStrength = gDraw.materialOptions.x * lerp(1.10f, 0.57f, whiteWater);
+    return SafeDirection(waveNormal + normalStrength * tangentGradient, waveNormal);
+}
+
+float CoastalCaustic(float2 uv, float phase)
+{
+    const float2 wave = uv * 6.2831853f;
+    const float first = cos(dot(wave, float2(47, 33)) +
+                            1.1f * sin(dot(wave, float2(13, 23)) + phase));
+    const float second = cos(dot(wave, float2(-39, 41)) +
+                             0.93f * cos(dot(wave, float2(21, -16)) - phase));
+    return smoothstep(0.25f, 0.92f, first) * smoothstep(-0.15f, 0.86f, second);
+}
+
+#ifdef LUX_RAY_QUERY
+float ReprojectWaterHit(float3 position, float3 normal, out float3 color)
+{
+    color = float3(0, 0, 0);
+    const float4 clip = mul(gDraw.viewProjection, float4(position, 1));
+    if (clip.w <= 0.0f)
+        return 0.0f;
+    const float2 uv = clip.xy / clip.w * float2(0.5f, -0.5f) + 0.5f;
+    if (uv.x < 0.0f || uv.y < 0.0f || uv.x >= 1.0f || uv.y >= 1.0f)
+        return 0.0f;
+    const float depth = OpaqueDepthAt(uv);
+    const float3 view = SafeDirection(position - gLights.camera.xyz, gScene.forward.xyz);
+    const float pixelScale = max(length(gScene.right.xyz) * gScene.frameSize.z,
+                                 length(gScene.up.xyz) * gScene.frameSize.w);
+    const float tolerance = min(0.08f, 0.006f + pixelScale * clip.w /
+                                              max(abs(dot(view, normal)), 0.2f));
+    const float difference = abs(WaterDepth(depth) - clip.w);
+    if (depth >= 1.0f || difference > tolerance)
+        return 0.0f;
+    const float edge = min(min(uv.x, 1.0f - uv.x), min(uv.y, 1.0f - uv.y));
+    float accepted;
+    color = WaterSceneColor(uv, clip.w - tolerance, clip.w, tolerance, accepted).rgb;
+    return smoothstep(0.0f, 0.065f, edge) * accepted;
+}
+#endif
+
+float3 WaterSurface(MeshOutput In, float3 normal, float3 waveNormal, float3 tint, float roughness,
+                    float foamDetail, bool frontFacing)
 {
     const float3 v = SafeDirection(gLights.camera.xyz - In.world, normal);
     const float3 n = dot(normal, v) >= 0.0f ? normal : -normal;
+    const bool coastalWater = gScene.waterReflection.w >= 1.0f;
+    const bool coast = coastalWater && frontFacing;
+    const float3 environment = gScene.environment.rgb * gScene.environment.w;
+    const float4 deepWater = float4(tint * environment, 1.0f);
     const float2 uv = In.position.xy * gScene.frameSize.zw;
     const float pointDepth = WaterDepth(In.position.z);
     // Convert a depth difference along the view axis to a distance along this pixel ray.
@@ -42,78 +165,189 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 tint, float roughness, 
     const float sceneDepth = OpaqueDepthAt(uv);
     const float thickness = clamp((WaterDepth(sceneDepth) - pointDepth) * rayScale, 0.0f, 32.0f);
     const float ior = gDraw.water.w;
-    const float3 refraction = refract(-v, n, frontFacing ? rcp(ior) : ior);
+    const float eta = frontFacing ? rcp(ior) : ior;
+    const float3 faceWave = dot(waveNormal, v) >= 0.0f ? waveNormal : -waveNormal;
+    const float3 transmissionNormal = coast ? SafeDirection(lerp(faceWave, n, 0.28f), n) : n;
+    const float3 refraction = refract(-v, transmissionNormal, eta);
     const bool totalInternalReflection = dot(refraction, refraction) <= 1e-10f;
     const float3 bend = totalInternalReflection ? float3(0.0f, 0.0f, 0.0f) : refraction + v;
     const float2 screenBend = float2(dot(bend, normalize(gScene.right.xyz)),
                                    -dot(bend, normalize(gScene.up.xyz)));
     float2 sampleUV = saturate(uv + screenBend * min(0.05f, thickness * 0.025f));
+    const float verticalDepth = thickness * max(v.y, 0.055f);
+    float projectedDepth = 0.0f;
+    if (coast && !totalInternalReflection) {
+        const float travel = min(verticalDepth / max(-refraction.y, 0.16f), 32.0f);
+        const float4 hitClip = mul(gDraw.viewProjection, float4(In.world + refraction * travel, 1));
+        if (hitClip.w > 0.0f) {
+            const float2 projected = hitClip.xy / hitClip.w * float2(0.5f, -0.5f) + 0.5f;
+            const float2 border = min(projected, 1.0f - projected);
+            const float confidence = smoothstep(0.0f, 0.06f, min(border.x, border.y));
+            sampleUV = lerp(uv, saturate(projected), confidence);
+            projectedDepth = hitClip.w;
+        }
+    }
     float sampleDepth = OpaqueDepthAt(sampleUV);
     // Reject displaced samples from geometry in front of this water point.
-    if (WaterDepth(sampleDepth) < pointDepth)
+    float sceneSampleDepth = WaterDepth(sampleDepth);
+    if (sceneSampleDepth < pointDepth)
     {
         sampleUV = uv;
         sampleDepth = sceneDepth;
+        sceneSampleDepth = WaterDepth(sceneDepth);
     }
-    float refractedDepth = clamp((WaterDepth(sampleDepth) - pointDepth) * rayScale, 0.0f, 32.0f);
-    const float4 opaque = SampleLvlTex2D(gHdrImage, gSamplerTrilinearClamp, sampleUV, 0.0f);
-    const float3 environment = gScene.environment.rgb * gScene.environment.w;
-    float3 reflected = gScene.options.y > 0.5f
-        ? SampleLvlTexCube(gSpecularEnv, gSamplerTrilinearClamp, RotateEnvironment(reflect(-v, n)),
-                           roughness * 7.0f).rgb * gScene.environment.w
-        : environment;
+    const float pathScale = coast
+        ? rcp(max(dot(refraction, gScene.forward.xyz), 0.17f)) : rayScale;
+    float refractedDepth = clamp((sceneSampleDepth - pointDepth) * pathScale, 0.0f, 32.0f);
+    float4 opaque;
+    const int2 originPixel = int2(In.position.xy);
+    const bool emptyOrigin = coast && sceneDepth >= 1.0f;
+    const float2 shift = abs((sampleUV - uv) * gScene.frameSize.xy);
+    if (coast && sampleDepth >= 1.0f) {
+        opaque = deepWater;
+    } else if (max(shift.x, shift.y) <= 0.001f) {
+        opaque = emptyOrigin ? deepWater : LoadTex2D(gHdrImage, NO_SAMPLER, originPixel, 0);
+    } else {
+        float accepted;
+        const float tolerance = max(0.035f, sceneSampleDepth * 0.018f);
+        opaque = WaterSceneColor(sampleUV, pointDepth, sceneSampleDepth, tolerance, accepted);
+        if (accepted <= 1e-5f) {
+            opaque = emptyOrigin ? deepWater : LoadTex2D(gHdrImage, NO_SAMPLER, originPixel, 0);
+            refractedDepth = thickness;
+        }
+    }
+    if (projectedDepth > 0.0f) {
+        const float travelDepth = max(projectedDepth - pointDepth, 0.0f);
+        const float tolerance = max(0.16f, 0.25f * travelDepth + 0.017f * pointDepth);
+        const float error = abs(sceneSampleDepth - projectedDepth);
+        const float confidence = 1.0f - smoothstep(tolerance, 2.6f * tolerance, error);
+        if (confidence < 0.999f) {
+            const float4 original = emptyOrigin ? deepWater :
+                LoadTex2D(gHdrImage, NO_SAMPLER, originPixel, 0);
+            opaque = lerp(original, opaque, confidence);
+            refractedDepth = lerp(thickness, refractedDepth, confidence);
+        }
+    }
+    const float3 reflection = reflect(-v, n);
+    float3 envDirection = reflection;
+    if (coast)
+        envDirection.y = 0.017f + 0.5f * (reflection.y + sqrt(reflection.y * reflection.y + 0.0016f));
     const bool customReflection = gScene.waterReflection.x > 0.5f;
+    float3 reflected = environment;
     if (customReflection) {
-        const float3 direction = reflect(-v, n);
         const float c = cos(gScene.waterReflection.y);
         const float s = sin(gScene.waterReflection.y);
-        const float3 rotated = float3(c * direction.x + s * direction.z, direction.y,
-                                      c * direction.z - s * direction.x);
+        const float3 rotated = float3(c * envDirection.x + s * envDirection.z, envDirection.y,
+                                      c * envDirection.z - s * envDirection.x);
         reflected = SampleLvlTexCube(gWaterSpecularEnv, gSamplerTrilinearClamp, rotated,
                                      roughness * 7.0f).rgb * gScene.waterReflection.z;
+    } else if (gScene.options.y > 0.5f) {
+        reflected = SampleLvlTexCube(gSpecularEnv, gSamplerTrilinearClamp,
+                                     RotateEnvironment(envDirection), roughness * 7.0f).rgb *
+                    gScene.environment.w;
     }
     float3 behind = opaque.rgb + (1.0f - opaque.a) * environment;
     float f0 = (ior - 1.0f) / (ior + 1.0f);
     f0 *= f0;
     const float fresnel = totalInternalReflection
-        ? 1.0f : f0 + (1.0f - f0) * pow(1.0f - saturate(dot(n, v)), 5.0f);
+        ? 1.0f : WaterFresnel(saturate(dot(transmissionNormal, v)),
+                              saturate(-dot(transmissionNormal, refraction)), eta);
 #ifdef LUX_RAY_QUERY
     const uint bounces = uint(gScene.rayOptions.z);
-    if (RayEffect(2u))
+    const float rayWeight = 1.0f - smoothstep(0.72f, 1.0f, pointDepth / gScene.rayOptions.y);
+    const float reflectionWeight = rayWeight * (1.0f - smoothstep(0.24f, 0.55f, roughness));
+    if ((RayEffect(2u) || RayEffect(128u)) && reflectionWeight > 0.0f)
     {
-        const float3 direction = reflect(-v, n);
-        const float3 origin = BiasRayOrigin(In.world, n, direction);
-        const float4 traced = TraceRayRadiance(origin, direction, roughness, bounces);
-        if (!customReflection || traced.w >= 0.0f)
-            reflected = traced.rgb;
+        const float3 origin = BiasRayOrigin(In.world, n, reflection);
+        const LuxRayHit hit = TraceClosestSurface(origin, reflection);
+        if (!customReflection || hit.distance >= 0.0f) {
+            const float4 traced = TraceRayPath(origin, reflection, roughness, bounces, hit);
+            reflected = lerp(reflected, traced.rgb, reflectionWeight);
+        }
     }
-    if (RayEffect(4u) && !totalInternalReflection)
+    if (RayEffect(4u) && rayWeight > 0.0f && fresnel < 0.99f)
     {
         const float3 origin = BiasRayOrigin(In.world, n, refraction);
-        const float4 traced = TraceRayRadiance(origin, refraction, roughness, bounces);
-        if (traced.w >= 0.0f)
+        const LuxRayHit hit = TraceClosestSurface(origin, refraction);
+        if (hit.distance >= 0.0f)
         {
-            behind = traced.rgb;
-            refractedDepth = clamp(traced.w, 0.0f, 32.0f);
+            float3 transmittedColor = float3(0, 0, 0);
+            const float confidence = hit.transmission > 0.0f ? 0.0f :
+                ReprojectWaterHit(origin + refraction * hit.distance, hit.normal, transmittedColor);
+            if (confidence < 0.999f)
+                transmittedColor = lerp(TraceRayPath(origin, refraction, roughness, bounces, hit).rgb,
+                                        transmittedColor, confidence);
+            const float hitWeight = rayWeight * (coast ? lerp(0.56f, 1.0f, confidence) : 1.0f);
+            behind = lerp(behind, transmittedColor, hitWeight);
+            refractedDepth = lerp(refractedDepth, min(hit.distance, 32.0f), hitWeight);
         }
     }
 #endif
-    const float3 transmittance = exp(-gDraw.water.xyz * refractedDepth);
+    const float waterOpacity = saturate(gDraw.albedo.a);
+    const float3 transmittance = lerp(float3(1, 1, 1),
+        exp(-gDraw.water.xyz * (frontFacing ? refractedDepth : 0.0f)), waterOpacity);
     const float3 sun = gLights.colorIntensity.rgb * max(gLights.colorIntensity.w, 0.0f);
     const float sunVisibility = SurfaceDirectionalShadow(In.world, n);
     const float backlight = pow(saturate(dot(v, gLights.direction.xyz)), 3.0f);
     // Approximate forward scatter in the shallow layer and around crests.
     const float crest = saturate(1.0f - In.color.a);
     const float scattering = backlight * (exp(-0.5f * refractedDepth) + crest) * 0.12f;
-    const float3 inscatter = tint * (environment + sun * scattering * sunVisibility);
+    float3 inscatter = tint * (environment + sun * scattering * sunVisibility);
+    float shore = sceneDepth < 0.999999f ? 1.0f - smoothstep(0.02f, 0.18f, thickness) : 0.0f;
+    float foam = saturate((shore * 0.75f + crest) * lerp(0.35f, 1.0f, foamDetail));
+    float turbulence = foam;
+    if (coastalWater)
+    {
+        const float visibleBottom = coast && sceneDepth < 0.999999f ? 1.0f : 0.0f;
+        const float refractedVerticalDepth = refractedDepth * max(-refraction.y, 0.0f);
+        const float shallows = visibleBottom * (1.0f - smoothstep(0.35f, 2.7f, verticalDepth));
+        const float phase = (gScene.waterReflection.w - 1.0f) * (6.2831853f * 41.0f / 256.0f);
+        if (pointDepth < 44.0f && shallows > 0.0f && !totalInternalReflection)
+        {
+            const float2 bottom = In.uv + refraction.xz * (refractedDepth / 64.0f);
+            const float caustic = CoastalCaustic(bottom, phase);
+            const float focus = shallows * exp(-0.7f * refractedVerticalDepth) * sunVisibility *
+                                (1.0f - smoothstep(12.0f, 44.0f, pointDepth));
+            behind *= 1.0f + 0.22f * focus * caustic;
+        }
+        const float waveFace = gDraw.coastalBreaker.z > 0.0f
+            ? smoothstep(0.30f, 1.10f, In.options.w) : 0.0f;
+        const float lip = waveFace * (1.0f - smoothstep(0.25f, 0.92f, abs(faceWave.y)));
+        inscatter *= 1.0f + 0.28f * shallows + 0.23f * crest * sunVisibility +
+                     waveFace * 0.20f * sunVisibility;
+        inscatter += sun * tint * lip * (0.035f + 0.28f * backlight) * sunVisibility;
+        shore = visibleBottom * (1.0f - smoothstep(0.06f, 0.55f, verticalDepth));
+        const float breaking = smoothstep(0.08f, 0.88f, crest);
+        const float surfaceSlope = smoothstep(0.31f, 0.82f, abs(faceWave.y));
+        const float coverage = saturate(breaking * lerp(0.73f, 1.0f, surfaceSlope) + 0.72f * shore);
+        const float freshFoam = smoothstep(0.36f, 0.98f, crest) *
+                                (0.68f + 0.32f * lip);
+        const float film = lerp(foamDetail, 0.22f, smoothstep(18.0f, 60.0f, pointDepth));
+        const float aeration = lerp(0.09f, 1.65f, freshFoam);
+        const float membranes = lerp(1.78f, 1.16f, freshFoam) * film *
+                                lerp(0.45f, 1.0f, surfaceSlope);
+        foam = 1.0f - exp2(-coverage * (aeration + membranes));
+        turbulence = saturate(max(foam, 0.69f * breaking + 0.24f * shore));
+    }
     const float3 transmitted = behind * transmittance + inscatter * (1.0f - transmittance);
-    const float3 glint = BrdfWithDielectricF0(float3(0, 0, 0), 0.0f, roughness, n, v,
+    const float glintRoughness = coastalWater
+        ? max(roughness, lerp(0.089f, 0.45f, turbulence)) : roughness;
+    const float glintStrength = coastalWater ? (1.0f - turbulence) * (1.0f - turbulence) : 1.0f;
+    const float3 glint = BrdfWithDielectricF0(float3(0, 0, 0), 0.0f, glintRoughness, n, v,
                                               -gLights.direction.xyz, f0) * sun * sunVisibility;
-    const float shore = sceneDepth < 0.999999f ? 1.0f - smoothstep(0.02f, 0.18f, thickness) : 0.0f;
-    const float foam = saturate(shore * 0.75f + crest);
+    const float3 foamNormal = coastalWater ? faceWave : n;
     const float3 foamLight = (environment + sun * sunVisibility *
-                             saturate(dot(n, -gLights.direction.xyz)) * 0.25f) * float3(0.88f, 0.94f, 1.0f);
-    return lerp(lerp(transmitted, reflected, fresnel) + glint, foamLight, foam);
+                             saturate(dot(foamNormal, -gLights.direction.xyz)) *
+                             (coastalWater ? 0.32f : 0.25f)) *
+                             float3(0.88f, 0.94f, 1.0f);
+    const float3 surface = lerp(lerp(transmitted, reflected, fresnel) + glint * glintStrength,
+                               foamLight, foam);
+    if (frontFacing)
+        return surface;
+    const float cameraWaterPath = length(gLights.camera.xyz - In.world);
+    const float3 cameraTransmittance = lerp(float3(1, 1, 1),
+        exp(-gDraw.water.xyz * cameraWaterPath), waterOpacity);
+    return surface * cameraTransmittance + inscatter * (1.0f - cameraTransmittance);
 }
 
 // Port of Shaders/Modern.frag.hlsl (Basic.frag.hlsl with lit = true and MODERN_3D): writes linear
@@ -137,12 +371,18 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
     const float3 faceNormal = authoredNormal ? In.normal : cross(ddy(In.world), ddx(In.world));
     const float lenSq = dot(faceNormal, faceNormal);
     float3 normal = lenSq > 1e-10f ? faceNormal * rsqrt(lenSq) : float3(0.0f, 1.0f, 0.0f);
-    if ((maps & (1u | 32u)) != 0u)
+    const float3 waveNormal = normal;
+    float foamDetail = 1.0f;
+    const bool coastalWater = gDraw.water.w > 1.0f && gScene.waterReflection.w >= 1.0f;
+    if (coastalWater && (maps & 1u) != 0u)
+        normal = CoastalDetailNormal(In, waveNormal, foamDetail);
+    else if ((maps & (1u | 32u)) != 0u)
     {
         const float2 uvx = ddx(In.uv), uvy = ddy(In.uv);
         const float3 worldx = ddx(In.world), worldy = ddy(In.world);
         const float determinant = uvx.x * uvy.y - uvx.y * uvy.x;
-        if (abs(determinant) > 1e-8f)
+        const float gradientProduct = dot(uvx, uvx) * dot(uvy, uvy);
+        if (gradientProduct > 1e-30f && determinant * determinant > gradientProduct * 1e-6f)
         {
             float3 tangent = (worldx * uvy.y - worldy * uvx.y) / determinant;
             tangent -= normal * dot(normal, tangent);
@@ -152,9 +392,11 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
                 tangent *= rsqrt(tangentLength);
                 const float3 rawBitangent = (worldy * uvx.x - worldx * uvy.x) / determinant;
                 const float3 bitangent = cross(normal, tangent) * (dot(cross(normal, tangent), rawBitangent) < 0.0f ? -1.0f : 1.0f);
-                float3 mapped = (maps & 1u) != 0u
-                    ? SampleMaterial(gNormalTexture, In.uv).xyz * 2.0f - 1.0f
-                    : float3(0, 0, 1);
+                const float4 normalSample = (maps & 1u) != 0u
+                    ? SampleMaterial(gNormalTexture, In.uv)
+                    : float4(0.5f, 0.5f, 1.0f, 1.0f);
+                float3 mapped = normalSample.xyz * 2.0f - 1.0f;
+                foamDetail = normalSample.a;
                 if ((maps & 16u) != 0u) {
                     const float3 layerNormal = (maps & 32u) != 0u
                         ? SampleMaterial(gTerrainNormal, In.uv).xyz * 2.0f - 1.0f
@@ -174,12 +416,13 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
     if (gDraw.water.w > 1.0f)
     {
         const float3 normalDx = ddx(normal), normalDy = ddy(normal);
-        const float variance =
-            min(0.125f * (dot(normalDx, normalDx) + dot(normalDy, normalDy)), 0.0016f);
+        const float variance = min(0.125f * (dot(normalDx, normalDx) + dot(normalDy, normalDy)),
+                                   coastalWater ? 0.005f : 0.0016f);
         const float roughness = clamp(In.options.z, 0.045f, 1.0f);
         const float alpha = roughness * roughness;
         const float filteredRoughness = sqrt(sqrt(saturate(alpha * alpha + variance)));
-        const float3 surface = WaterSurface(In, normal, color.rgb, filteredRoughness, frontFacing);
+        const float3 surface = WaterSurface(In, normal, waveNormal, color.rgb, filteredRoughness,
+                                             foamDetail, frontFacing);
         RETURN(float4(clamp(surface, 0.0f, 65504.0f), 1.0f));
     }
     const float3 v = SafeDirection(gLights.camera.xyz - In.world, normal);
