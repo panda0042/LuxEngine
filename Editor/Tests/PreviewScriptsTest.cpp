@@ -245,21 +245,31 @@ int main(int argc, char** argv) {
         const auto externalEdit = external.CreateEntity("External file edit").GetId();
         Check(external.Serialize(originalPath), "simulate an external scene file update");
         LuxUI::Timer dismissSaveError;
-        bool showedSaveError = false;
+        bool showedCriticalError = false;
+        LuxUI::String saveErrorText;
         LuxUI::Object::connect(&dismissSaveError, &LuxUI::Timer::timeout, &window, [&] {
             if (auto* dialog =
                     qobject_cast<LuxUI::Dialog*>(LuxUI::Application::activeModalWidget())) {
-                showedSaveError = dialog->windowTitle() == LUX_UI_TEXT("저장 실패");
+                if (auto* message = qobject_cast<LuxUI::MessageBox*>(dialog)) {
+                    showedCriticalError = message->icon() == LuxUI::MessageBox::Critical;
+                    saveErrorText = message->text();
+                }
                 dialog->accept();
             }
         });
         dismissSaveError.start(5);
         trigger("saveScene");
         dismissSaveError.stop();
-        Check(showedSaveError && window.LastLogMessage().contains(LUX_UI_TEXT("외부에서 변경")) &&
-                  window.GetRuntimeScene() == running && view->IsPaused() && document.IsDirty() &&
-                  document.GetPath() == originalPath && document.GetScene().IsAlive(localEdit),
-              "a save conflict preserves the paused preview and unsaved authored edits");
+        const auto conflict = LUX_UI_TEXT("외부에서 변경");
+        Check(showedCriticalError, "a save conflict displays a critical message box");
+        Check(saveErrorText.contains(conflict), "the message box reports the external file change");
+        Check(LuxUI::String::fromUtf8(document.GetLastError()).contains(conflict),
+              "the document rejects saving over a different disk revision");
+        Check(window.GetRuntimeScene() == running, "a save conflict preserves the runtime scene");
+        Check(view->IsPaused(), "a save conflict preserves the preview pause state");
+        Check(document.IsDirty(), "a save conflict keeps the document dirty");
+        Check(document.GetPath() == originalPath, "a save conflict preserves the authored path");
+        Check(document.GetScene().IsAlive(localEdit), "a save conflict retains the local edit");
         Scene diskAfterConflict;
         Check(diskAfterConflict.Deserialize(originalPath) &&
                   diskAfterConflict.GetComponent<TagComponent>(externalEdit).tag ==
