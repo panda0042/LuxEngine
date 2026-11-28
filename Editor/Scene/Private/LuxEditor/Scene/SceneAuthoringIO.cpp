@@ -37,7 +37,7 @@ struct PathEdits {
 
     void Apply(LuxEngine::Scene& scene) {
         if (settings && !scene.SetSettings(*settings))
-            throw std::runtime_error("Invalid rebased environment path");
+            throw std::runtime_error("Invalid rebased rendering asset path");
         for (auto& [field, value] : fields)
             field->swap(value);
     }
@@ -72,19 +72,22 @@ void RebaseSceneReferences(LuxEngine::Scene& scene, const fs::path& owner,
     };
     const auto& currentSettings = scene.GetSettings();
     if (!currentSettings.render3D.environmentPath.empty() ||
-        !currentSettings.render3D.waterReflection.environmentPath.empty()) {
+        !currentSettings.render3D.waterReflection.environmentPath.empty() ||
+        !currentSettings.render3D.colorGradingLut.empty()) {
         auto settings = currentSettings;
         for (auto* path : {&settings.render3D.environmentPath,
-                           &settings.render3D.waterReflection.environmentPath})
+                           &settings.render3D.waterReflection.environmentPath,
+                           &settings.render3D.colorGradingLut})
             if (!path->empty())
                 *path = resolve(*path);
         if (settings.render3D.environmentPath != currentSettings.render3D.environmentPath ||
             settings.render3D.waterReflection.environmentPath !=
-                currentSettings.render3D.waterReflection.environmentPath) {
+                currentSettings.render3D.waterReflection.environmentPath ||
+            settings.render3D.colorGradingLut != currentSettings.render3D.colorGradingLut) {
             if (edits)
                 edits->settings = std::move(settings);
             else if (!scene.SetSettings(settings))
-                throw std::runtime_error("Invalid rebased environment path");
+                throw std::runtime_error("Invalid rebased rendering asset path");
         }
     }
     for (auto entity : scene.GetEntities()) {
@@ -99,12 +102,11 @@ void RebaseSceneReferences(LuxEngine::Scene& scene, const fs::path& owner,
             rebase(value->clip.modelPath);
             rebase(value->clip.spriteSheet);
         }
-        if (auto* mesh = entity.TryGetComponent<LuxEngine::MeshRendererComponent>())
-            for (auto* resource :
-                 {&mesh->meshPath, &mesh->material.baseColorTexture, &mesh->material.normalTexture,
-                  &mesh->material.metallicTexture, &mesh->material.roughnessTexture,
-                  &mesh->material.occlusionTexture})
+        if (auto* mesh = entity.TryGetComponent<LuxEngine::MeshRendererComponent>()) {
+            rebase(mesh->meshPath);
+            for (auto* resource : LuxEngine::MaterialTexturePaths(mesh->material))
                 rebase(*resource);
+        }
 
         auto* reference = entity.TryGetComponent<LuxEngine::SceneReferenceComponent>();
         if (!reference)

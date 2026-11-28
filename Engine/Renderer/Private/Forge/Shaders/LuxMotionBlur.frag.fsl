@@ -1,0 +1,93 @@
+#include "LuxTemporalParams.h"
+#include "LuxTemporal.srt.h"
+
+STRUCT(ShutterInput)
+{
+    DATA(float4, position, SV_Position);
+    DATA(float2, uv, TEXCOORD0);
+};
+
+float ShutterDepth(int2 pixel) {
+    const float z = LoadTex2D(gCurrentDepth, NO_SAMPLER, pixel, 0).r;
+    return z < 1.0f ? -gTemporal.up.w / max(-gTemporal.right.w - z, 1e-7f) : 1e12f;
+}
+
+float2 ShutterVelocity(float2 uvMotion) {
+    const float2 velocity = (uvMotion - gTemporal.jitterDelta.xy) * gTemporal.viewport.xy * gTemporal.history.z;
+    return velocity * min(1.0f, 24.0f / max(length(velocity), 0.001f));
+}
+
+float2 CameraShutterVelocity(int2 pixel, float depth) {
+    const float2 topUv = (float2(pixel) + 0.5f) / gTemporal.viewport.xy;
+    const float2 ndc = (topUv - 0.5f) * float2(2.0f, -2.0f) - gTemporal.viewport.zw;
+    const float3 ray = gTemporal.forward.xyz + ndc.x * gTemporal.right.xyz + ndc.y * gTemporal.up.xyz;
+    // Sky samples rotate with the camera but are invariant under translation.
+    const float4 previousInput = depth < 1e11f ? float4(ray * depth, 1.0f) : float4(ray, 0.0f);
+    const float4 last = mul(gTemporal.previousViewProjection, previousInput);
+    if (last.w <= 0.0f)
+        return float2(0, 0);
+    return ShutterVelocity(last.xy / last.w * float2(0.5f, -0.5f) + 0.5f - topUv);
+}
+
+ROOT_SIGNATURE(DefaultRootSignature)
+float4 PS_MAIN(ShutterInput In)
+{
+    INIT_MAIN;
+    const int2 pixel = int2(In.position.xy);
+    const int2 size = int2(gTemporal.viewport.xy);
+    const float4 color = LoadTex2D(gCurrentColor, NO_SAMPLER, pixel, 0);
+    const float4 motionSample = LoadTex2D(gMotionVectors, NO_SAMPLER, pixel, 0);
+    if (gTemporal.history.z <= 0.0f || motionSample.w < -0.5f || color.a <= 0.0f)
+        RETURN(color);
+    const float depth = ShutterDepth(pixel);
+    const float2 own = motionSample.w > 0.5f ? ShutterVelocity(motionSample.xy) : CameraShutterVelocity(pixel, depth);
+    float2 direction = own;
+    // At an uncovered background pixel, a nearby moving foreground can still cover
+    // part of its shutter interval. Find trajectories which actually cross this pixel.
+    const float tolerance = max(0.02f, depth * .015f);
+    for (int ring = 1; ring <= 2; ++ring) {
+        for (int axis = 0; axis < 8; ++axis) {
+            const int x = axis < 2 ? 0 : (axis < 5 ? -1 : 1);
+            const int y = axis == 0 || axis == 2 || axis == 5 ? -1 : (axis == 3 || axis == 6 ? 0 : 1);
+            const int2 candidate = clamp(pixel + int2(x, y) * (ring == 1 ? 3 : 10), int2(0, 0), size - 1);
+            const float4 neighbor = LoadTex2D(gMotionVectors, NO_SAMPLER, candidate, 0);
+            if (neighbor.w <= 0.5f)
+                continue;
+            const float2 v = ShutterVelocity(neighbor.xy);
+            const float2 delta = float2(pixel - candidate);
+            const float t = saturate(dot(delta, v) / max(dot(v, v), .01f));
+            if (length(delta - t * v) < 2.5f && dot(v, v) > dot(direction, direction) &&
+                ShutterDepth(candidate) <= depth + tolerance)
+                direction = v;
+        }
+    }
+    const float speed = length(direction);
+    if (speed <= .65f)
+        RETURN(color);
+    const int taps = min(16, max(3, int(ceil(speed))));
+    float3 sum = color.rgb;
+    float totalWeight = 1.0f;
+    for (int i = 1; i < taps; ++i) {
+        const float fraction = float(i) / float(taps - 1);
+        const int2 q = clamp(int2(floor(float2(pixel) + .5f - direction * fraction)), int2(0, 0), size - 1);
+        const float4 sampleColor = LoadTex2D(gCurrentColor, NO_SAMPLER, q, 0);
+        const float z = ShutterDepth(q);
+        const float4 neighbor = LoadTex2D(gMotionVectors, NO_SAMPLER, q, 0);
+        if (sampleColor.a <= 0.0f || neighbor.w < -0.5f)
+            continue;
+        float3 contribution = color.rgb;
+        if (z < depth - tolerance) {
+            const float2 v = neighbor.w > 0.5f ? ShutterVelocity(neighbor.xy) : CameraShutterVelocity(q, z);
+            const float2 traveled = float2(pixel - q);
+            const float t = saturate(dot(traveled, v) / max(dot(v, v), .01f));
+            if (length(traveled - t * v) < 1.3f)
+                contribution = sampleColor.rgb;
+        } else if (z <= depth + tolerance || dot(own, own) > .5f) {
+            // A moving leading edge exposes its background during a fraction of the shutter.
+            contribution = sampleColor.rgb;
+        }
+        sum += contribution;
+        totalWeight += 1.0f;
+    }
+    RETURN(float4(sum / totalWeight, color.a));
+}

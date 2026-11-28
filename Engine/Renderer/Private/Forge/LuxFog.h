@@ -4,6 +4,8 @@ struct LuxForgeFog {
     Shader* computeShader = nullptr;
     Shader* compositeShader = nullptr;
     Pipeline* computePipeline = nullptr;
+    Shader* hdrShader = nullptr;
+    Pipeline* hdrPipeline = nullptr;
     Pipeline* compositePipeline = nullptr;
     DescriptorSet* computeSet = nullptr;
     DescriptorSet* compositeSet = nullptr;

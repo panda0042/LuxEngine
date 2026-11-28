@@ -1,3 +1,4 @@
+#include <LuxEngine/Renderer/Renderer3D/Decal.hpp>
 // GpuDevice running on The Forge backend (LUX_RENDER_BACKEND=forge): frame loop, clear,
 // capture, resize and vsync. Exit code 77 = skipped (no display), 0 = pass.
 #include <LuxEngine/LuxEngine.hpp>
@@ -2343,6 +2344,244 @@ std::array<int, 4> At(const GpuFrameCapture& c, float fx, float fy) {
     return {p[0], p[1], p[2], p[3]};
 }
 
+void PostProcessing() {
+    Session s(256, 256);
+    if (!s.ok)
+        return Check(false, "postprocessing device available");
+    Renderer3D::Context context(&s.gpu);
+    Renderer3D::ScopedContext scope(context);
+    PerspectiveCamera camera(ToRadians(60), 1, .1f, 100);
+    camera.SetPosition({0, 0, 3});
+    camera.SetTarget({0, 0, 0});
+    Render3DSettings settings;
+    settings.imageBasedLighting = settings.shadows = false;
+    settings.sun.intensity = 0;
+    settings.environmentIntensity = 4;
+    settings.environmentColor = {1, 1, 1};
+    Material3D bright, dark;
+    bright.albedoColor = {1, 1, 1, 1};
+    dark.albedoColor = {.005f, .005f, .005f, 1};
+    float lampWidth = 1.f;
+    const auto capture = [&] {
+        GpuFrameCapture image;
+        Check(CaptureFrame(s, image,
+                           [&] {
+                               s.gpu.Clear(.5f, 0, 0, 1);
+                               Renderer3D::BeginScene(camera, settings, 1);
+                               Renderer3D::DrawCube({0, 0, -2}, {9, 9, .1f}, dark);
+                               Renderer3D::DrawCube({0, 0, 0}, {lampWidth, lampWidth, .1f}, bright);
+                               Renderer3D::EndScene();
+                               return true;
+                           }),
+              "camera postprocessing image captured");
+        return image;
+    };
+    const auto base = capture();
+    if (base.rgba.empty())
+        return;
+    settings.bloomIntensity = 1.f;
+    settings.bloomThreshold = .5f;
+    const auto halo = capture();
+    if (halo.rgba.empty())
+        return;
+    Check(At(halo, .67f, .5f)[0] > At(base, .67f, .5f)[0] + 3,
+          "HDR bloom spreads highlights onto a neighbouring dark surface");
+    settings.physicallyBasedBloom = true;
+    settings.bloomThreshold = 65504; // A thresholded implementation would reject every pixel.
+    const auto scattered = capture();
+    if (scattered.rgba.empty())
+        return;
+    Check(At(scattered, .67f, .5f)[0] > At(base, .67f, .5f)[0] + 3 &&
+              At(scattered, .64f, .5f)[0] < At(base, .64f, .5f)[0],
+          "optical bloom redistributes sub-threshold light from the source to its surround");
+    bright.albedoColor = dark.albedoColor;
+    const auto uniformScatter = capture();
+    settings.bloomIntensity = 0;
+    const auto uniformBase = capture();
+    if (uniformBase.rgba.empty() || uniformScatter.rgba.empty())
+        return;
+    Check(At(uniformScatter, .5f, .5f) == At(uniformBase, .5f, .5f),
+          "energy-conserving bloom leaves constant radiance unchanged");
+    bright.albedoColor = {1, 1, 1, 1};
+    settings.physicallyBasedBloom = false;
+    settings.bloomIntensity = 1;
+    settings.bloomThreshold = .5f;
+    settings.environmentIntensity = 0;
+    bright.emissive = {3, .25, .04};
+    const auto lamp = capture();
+    settings.bloomIntensity = 0;
+    const auto lampWithoutBloom = capture();
+    if (lamp.rgba.empty() || lampWithoutBloom.rgba.empty())
+        return;
+    Check(At(lamp, .5f, .5f)[0] > 175 &&
+              At(lamp, .67f, .5f)[0] > At(lampWithoutBloom, .67f, .5f)[0] + 3,
+          "a self-luminous HDR material blooms with every scene light switched off");
+    settings.environmentIntensity = 4;
+    bright.emissive = {};
+    settings.autoExposure = true;
+    const auto exposed = capture();
+    if (exposed.rgba.empty())
+        return;
+    Check(At(exposed, .75f, .5f)[0] > At(base, .75f, .5f)[0] + 5,
+          "dark surroundings raise metered exposure");
+    settings.environmentIntensity = 40;
+    const auto transition = capture();
+    settings.autoExposure = false;
+    capture(); // A frame without metering invalidates this view's exposure history.
+    settings.autoExposure = true;
+    const auto remetered = capture();
+    if (transition.rgba.empty() || remetered.rgba.empty())
+        return;
+    Check(At(transition, .75f, .5f)[0] > At(remetered, .75f, .5f)[0] + 3,
+          "exposure adapts over time across an abrupt lighting transition");
+    settings.environmentIntensity = 4;
+    settings.autoExposure = false;
+    // Disable the filmic curve so the one-stop ratio is observable after decoding SDR.
+    settings.toneMapping = false;
+    auto& physical = settings.physicalCamera;
+    physical = {true, false, 100, 1.f / 64, 2, 24, 12};
+    const auto iso100 = capture();
+    physical.iso = 200;
+    const auto iso200 = capture();
+    physical.iso = 100;
+    physical.shutterSeconds *= 2;
+    const auto longerShutter = capture();
+    if (iso100.rgba.empty() || iso200.rgba.empty() || longerShutter.rgba.empty())
+        return;
+    const auto linearCentre = [&](const GpuFrameCapture& im) {
+        const auto encoded = At(im, .5f, .5f)[0] / 255.;
+        return std::pow((encoded + .055) / 1.055, 2.4);
+    };
+    Check(std::abs(linearCentre(iso200) / linearCentre(iso100) - 2.) < .06 &&
+              At(iso200, .5f, .5f) == At(longerShutter, .5f, .5f),
+          "doubling ISO or shutter duration gives one stop of linear scene exposure");
+    physical = {};
+    settings.toneMapping = true;
+    settings.localExposure = 1;
+    const auto local = capture();
+    if (local.rgba.empty())
+        return;
+    Check(
+        At(local, .75f, .5f)[0] > At(base, .75f, .5f)[0] + 4 &&
+            At(local, .5f, .5f)[0] < At(base, .5f, .5f)[0] - 4 &&
+            std::abs(At(local, .67f, .5f)[0] - At(local, .85f, .5f)[0]) < 4,
+        "local exposure lifts the shadow plane and restrains the highlight across its silhouette");
+    settings.localExposure = 0;
+    settings.focusDistance = 20;
+    settings.depthOfFieldRadius = 16;
+    const auto defocused = capture();
+    if (defocused.rgba.empty())
+        return;
+    size_t blurredEdges = 0;
+    for (size_t i = 0; i < base.rgba.size(); i += 4)
+        if (std::abs(int(defocused.rgba[i]) - base.rgba[i]) > 4)
+            ++blurredEdges;
+    Check(blurredEdges > 10 && At(base, .5f, .5f) == At(defocused, .5f, .5f),
+          "depth of field blurs the out-of-focus edge and preserves uniform interiors");
+    lampWidth = .05f;
+    bright.emissive = {6, 2, 1};
+    settings.apertureBlades = 3;
+    const auto triangle = capture();
+    settings.apertureBlades = 8;
+    const auto octagon = capture();
+    if (triangle.rgba.empty() || octagon.rgba.empty())
+        return;
+    size_t pupilPixels = 0;
+    for (size_t i = 0; i < octagon.rgba.size(); i += 4)
+        if (std::abs(int(triangle.rgba[i]) - octagon.rgba[i]) > 4)
+            ++pupilPixels;
+    Check(pupilPixels > 4, "aperture blade count changes the footprint of a defocused HDR point");
+    lampWidth = 1;
+    bright.emissive = {};
+    settings.depthOfFieldRadius = 0;
+    lampWidth = .055f;
+    bright.emissive = {2, 1, .2};
+    const auto pinpoint = capture();
+    physical.depthOfField = true;
+    physical.sensorHeightMm = 100;
+    physical.fNumber = .8f;
+    settings.focusDistance = 2.95f; // The front face is 5 cm ahead of the cube centre.
+    const auto planeFocus = capture();
+    settings.focusDistance = 20;
+    const auto openLens = capture();
+    physical.fNumber = 8;
+    const auto stoppedDown = capture();
+    if (pinpoint.rgba.empty() || planeFocus.rgba.empty() || openLens.rgba.empty() ||
+        stoppedDown.rgba.empty())
+        return;
+    const auto footprintError = [&](const GpuFrameCapture& im) {
+        uint64 difference = 0;
+        for (size_t i = 0; i < im.rgba.size(); i += 4)
+            difference += std::abs(int(im.rgba[i]) - int(pinpoint.rgba[i]));
+        return difference;
+    };
+    const auto openDifference = footprintError(openLens);
+    Check(openDifference > footprintError(planeFocus) + 50 &&
+              openDifference > footprintError(stoppedDown) + 50,
+          "thin-lens point spread grows off the focus plane and shrinks as the iris stops down");
+    physical = {};
+    lampWidth = 1;
+    bright.emissive = {};
+    const auto file = std::filesystem::temp_directory_path() /
+                      ("lux-grade-" + std::to_string(SDL_GetTicksNS()) + ".cube");
+    {
+        std::ofstream cube(file);
+        cube << "LUT_3D_SIZE 2\n";
+        for (unsigned i = 0; i < 8; ++i)
+            cube << "0 1 0\n";
+    }
+    settings.colorGradingLut = file.string();
+    const auto graded = capture();
+    settings.fog.density = .1f;
+    const auto fogged = capture();
+    std::error_code ignored;
+
+    for (const auto* image : {&graded, &fogged}) {
+        if (image->rgba.empty())
+            return;
+        const auto pixel = At(*image, .5f, .5f);
+        Check(pixel[0] < 3 && pixel[1] > 252 && pixel[2] < 3,
+              "color grading applies the authored LUT after fog and tone mapping");
+    }
+    settings.fog.density = 0;
+    const auto otherFile = file.parent_path() / ("blue-" + file.filename().string());
+    {
+        std::ofstream cube(otherFile);
+        cube << "LUT_3D_SIZE 2\n";
+        for (unsigned i = 0; i < 8; ++i)
+            cube << "0 0 1\n";
+    }
+    const auto threeViews = [&](GpuFrameCapture& image) {
+        return CaptureFrame(s, image, [&] {
+            s.gpu.Clear(0, 0, 0, 1);
+            const std::array<std::string, 3> paths{otherFile.string(), "", file.string()};
+            for (size_t i = 0; i < paths.size(); ++i) {
+                settings.colorGradingLut = paths[i];
+                Renderer3D::BeginScene(camera, settings, 1);
+                Renderer3D::DrawCube({double(i) - 1, 0, 0}, {.45, .45, .1}, bright);
+                Renderer3D::EndScene();
+            }
+            return true;
+        });
+    };
+    GpuFrameCapture views;
+    const bool first = threeViews(views);
+    const auto coldUploads = s.gpu.GetFrameStats().uploadBytes;
+    const bool second = threeViews(views);
+    const auto warmUploads = s.gpu.GetFrameStats().uploadBytes;
+    std::filesystem::remove(otherFile, ignored);
+    std::filesystem::remove(file, ignored);
+    Check(first && second && coldUploads >= warmUploads + 32,
+          "alternating two LUTs and bypass in one frame uploads only the cold LUT once");
+    if (second) {
+        const auto blue = At(views, .21f, .5f), green = At(views, .79f, .5f);
+        Check(blue[2] > 252 && blue[1] < 3 && green[1] > 252 && green[2] < 3,
+              "separate scene passes retain distinct authored LUTs in one frame");
+    }
+    Check(context.GetLastAssetError().empty() && s.gpu.GetCounters().validationErrors == 0,
+          "postprocessing completed with clean renderer diagnostics");
+}
+
 void Scene3D() {
     std::printf("[scene3d]\n");
     GpuDeviceConfig config;
@@ -2945,6 +3184,41 @@ void MaterialTextures() {
     Check(coloredPlane.UpdateVertices(coloredVertices), "colored plane updates");
     const auto red = render({}, &coloredPlane);
     Check(red[0] > red[1] + 30, "3D mesh update preserves vertex color");
+    // A painted 50% transition must reveal the tops of individual materials.
+    auto reliefVertices = vertices;
+    for (auto& vertex : reliefVertices)
+        vertex.color.w = .5f;
+    Mesh3D reliefPlane;
+    Check(reliefPlane.Upload(&session.gpu, reliefVertices, indices),
+          "terrain relief plane uploads");
+    settings.mode = Render3DMode::Pbr;
+    settings.environmentColor = {1, 1, 1};
+    settings.sun.intensity = 0;
+    Material3D terrain;
+    terrain.alphaMode = MaterialAlphaMode::Opaque;
+    terrain.baseColorTexture = image("red.tga", {255, 0, 0, 255});
+    terrain.heightTexture = black;
+    terrain.terrainLayer = TerrainLayer3D{image("green.tga", {0, 255, 0, 255}), "", "", white, 0};
+    const auto painted = render(terrain, &reliefPlane);
+    terrain.terrainLayer->heightBlend = 1;
+    const auto meadow = render(terrain, &reliefPlane);
+    std::swap(terrain.heightTexture, terrain.terrainLayer->heightTexture);
+    const auto gravel = render(terrain, &reliefPlane);
+    Check(std::abs(int(painted[0]) - painted[1]) < 10 && meadow[1] > meadow[0] + 60 &&
+              gravel[0] > gravel[1] + 60,
+          "material height selects the higher terrain layer");
+    terrain.terrainLayer.reset();
+    terrain.baseColorTexture =
+        std::string(reinterpret_cast<const char*>(repeatUtf8.data()), repeatUtf8.size());
+    terrain.heightTexture = black;
+    camera.SetPosition({1.3, 0, 2});
+    const auto flat = render(terrain);
+    terrain.parallaxDepth = .45f;
+    const auto inset = render(terrain);
+    terrain.heightTexture = white;
+    const auto top = render(terrain);
+    Check(inset[0] > flat[0] + 12 && inset[1] + 12 < flat[1] && difference(flat, top) <= 2,
+          "oblique POM offsets a recessed texel while white relief stays on the mesh surface");
     Check(context.GetLastAssetError().empty(), "material texture loading has no hidden errors");
 }
 
@@ -3906,6 +4180,155 @@ void RadianceCascades() {
           "radiance cascade resources and barriers validate");
 }
 
+void TemporalDetails() {
+    Session session(128, 128, {}, true);
+    if (!session.ok)
+        return Check(false, "temporal detail session");
+    Renderer3D::Context context(&session.gpu);
+    PerspectiveCamera camera(ToRadians(45), 1, .1, 50);
+    camera.SetPosition({0, 0, 3});
+    camera.SetTarget({0, 0, 0});
+    Render3DSettings settings;
+    settings.imageBasedLighting = settings.shadows = settings.toneMapping = false;
+    settings.temporalAntialiasing = true;
+    settings.environmentColor = {1, 1, 1};
+    settings.sun.intensity = 0;
+    const std::array<Vertex3D, 4> quad{{{{-.5, -.5, 0}, {0, 0, 1}, {0, 0}},
+                                        {{.5, -.5, 0}, {0, 0, 1}, {1, 0}},
+                                        {{.5, .5, 0}, {0, 0, 1}, {1, 1}},
+                                        {{-.5, .5, 0}, {0, 0, 1}, {0, 1}}}};
+    const std::array<uint32, 6> indices{0, 1, 2, 0, 2, 3};
+    Mesh3D mesh;
+    GpuTexture texture;
+    std::array<uint8, 64 * 4> pixels;
+    for (size_t x = 0; x < 64; ++x) {
+        const auto gray = uint8(120 + 72 * std::sin(double(x) * 1.5707963268));
+        pixels[4 * x] = pixels[4 * x + 1] = pixels[4 * x + 2] = gray;
+        pixels[4 * x + 3] = 255;
+    }
+    if (!mesh.Upload(&session.gpu, quad, indices) ||
+        !texture.Initialize(&session.gpu, 64, 1, pixels.data()))
+        return Check(false, "temporal detail chart uploads");
+    Material3D gray;
+    gray.alphaMode = MaterialAlphaMode::Opaque;
+    Material3D red = gray;
+    red.albedoColor = {1, .003f, .003f, 1};
+    red.motionInstance = 42;
+    GpuFrameCapture capture;
+    const auto draw = [&](double actorX) {
+        return CaptureFrame(session, capture, [&] {
+            if (!session.gpu.Clear(0, 0, 0, 1))
+                return false;
+            context.BeginScene(camera, settings, 1);
+            context.DrawMesh(mesh, Mat4::Scale({2.6, 2.6, 1}), gray, &texture);
+            // The depth offset is smaller than the rejection epsilon. Motion identity
+            // must separate the foreground and the newly visible chart.
+            context.DrawMesh(mesh, Mat4::Translate({actorX, 0, .015}) * Mat4::Scale({.52, .65, 1}),
+                             red);
+            context.EndScene();
+            return context.GetLastAssetError().empty();
+        });
+    };
+    const auto contrast = [](const GpuFrameCapture& image) {
+        double total = 0;
+        for (unsigned y = 20; y < 40; ++y)
+            for (unsigned x = 16; x < 111; ++x) {
+                const size_t i = 4 * (y * image.width + x);
+                total += std::abs(int(image.rgba[i]) - int(image.rgba[i + 4]));
+            }
+        return total / (95 * 20);
+    };
+    settings.temporalSharpness = 0;
+    for (unsigned i = 0; i < 8; ++i)
+        if (!draw(-.4))
+            return Check(false, "unsharpened chart capture");
+    const double baseline = contrast(capture);
+    settings.temporalSharpness = 1;
+    for (unsigned i = 0; i < 8; ++i)
+        if (!draw(-.4))
+            return Check(false, "sharpened chart capture");
+    const double sharpened = contrast(capture);
+    if (!draw(.4))
+        return Check(false, "disocclusion capture");
+    unsigned trail = 0;
+    for (unsigned y = 54; y < 74; ++y)
+        for (unsigned x = 37; x < 50; ++x) {
+            const size_t i = 4 * (y * capture.width + x);
+            trail += unsigned(std::abs(int(capture.rgba[i]) - int(capture.rgba[i + 1])));
+        }
+    std::printf("  chart contrast %.2f -> %.2f; revealed region mean chroma %.3f\n", baseline,
+                sharpened, double(trail) / 260);
+    Check(baseline > 1 && sharpened > baseline + .4 && sharpened < baseline * 1.6,
+          "bounded temporal sharpening increases measured chart contrast");
+    Check(trail <= 260 && session.gpu.GetFrameStats().temporalHistoryPasses == 1,
+          "a newly exposed near-coplanar surface rejects the moving red silhouette");
+    Check(session.gpu.GetCounters().validationErrors == 0, "temporal quality resources validate");
+}
+
+void ObjectMotion() {
+    Session session(128, 128);
+    if (!session.ok)
+        return Check(false, "session for object motion");
+    Renderer3D::Context context(&session.gpu);
+    PerspectiveCamera camera(ToRadians(45), 1, .1, 30);
+    camera.SetPosition({0, 0, 3});
+    camera.SetTarget({0, 0, 0});
+    Render3DSettings settings;
+    settings.imageBasedLighting = settings.shadows = settings.toneMapping = false;
+    settings.temporalAntialiasing = true;
+    settings.environmentColor = {1, 1, 1};
+    settings.sun.intensity = 0;
+    Material3D material;
+    material.albedoColor = {1, .01f, .01f, 1};
+    material.alphaMode = MaterialAlphaMode::Opaque;
+    material.motionInstance = 17;
+    Material3D backdrop;
+    backdrop.albedoColor = {0, 0, 1, 1};
+    backdrop.alphaMode = MaterialAlphaMode::Opaque;
+    GpuFrameCapture capture;
+    const auto draw = [&](double x) {
+        return CaptureFrame(session, capture, [&] {
+            if (!session.gpu.Clear(0, 0, 0, 1))
+                return false;
+            context.BeginScene(camera, settings, 1);
+            context.DrawCube({0, 0, -1}, {10, 10, .1}, backdrop);
+            context.DrawCube({x, 0, 0}, {.5, .5, .5}, material);
+            context.EndScene();
+            return context.GetLastAssetError().empty();
+        });
+    };
+    if (!draw(-.48) || !draw(.48))
+        return Check(false, "rigid motion captures");
+    const auto stats = session.gpu.GetFrameStats();
+    const auto left = At(capture, .30f, .5f), right = At(capture, .70f, .5f);
+    Check(stats.temporalHistoryPasses == 1 && stats.objectMotionDraws == 1,
+          "TAA uses a persistent instance across a transform change");
+    Check(left[0] < 10 && right[0] > right[1] + 60,
+          "translated object occupies its new position and uncovers its old background");
+    settings.temporalAntialiasing = false;
+    if (!draw(.48))
+        return Check(false, "sharp moving subject reference");
+    const auto sharp = capture;
+    settings.motionBlurShutter = 1.f;
+    if (!draw(0) || !draw(.48))
+        return Check(false, "independent shutter frames capture");
+    unsigned mixed = 0;
+    for (size_t i = 0; i < capture.rgba.size(); i += 4) {
+        if (capture.rgba[i] > 25 && capture.rgba[i + 2] > 25 &&
+            std::abs(int(capture.rgba[i]) - int(sharp.rgba[i])) > 15)
+            ++mixed;
+    }
+    Check(
+        session.gpu.GetFrameStats().temporalResolvePasses == 0 &&
+            session.gpu.GetFrameStats().objectMotionDraws == 1 && mixed > 20 &&
+            At(capture, .2f, .2f) == At(sharp, .2f, .2f),
+        "standalone motion blur smears the moving silhouette while retaining the static backdrop");
+    Check(draw(.48) && capture.rgba == sharp.rgba,
+          "stationary shutter frame returns to the sharp reference");
+    Check(session.gpu.GetCounters().validationErrors == 0,
+          "motion target and depth transitions validate");
+}
+
 void RestirLighting() {
     std::printf("[restir_lighting]\n");
     GpuDeviceConfig config;
@@ -3960,6 +4383,7 @@ void RestirLighting() {
     if (!capture(baseline, lights, blocker))
         return Check(false, "baseline point-lit frame captures");
     settings.rayTracing.restirDirect = true;
+    settings.rayTracing.temporalRestir = false;
     if (!capture(restirDI, lights, blocker))
         return Check(false, "ReSTIR DI frame captures");
     const auto reference = At(baseline, .5f, .5f);
@@ -4000,8 +4424,97 @@ void RestirLighting() {
                 original[2], indirect[0], indirect[1], indirect[2], stats.restirPasses);
     Check(stats.restirPasses == 1 && indirect[0] > indirect[1] + 50,
           "ReSTIR GI transfers off-screen secondary diffuse radiance");
+    settings.rayTracing.temporalRestir = true;
+    settings.rayTracing.denoiser = true;
+    settings.rayTracing.reflections = true;
+    GpuFrameCapture filtered;
+    if (!capture(filtered, {}, redWall) || !capture(filtered, {}, redWall))
+        return Check(false, "temporal denoised indirect frames capture");
+    stats = session.gpu.GetFrameStats();
+    const auto denoised = At(filtered, .5f, .5f);
+    Check(stats.rayDenoiserPasses == 1 && stats.temporalRestirPasses == 1 &&
+              denoised[0] > denoised[1] + 45,
+          "reprojected reservoirs and denoised GI retain offscreen color without TAA");
+    camera.SetPosition({30, 0, 3});
+    camera.SetTarget({30, 0, 0});
+    if (!capture(filtered, {}, redWall))
+        return Check(false, "camera cut with ray denoising captures");
+    Check(session.gpu.GetFrameStats().temporalRestirPasses == 0 && At(filtered, .5f, .5f)[0] < 10,
+          "camera cut discards prior reservoirs and indirect radiance");
     Check(session.gpu.GetCounters().validationErrors == 0,
           "ReSTIR reservoir and lighting buffer barriers validate");
+}
+
+// A tilted camera sees both a red post and its reflection in the foreground receiver.
+// Keep odd target extents to exercise partial cells at both levels of the depth hierarchy.
+void ScreenLighting() {
+    GpuDeviceConfig config;
+    config.vsync = false;
+    Session session(193, 145, config, true);
+    if (!session.ok)
+        return Check(false, "session for raster screen lighting");
+    Renderer3D::Context context(&session.gpu);
+    PerspectiveCamera camera(ToRadians(48), 193.f / 145.f, .1, 60);
+    camera.SetPosition({2.5, 2.3, 5.5});
+    camera.SetTarget({0, .35, 0});
+    Render3DSettings settings;
+    settings.shadows = settings.imageBasedLighting = settings.toneMapping = false;
+    settings.environmentColor = {.4, .4, .4};
+    settings.sun.direction = {.9, -1, -.6};
+    settings.sun.intensity = 1.7f;
+    Material3D floor, post;
+    floor.albedoColor = {.55f, .55f, .55f, 1.f};
+    floor.roughness = .15f;
+    post.albedoColor = {.9f, .08f, .03f, 1.f};
+    post.roughness = .85f;
+    const auto capture = [&](GpuFrameCapture& result) {
+        return CaptureFrame(session, result, [&] {
+            if (!session.gpu.Clear(0, 0, 0, 1))
+                return false;
+            context.BeginScene(camera, settings, 1);
+            context.DrawCube({0, -.1, 0}, {10, .2, 10}, floor);
+            context.DrawCube({0, 1, 0}, {1, 2, 1}, post);
+            context.EndScene();
+            return context.GetLastAssetError().empty();
+        });
+    };
+    GpuFrameCapture baseline, variant;
+    if (!capture(baseline))
+        return Check(false, "reference receiver captures");
+    const auto compare = [&](const char* label, auto matches) {
+        if (!capture(variant) || baseline.rgba.size() != variant.rgba.size())
+            return Check(false, "screen-lighting variant captures");
+        size_t pixels = 0;
+        for (size_t i = 0; i < baseline.rgba.size(); i += 4)
+            pixels += matches(&baseline.rgba[i], &variant.rgba[i]) ? 1 : 0;
+        std::printf("  %s: %zu affected pixels\n", label, pixels);
+        Check(pixels > 12, label);
+    };
+    const auto darker = [](const uint8* a, const uint8* b) { return b[0] + 3 < a[0]; };
+    settings.gtaoRadius = 1.3f;
+    compare("GTAO occludes indirect light", darker);
+    settings.gtaoRadius = 0;
+    settings.contactShadowDistance = 1.5f;
+    compare("screen contacts shadow the receiver", darker);
+    settings.contactShadowDistance = 0;
+    settings.shadows = true;
+    settings.shadowRange = 8;
+    settings.shadowResolution = 1024;
+    if (!capture(baseline))
+        return Check(false, "fixed PCF reference captures");
+    settings.shadowLightAngularRadius = .13f;
+    compare("PCSS produces variable penumbrae",
+            [](const uint8* a, const uint8* b) { return std::abs(int(a[0]) - int(b[0])) > 3; });
+    settings.shadows = false;
+    settings.shadowLightAngularRadius = 0;
+    floor.metallic = 1.f;
+    if (!capture(baseline))
+        return Check(false, "metal receiver reference captures");
+    settings.hierarchicalReflections = true;
+    compare("Hi-Z SSR reflects the red post onto metal",
+            [](const uint8* a, const uint8* b) { return b[0] > a[0] + 6 && b[0] > b[1] + 6; });
+    Check(session.gpu.GetCounters().validationErrors == 0,
+          "screen-lighting image transitions validate");
 }
 
 void LargeMipTexture() {
@@ -4032,6 +4545,9 @@ void LargeMipTexture() {
               session.gpu.GetMemoryStats().allocationBytes == baseline.allocationBytes,
           "8K mip texture storage is reclaimed");
 }
+
+#include "ForgeEnvironmentQuality.inl"
+#include "ForgeLensOptics.inl"
 
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0); // keep output even if the process crashes
@@ -4078,6 +4594,7 @@ int main(int argc, char** argv) {
         std::printf("FAIL: SDL video initialization: %s\n", SDL_GetError());
         return 1;
     }
+    run("environment_quality", EnvironmentQuality);
     run("diagnostics", Diagnostics);
     run("basics", Basics);
     run("misuse", Misuse);
@@ -4088,17 +4605,22 @@ int main(int argc, char** argv) {
     run("drawing", Drawing);
     run("meshes", Meshes);
     run("scene3d", Scene3D);
+    run("postfx", PostProcessing);
+    run("lens_optics", LensOptics);
     run("scene_submission", SceneSubmission);
     run("water_composite", WaterComposite);
     run("ocean_fft", OceanFft);
     run("ray_traced_lighting", RayTracedLighting);
     run("restir_lighting", RestirLighting);
+    run("object_motion", ObjectMotion);
+    run("taa_quality", TemporalDetails);
     run("froxel_fog", FroxelFog);
     run("virtual_shadow_map", VirtualShadowMap);
     run("materials", MaterialModes);
     run("material_textures", MaterialTextures);
     run("radiance_cascades", RadianceCascades);
     run("large_mips", LargeMipTexture);
+    run("screen_lighting", ScreenLighting);
     run("volume", Volume);
     run("resolutions", Resolutions);
     run("wobble", Wobble);

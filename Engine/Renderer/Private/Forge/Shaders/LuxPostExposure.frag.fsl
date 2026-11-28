@@ -1,0 +1,15 @@
+#include "LuxPostResources.h"
+ROOT_SIGNATURE(DefaultRootSignature)
+float4 PS_MAIN(FullscreenOutput In)
+{
+    INIT_MAIN;
+    const float logLuma = LoadTex2D(gPostSource, NO_SAMPLER, int2(0, 0), 0).a;
+    const float target = clamp(log2(0.18f) - logLuma - gPost.adaptation.z, -4.0f, 4.0f);
+    float ev = target;
+    if (gPost.adaptation.y > 0.5f) {
+        const float previous = LoadTex2D(gAdaptation, NO_SAMPLER, int2(0, 0), 0).r;
+        const float speed = target < previous ? 3.0f : 1.3f;
+        ev = lerp(previous, target, 1.0f - exp(-speed * gPost.adaptation.x));
+    }
+    RETURN(float4(ev, 0.0f, 0.0f, 1.0f));
+}

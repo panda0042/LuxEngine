@@ -51,6 +51,10 @@ float4 PS_MAIN(FullscreenOutput In)
     const float2 uv = In.position.xy * gFog.composite.xy;
     const float4 fog = SampleFog(uv, depth);
     const float3 scene = color.rgb / max(color.a, 1e-6f);
+#ifdef LUX_FOG_HDR
+    color.rgb = (scene * fog.a + fog.rgb) * color.a;
+#else
     color.rgb = ToneMapSdr(scene * fog.a + fog.rgb, gFog.composite.z, gFog.composite.w);
+#endif
     RETURN(color);
 }

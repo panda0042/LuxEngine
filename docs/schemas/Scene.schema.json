@@ -381,6 +381,25 @@
         "roughness_texture": {
           "type": "string"
         },
+        "height_texture": {
+          "type": "string"
+        },
+        "parallax_depth": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "terrain_layer": {
+          "type": "object",
+          "properties": {
+            "base_color_texture": { "type": "string" },
+            "normal_texture": { "type": "string" },
+            "roughness_texture": { "type": "string" },
+            "height_texture": { "type": "string" },
+            "height_blend": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "required": ["base_color_texture"]
+        },
         "occlusion_texture": {
           "type": "string"
         },

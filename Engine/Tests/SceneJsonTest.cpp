@@ -84,6 +84,14 @@ void Test() {
     mesh.material.metallicTexture = "Assets/metal.png";
     mesh.material.roughnessTexture = "Assets/rough.png";
     mesh.material.occlusionTexture = "Assets/ao.png";
+    mesh.material.emissive = {3, .25, 0};
+    mesh.material.heightTexture = "Assets/gravel-height.png";
+    mesh.material.parallaxDepth = .04f;
+    mesh.material.terrainLayer =
+        TerrainLayer3D{"Assets/grass.png", "", "", "Assets/grass-height.png", .8f};
+    mesh.material.emissiveTexture = "Assets/lamp.png";
+    mesh.material.wettingResponse = .75f;
+    mesh.material.water.emplace().rippleStrength = .375f;
     mesh.material.normalScale = 2;
     mesh.material.occlusionStrength = .75f;
     mesh.material.alphaMode = MaterialAlphaMode::Blend;
@@ -115,10 +123,34 @@ void Test() {
     settings.render3D.environmentPath = "Assets/환경.hdr";
     settings.render3D.screenSpaceAntialiasing = true;
     settings.render3D.temporalAntialiasing = true;
+    settings.render3D.motionBlurShutter = .65f;
+    settings.render3D.temporalSharpness = .55f;
     settings.render3D.rayTracing.shadows = true;
     settings.render3D.rayTracing.waterReflections = true;
     settings.render3D.rayTracing.restirIndirect = true;
     settings.render3D.rayTracing.maxBounces = 3;
+    settings.render3D.rayTracing.temporalRestir = false;
+    settings.render3D.rayTracing.denoiser = true;
+    settings.render3D.gtaoRadius = 1.25f;
+    settings.render3D.contactShadowDistance = .5f;
+    settings.render3D.hierarchicalReflections = true;
+    settings.render3D.bloomIntensity = .25f;
+    settings.render3D.vignette = .15f;
+    settings.render3D.filmGrain = .125f;
+    settings.render3D.chromaticAberration = 2;
+    settings.render3D.lensDistortion = -.1f;
+    settings.render3D.lensFlareStrength = .2f;
+    settings.render3D.physicallyBasedBloom = true;
+    settings.render3D.apertureBlades = 7;
+    settings.render3D.physicalCamera = {true, true, 400, .02f, 2.8f, 18, 320};
+    settings.render3D.localExposure = .4f;
+    settings.render3D.autoExposure = true;
+    settings.render3D.colorGradingLut = "Assets/noon.cube";
+    settings.render3D.depthOfFieldRadius = 3;
+    settings.render3D.dynamicAtmosphere = true;
+    settings.render3D.windVelocity = {7, -2};
+    settings.render3D.cloudCoverage = .55f;
+    settings.render3D.surfaceWetness = .35f;
     settings.render3D.fog.density = .0625f;
     settings.render3D.fog.baseHeight = 1000000000.25;
     settings.render3D.fog.rayTracedShadows = true;
@@ -173,7 +205,21 @@ void Test() {
     Scene restored;
     Check(restored.DeserializeFromString(text), "all component types load");
     const auto& render = restored.GetSettings().render3D;
+    Check(render.vignette == .15f && render.filmGrain == .125f && render.chromaticAberration == 2 &&
+              render.lensDistortion == -.1f && render.lensFlareStrength == .2f,
+          "optical settings survive scene serialization");
+    Check(render.gtaoRadius == 1.25f && render.contactShadowDistance == .5f &&
+              render.hierarchicalReflections && render.bloomIntensity == .25f &&
+              render.physicalCamera == settings.render3D.physicalCamera &&
+              render.physicallyBasedBloom && render.apertureBlades == 7 &&
+              render.localExposure == .4f && render.autoExposure &&
+              render.colorGradingLut == "Assets/noon.cube" && render.depthOfFieldRadius == 3 &&
+              render.dynamicAtmosphere && render.windVelocity.y == -2 &&
+              render.cloudCoverage == .55f && !render.rayTracing.temporalRestir &&
+              render.rayTracing.denoiser,
+          "authored visual settings survive scene serialization");
     Check(render.screenSpaceAntialiasing && render.temporalAntialiasing &&
+              render.motionBlurShutter == .65f && render.temporalSharpness == .55f &&
               render.rayTracing.waterReflections,
           "antialiasing and water reflection options survive a save and reload");
     Check(render.rayTracing.shadows && render.rayTracing.maxBounces == 3 &&
@@ -185,6 +231,16 @@ void Test() {
           "ray tracing and volume settings survive a save and reload");
     std::string second;
     Check(restored.SerializeToString(second) && second == text, "deterministic lossless roundtrip");
+    const auto& lamp = restored.GetComponent<MeshRendererComponent>(root.GetId()).material;
+    Check(lamp.wettingResponse == .75f && lamp.water && lamp.water->rippleStrength == .375f &&
+              render.surfaceWetness == .35f,
+          "water ripples and surface wetness survive a scene round trip");
+    Check(lamp.emissive.x == 3 && lamp.emissive.y == .25 &&
+              lamp.emissiveTexture == "Assets/lamp.png" && lamp.parallaxDepth == .04f &&
+              lamp.heightTexture == "Assets/gravel-height.png" && lamp.terrainLayer &&
+              lamp.terrainLayer->heightTexture == "Assets/grass-height.png" &&
+              lamp.terrainLayer->heightBlend == .8f,
+          "HDR emissive color and texture survive scene serialization");
     const auto& loadedCamera = restored.GetComponent<CameraComponent>(root.GetId());
     Check(loadedCamera.nearClip == .25f && loadedCamera.farClip == 2500.f,
           "camera clipping settings survive scene roundtrip");

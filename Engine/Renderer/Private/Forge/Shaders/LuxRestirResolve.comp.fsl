@@ -70,6 +70,71 @@ float3 RestirResolveGI(RestirGIReservoir reservoir, RestirSurface surface) {
                float3(65504.0f, 65504.0f, 65504.0f));
 }
 
+uint ReprojectReservoir(RestirSurface surface, uint2 grid, uint spacing) {
+    if (gRayHistoryParams.displacement.w < 0.5f || surface.distance <= 0.0f)
+        return 0xffffffffu;
+    const float3 position = surface.position + gRayHistoryParams.displacement.xyz;
+    const float4 clip = mul(gRayHistoryParams.previousViewProjection, float4(position, 1.0f));
+    if (clip.w <= 0.0f)
+        return 0xffffffffu;
+    const float2 uv = clip.xy / clip.w * float2(0.5f, -0.5f) + 0.5f;
+    if (uv.x < 0.0f || uv.y < 0.0f || uv.x >= 1.0f || uv.y >= 1.0f)
+        return 0xffffffffu;
+    const uint2 coord = min(uint2(uv * gScene.frameSize.xy) / spacing, grid - 1u);
+    const uint start = (coord.y * grid.x + coord.x) * LUX_RESTIR_HISTORY_FLOATS4;
+    const float4 last = gPreviousReservoirs[start];
+    const float4 normal = gPreviousReservoirs[start + 1u];
+    const float4 material = gPreviousReservoirs[start + 2u];
+    const float3 delta = last.xyz - position;
+    const float footprint = max(length(gScene.right.xyz) * gScene.frameSize.z,
+                                length(gScene.up.xyz) * gScene.frameSize.w) * float(spacing) * clip.w;
+    if (last.w <= 0.0f || uint(normal.w) != surface.instance || dot(normal.xyz, surface.normal) < 0.96f ||
+        length(material.rgb - surface.base) > 0.12f || abs(material.w - surface.metallic) > 0.1f ||
+        abs(gPreviousReservoirs[start + 3u].x - surface.roughness) > 0.08f ||
+        abs(dot(delta, surface.normal)) > max(0.015f, clip.w * 0.0015f) ||
+        length(delta) > max(0.05f, 3.0f * footprint))
+        return 0xffffffffu;
+    return start;
+}
+
+// Effective sample counts are capped before merging, so lighting changes can replace old samples.
+RestirDIReservoir ReusePreviousDI(RestirDIReservoir receiver, RestirSurface surface, uint start, uint seed) {
+    const float4 previous = gPreviousReservoirs[start + 4u];
+    if (previous.y <= 0.0f || previous.w <= 0.0f || uint(previous.x) >= min(gLights.count.x, 16u))
+        return receiver;
+    const float count = min(previous.w, 32.0f);
+    const float target = RestirDITarget(uint(previous.x), surface);
+    const float weight = target * (previous.z / previous.y) * (count / previous.w);
+    return RestirDIUpdate(receiver, uint(previous.x), target, weight, count, RestirRandom(seed));
+}
+
+RestirGIReservoir ReusePreviousGI(RestirGIReservoir receiver, RestirSurface surface, uint start, uint seed) {
+    const float previousCount = gPreviousReservoirs[start + 3u].y;
+    const float4 position = gPreviousReservoirs[start + 5u];
+    const float4 normal = gPreviousReservoirs[start + 6u];
+    const float4 radiance = gPreviousReservoirs[start + 7u];
+    if (normal.w <= 0.0f || previousCount <= 0.0f)
+        return receiver;
+    RestirSample proposal;
+    proposal.kind = position.w;
+    proposal.positionOrDirection = position.xyz;
+    if (proposal.kind == 1.0f)
+        proposal.positionOrDirection -= gRayHistoryParams.displacement.xyz;
+    proposal.normal = normal.xyz;
+    proposal.radiance = radiance.rgb;
+    const float count = min(previousCount, 16.0f);
+    const float target = RestirLuminance(RestirGIContribution(proposal, surface));
+    const float weight = target * (radiance.w / normal.w) * (count / previousCount);
+    return RestirGIUpdate(receiver, proposal, target, weight, count, RestirRandom(seed));
+}
+
+float4 FilterRaySignal(float3 sampleValue, float4 previous, float3 minimum, float3 maximum) {
+    const float3 padding = 0.12f * max(maximum, float3(0.1f, 0.1f, 0.1f));
+    const float3 past = clamp(previous.rgb, minimum - padding, maximum + padding);
+    const float count = min(12.0f, previous.w + 1.0f);
+    return float4(lerp(past, sampleValue, rcp(max(count, 1.0f))), count);
+}
+
 ROOT_SIGNATURE(ComputeRootSignature)
 NUM_THREADS(8, 8, 1)
 void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
@@ -85,9 +150,20 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
     const RestirSurface surface = RestirLoadSurface(start);
     RestirDIReservoir direct = RestirLoadDI(start);
     RestirGIReservoir indirect = RestirLoadGI(start);
+    const uint previous = ReprojectReservoir(surface, grid, RestirSpacing(size));
+    const bool denoise = gRayHistoryParams.controls.z > 0.5f;
+    const float4 glossy = gRestirCandidates[start + 8u];
+    float3 specSum = glossy.rgb, specMin = glossy.rgb, specMax = glossy.rgb;
+    float specWeight = glossy.w;
     if (surface.distance > 0.0f) {
         const uint effects = uint(gScene.rayOptions.x);
-        const uint seed = RestirHash(cell ^ 0x444055b1u);
+        const uint seed = RestirHash(cell ^ 0x444055b1u ^ RestirHash(uint(gRayHistoryParams.controls.x)));
+        if (previous != 0xffffffffu && gRayHistoryParams.controls.y > 0.5f) {
+            if ((effects & LUX_RESTIR_DI) != 0u)
+                direct = ReusePreviousDI(direct, surface, previous, seed + 17u);
+            if ((effects & LUX_RESTIR_GI) != 0u)
+                indirect = ReusePreviousGI(indirect, surface, previous, seed + 19u);
+        }
         const int scale = 1 + int(RestirHash(seed + 1u) & 1u);
         for (uint i = 0u; i < 4u; ++i) {
             const int2 delta = i < 2u ? int2(i == 0u ? -scale : scale, 0)
@@ -98,8 +174,20 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
                 continue;
             const uint neighbor = (uint(coordinate.y) * grid.x + uint(coordinate.x)) *
                                   LUX_RESTIR_CANDIDATE_FLOATS4;
-            if (!RestirCompatible(surface, RestirLoadSurface(neighbor)))
+            const RestirSurface neighborSurface = RestirLoadSurface(neighbor);
+            if (!RestirCompatible(surface, neighborSurface))
                 continue;
+            if (denoise && glossy.w > 0.0f) {
+                const float4 sampleValue = gRestirCandidates[neighbor + 8u];
+                const float weight = sampleValue.w * exp(-32.0f * abs(surface.roughness - neighborSurface.roughness)) *
+                                     pow(saturate(dot(surface.normal, neighborSurface.normal)), 32.0f);
+                if (weight > 0.01f) {
+                    specSum += sampleValue.rgb * weight;
+                    specWeight += weight;
+                    specMin = min(specMin, sampleValue.rgb);
+                    specMax = max(specMax, sampleValue.rgb);
+                }
+            }
             if ((effects & LUX_RESTIR_DI) != 0u) {
                 const RestirDIReservoir donor = RestirLoadDI(neighbor);
                 if (donor.target > 0.0f) {
@@ -113,7 +201,7 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
                     direct.count += donor.count;
                 }
             }
-            if ((effects & LUX_RESTIR_GI) != 0u) {
+            if ((effects & LUX_RESTIR_GI) != 0u || (denoise && (effects & 8u) != 0u)) {
                 const RestirGIReservoir donor = RestirLoadGI(neighbor);
                 if (donor.target > 0.0f) {
                     const float target = RestirLuminance(RestirGIContribution(donor.proposal, surface));
@@ -135,6 +223,31 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
     gRestirResult[outputIndex + 2u] =
         float4(float(direct.light), directWeight, direct.count, 0.0f);
     const float3 indirectLighting = RestirResolveGI(indirect, surface);
-    gRestirResult[outputIndex + 3u] = float4(indirectLighting, indirect.count);
+    float4 filteredGI = float4(indirectLighting, indirect.count > 0.0f ? 1.0f : 0.0f);
+    float4 filteredSpec = float4(specSum / max(1.0f, specWeight), glossy.w);
+    if (denoise && previous != 0xffffffffu) {
+        if (filteredGI.w > 0.0f)
+            filteredGI = FilterRaySignal(filteredGI.rgb, gPreviousReservoirs[previous + 9u],
+                                          filteredGI.rgb * 0.35f, filteredGI.rgb * 2.5f + 0.15f);
+        if (filteredSpec.w > 0.0f)
+            filteredSpec = FilterRaySignal(filteredSpec.rgb, gPreviousReservoirs[previous + 8u], specMin, specMax);
+    }
+    gRestirResult[outputIndex + 3u] = float4(filteredGI.rgb, indirect.count);
+    gRestirResult[outputIndex + 4u] = filteredSpec;
+
+    // Pure spatial resampling binds two minimal valid buffer views.
+    if (!denoise && gRayHistoryParams.controls.y < 0.5f)
+        RETURN();
+    const uint next = cell * LUX_RESTIR_HISTORY_FLOATS4;
+    gNextReservoirs[next] = float4(surface.position, surface.distance);
+    gNextReservoirs[next + 1u] = float4(surface.normal, float(surface.instance));
+    gNextReservoirs[next + 2u] = float4(surface.base, surface.metallic);
+    gNextReservoirs[next + 3u] = float4(surface.roughness, indirect.count, 0.0f, 0.0f);
+    gNextReservoirs[next + 4u] = float4(float(direct.light), direct.target, direct.weightSum, direct.count);
+    gNextReservoirs[next + 5u] = float4(indirect.proposal.positionOrDirection, indirect.proposal.kind);
+    gNextReservoirs[next + 6u] = float4(indirect.proposal.normal, indirect.target);
+    gNextReservoirs[next + 7u] = float4(indirect.proposal.radiance, indirect.weightSum);
+    gNextReservoirs[next + 8u] = filteredSpec;
+    gNextReservoirs[next + 9u] = filteredGI;
     RETURN();
 }

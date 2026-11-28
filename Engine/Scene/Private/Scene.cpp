@@ -607,9 +607,8 @@ void Scene::OnRender3D() {
         if (Finite(meshComp.material.albedoColor) && Finite(meshComp.material.metallic) &&
             Finite(meshComp.material.roughness)) {
             auto material = meshComp.material;
-            for (auto* path :
-                 {&material.baseColorTexture, &material.normalTexture, &material.metallicTexture,
-                  &material.roughnessTexture, &material.occlusionTexture})
+            material.motionInstance = static_cast<uint64>(entity.GetId()) + 1;
+            for (auto* path : MaterialTexturePaths(material))
                 if (!path->empty())
                     *path = ResolveAssetPath(*path);
             if (meshComp.meshPath.empty())
@@ -1150,12 +1149,41 @@ bool Scene::ValidateForSerialization() {
                 return false;
         }
         if (const auto* mesh = TryGetComponent<MeshRendererComponent>(id)) {
-            for (const auto* path :
-                 {&mesh->material.normalTexture, &mesh->material.metallicTexture,
-                  &mesh->material.roughnessTexture, &mesh->material.occlusionTexture})
+            for (const auto* path : MaterialTexturePaths(mesh->material))
                 if (path->size() > 4096 || path->find('\0') != std::string::npos ||
                     !IsValidUtf8(*path))
                     return false;
+            if (!Finite(mesh->material.parallaxDepth) || mesh->material.parallaxDepth < 0 ||
+                mesh->material.parallaxDepth > 1 ||
+                (mesh->material.terrainLayer &&
+                 (!Finite(mesh->material.terrainLayer->heightBlend) ||
+                  mesh->material.terrainLayer->heightBlend < 0 ||
+                  mesh->material.terrainLayer->heightBlend > 1)))
+                return false;
+            const auto& emission = mesh->material.emissive;
+            if (!Finite(emission) || std::min({emission.x, emission.y, emission.z}) < 0 ||
+                std::max({emission.x, emission.y, emission.z}) > 65504)
+                return false;
+            if (!Finite(mesh->material.wettingResponse) || mesh->material.wettingResponse < 0 ||
+                mesh->material.wettingResponse > 1)
+                return false;
+            if (const auto& w = mesh->material.water) {
+                if (!Finite(w->absorption) ||
+                    std::min({w->absorption.x, w->absorption.y, w->absorption.z}) < 0 ||
+                    std::max({w->absorption.x, w->absorption.y, w->absorption.z}) > 100 ||
+                    !Finite(w->indexOfRefraction) || w->indexOfRefraction <= 1 ||
+                    w->indexOfRefraction > 2.5f || !Finite(w->rippleStrength) ||
+                    w->rippleStrength < 0 || w->rippleStrength > 1)
+                    return false;
+            }
+            const auto& scatter = mesh->material.subsurfaceRadius;
+            if (!Finite(scatter) || std::min({scatter.x, scatter.y, scatter.z}) < 0 ||
+                std::max({scatter.x, scatter.y, scatter.z}) > 1 ||
+                !Finite(mesh->material.subsurfaceThickness) ||
+                mesh->material.subsurfaceThickness < 0 || mesh->material.subsurfaceThickness > 1 ||
+                !Finite(mesh->material.windAmplitude) || mesh->material.windAmplitude < 0 ||
+                mesh->material.windAmplitude > 10)
+                return false;
             if (!Finite(mesh->material.normalScale) || mesh->material.normalScale < 0 ||
                 mesh->material.normalScale > 16 || !Finite(mesh->material.occlusionStrength) ||
                 mesh->material.occlusionStrength < 0 || mesh->material.occlusionStrength > 1 ||

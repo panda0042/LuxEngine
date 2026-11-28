@@ -14,6 +14,24 @@ STRUCT(LuxDraw) {
     DATA(float4, water, None); // RGB absorption per world unit and index of refraction
     DATA(float4, textureOptions, None);
     DATA(float4, coastalBreaker, None);
+    DATA(float4, surfaceWeather, None); // wet film saturation, water ripple slope strength
+    DATA(float4, foliage, None);        // wind displacement (m), RGB subsurface radius (m)
+    DATA(float4x4, previousMvp, None);
+    DATA(float4x4, previousWindProjection, None);
+    DATA(float4, emissive, None); // linear HDR radiance and textured flag
+    // POM depth in metres, layer height contrast, base and layer height flags.
+    DATA(float4, relief, None);
+    DATA(float4, previousWind, None); // x: previous time
+};
+
+STRUCT(LuxScreenLightingData) {
+    DATA(float4, options, None); // GTAO radius, contact distance, enable Hi-Z SSR, PCSS texel scale
+};
+
+STRUCT(LuxRayHistoryParams) {
+    DATA(float4x4, previousViewProjection, None);
+    DATA(float4, displacement, None); // current origin minus previous, w permits reprojection
+    DATA(float4, controls, None);     // frame seed, temporal resampling, denoise
 };
 
 // Lighting set with SetLighting (16 point lights, like the Vulkan backend).
@@ -41,6 +59,9 @@ STRUCT(LuxSceneData) {
     DATA(float4, rayOptions, None);    // effects mask, distance, bounces, diffuse strength
     DATA(float4, waterReflection, None);
     DATA(uint4, virtualShadowPages, None);
+    DATA(float4, atmosphere, None);
+    DATA(float4, wind, None);
+    DATA(float4, weatherOrigin, None);
 };
 
 #endif

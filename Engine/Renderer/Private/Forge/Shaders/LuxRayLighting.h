@@ -221,7 +221,8 @@ float3 DiffuseRay(float3 normal, uint seed) {
 }
 
 float3 RayEnvironmentLighting(float3 base, float metal, float roughness, float3 normal, float3 view,
-                              float3 position, float2 pixel, float4 restirGI) {
+                              float3 position, float2 pixel, float4 restirGI, float4 denoisedSpec,
+                              float4 screenHit) {
     const float nv = saturate(dot(normal, view));
     const float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), base, metal);
     const float3 fresnel =
@@ -236,7 +237,8 @@ float3 RayEnvironmentLighting(float3 base, float metal, float roughness, float3 
     if (useCascades)
         irradiance = SampleRadianceCascades(position, normal, irradiance);
     if (restirGI.w > 0.0f) {
-        irradiance = restirGI.rgb;
+        irradiance = RayEffect(LUX_RESTIR_GI) ? restirGI.rgb
+                                              : lerp(irradiance, restirGI.rgb, gScene.rayOptions.w);
     } else if (!useCascades && traceDiffuse && metal < 1.0f && gScene.rayOptions.w > 0.0f) {
         const uint seed = PixelRayHash(uint(pixel.x) + uint(pixel.y) * uint(gScene.frameSize.x));
         const float3 first = DiffuseRay(normal, seed);
@@ -251,9 +253,12 @@ float3 RayEnvironmentLighting(float3 base, float metal, float roughness, float3 
     const float3 direction = reflect(-view, normal);
     if (useIbl)
         reflected = RayEnvironment(direction, roughness);
+    reflected = lerp(reflected, screenHit.rgb, screenHit.a);
     if (RayEffect(2u)) {
         const float weight = 1.0f - smoothstep(0.25f, 0.85f, roughness);
-        if (weight > 0.0f) {
+        if (weight > 0.0f && denoisedSpec.w > 0.0f) {
+            reflected = lerp(reflected, denoisedSpec.rgb, weight);
+        } else if (weight > 0.0f) {
             const float3 origin = BiasRayOrigin(position, normal, direction);
             const float4 reflectedRay =
                 TraceRayRadiance(origin, direction, roughness, uint(gScene.rayOptions.z));

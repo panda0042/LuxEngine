@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 23u
+#define LUX_FORGE_API_VERSION 24u
 #define LUX_FORGE_SAMPLING_UNLIT 8u
 
 #if defined(_WIN32)
@@ -94,7 +94,7 @@ typedef struct LuxForgeStats {
     uint32_t rayVolumetricFogPasses;
     uint32_t waterReflectionPasses;
     uint32_t temporalResolvePasses, temporalHistoryPasses;
-    uint32_t restirPasses;
+    uint32_t restirPasses, temporalRestirPasses, rayDenoiserPasses, objectMotionDraws;
     uint32_t radianceCascadePasses;
     uint32_t virtualShadowPages;
     uint32_t requestedShadowPages;
@@ -160,6 +160,13 @@ typedef struct LuxForgeSceneDraw {
     float water[4];
     uint32_t shadowPageMask;
     uint32_t terrainColor, terrainNormal, terrainRoughness;
+    uint64_t motionInstance, geometryRevision;
+    float surfaceWeather[4];
+    float foliage[4], subsurfaceThickness;
+    float emissive[3];
+    uint32_t emissiveTexture;
+    uint32_t heightTexture, terrainHeight;
+    float parallaxDepth, heightBlend;
 } LuxForgeSceneDraw;
 
 // One HDR scene pass (port of the Vulkan backend's Scene3DRenderer). The vec4 fields and the
@@ -189,6 +196,19 @@ typedef struct LuxForgeScene {
     uint32_t virtualShadows;
     uint64_t temporalView; // zero disables history; independent contexts have distinct IDs
     double temporalOrigin[3];
+    uint32_t temporalAntialiasing, temporalRestir, rayDenoiser;
+    float motionBlurShutter, temporalSharpness;
+    float gtaoRadius, contactShadowDistance, shadowLightAngularRadius;
+    uint32_t hierarchicalReflections;
+    float postEffects[4], autoExposure, gradingStrength;
+    uint32_t gradingTexture;
+    uint32_t physicallyBasedBloom, apertureBlades;
+    float physicalExposureGain,
+        physicalCocFraction; // exposure scale; CoC radius at infinity / frame height
+    float localExposure;
+    uint64_t postView;
+    float atmosphere[4], wind[4], weatherOrigin[4];
+    float optics[4], lensFlareStrength;
 } LuxForgeScene;
 
 typedef struct LuxForgeApi {

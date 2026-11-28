@@ -257,9 +257,10 @@ void ValidateDocument(const cgltf_data& document) {
         document.asset.version && std::string_view(document.asset.version) == "2.0" &&
             (!document.asset.min_version || std::string_view(document.asset.min_version) == "2.0"),
         "glTF 2.0 파일만 지원합니다.");
-    if (document.extensions_required_count)
-        throw std::runtime_error(std::string("지원하지 않는 glTF 필수 확장: ") +
-                                 document.extensions_required[0]);
+    for (cgltf_size i = 0; i < document.extensions_required_count; ++i)
+        if (std::string_view(document.extensions_required[i]) != "KHR_materials_emissive_strength")
+            throw std::runtime_error(std::string("지원하지 않는 glTF 필수 확장: ") +
+                                     document.extensions_required[i]);
     Require(document.animations_count == 0 && document.skins_count == 0,
             "정적 glTF 가져오기는 애니메이션과 스킨을 지원하지 않습니다.");
     Require(document.nodes_count <= MaxNodes && document.materials_count <= MaxResources &&
@@ -467,6 +468,14 @@ struct Importer {
             }
             material.emissive = {Unit(source.emissive_factor[0]), Unit(source.emissive_factor[1]),
                                  Unit(source.emissive_factor[2])};
+            if (source.has_emissive_strength) {
+                const auto strength = Finite(source.emissive_strength.emissive_strength);
+                Require(strength >= 0, "glTF 발광 강도는 음수일 수 없습니다.");
+                material.emissive = material.emissive * strength;
+                Require(std::max({material.emissive.x, material.emissive.y, material.emissive.z}) <=
+                            65504,
+                        "glTF 발광 색이 HDR 렌더 타깃의 범위를 초과합니다.");
+            }
             material.normalTexture = Texture(source.normal_texture);
             if (material.normalTexture >= 0)
                 material.normalScale = static_cast<float>(Finite(source.normal_texture.scale));

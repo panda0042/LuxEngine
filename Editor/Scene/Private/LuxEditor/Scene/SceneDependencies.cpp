@@ -235,10 +235,15 @@ private:
             }
     }
 
-    std::set<fs::path> clips_, controllers_;
+    std::set<fs::path> clips_, controllers_, gradingFiles_;
 
     void InspectAssets(LuxEngine::Scene& scene, const fs::path& owner) {
         const auto& render = scene.GetSettings().render3D;
+        if (!render.colorGradingLut.empty()) {
+            const auto file = ResolveModel(render.colorGradingLut, owner, true);
+            if (gradingFiles_.insert(file).second)
+                Charge(fs::file_size(file));
+        }
         for (const auto* environment :
              {&render.environmentPath, &render.waterReflection.environmentPath}) {
             if (environment->empty())
@@ -293,7 +298,10 @@ private:
                      !mesh->material.normalTexture.empty() ||
                      !mesh->material.metallicTexture.empty() ||
                      !mesh->material.roughnessTexture.empty() ||
-                     !mesh->material.occlusionTexture.empty()) &&
+                     !mesh->material.occlusionTexture.empty() ||
+                     !mesh->material.emissiveTexture.empty() ||
+                     !mesh->material.heightTexture.empty() ||
+                     mesh->material.terrainLayer.has_value()) &&
                     !hasUvs)
                     throw std::runtime_error("텍스처를 적용할 UV 좌표가 없는 모델입니다: " +
                                              mesh->meshPath);
@@ -317,10 +325,7 @@ private:
             }
             if (const auto* mesh = entity.TryGetComponent<LuxEngine::MeshRendererComponent>();
                 mesh) {
-                for (const auto* texturePath :
-                     {&mesh->material.baseColorTexture, &mesh->material.normalTexture,
-                      &mesh->material.metallicTexture, &mesh->material.roughnessTexture,
-                      &mesh->material.occlusionTexture}) {
+                for (const auto* texturePath : LuxEngine::MaterialTexturePaths(mesh->material)) {
                     const auto& resource = *texturePath;
                     if (resource.empty())
                         continue;

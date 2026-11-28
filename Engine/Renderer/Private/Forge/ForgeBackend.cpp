@@ -1,5 +1,6 @@
 #include "ForgeBackend.hpp"
 
+#include "ColorGradingCube.hpp"
 #include "LuxForgeApi.h"
 #include "Renderer3D/ShadowProjection.hpp"
 #include <LuxEngine/Environment/EnvironmentMap.hpp>
@@ -11,8 +12,10 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 #include <mutex>
 #include <numbers>
 #include <thread>
@@ -240,6 +243,9 @@ void ForgeBackend::CollectFrameStats(GpuFrameStats& frame) const {
     frame.temporalResolvePasses = stats.temporalResolvePasses;
     frame.temporalHistoryPasses = stats.temporalHistoryPasses;
     frame.restirPasses = stats.restirPasses;
+    frame.temporalRestirPasses = stats.temporalRestirPasses;
+    frame.objectMotionDraws = stats.objectMotionDraws;
+    frame.rayDenoiserPasses = stats.rayDenoiserPasses;
     frame.radianceCascadePasses = stats.radianceCascadePasses;
     frame.virtualShadowPages = stats.virtualShadowPages;
     frame.requestedShadowPages = stats.requestedShadowPages;
@@ -607,6 +613,8 @@ public:
             lib->api->destroyEnvironment(lib->device, environment_.handle);
             lib->api->destroyEnvironment(lib->device, waterEnvironment_.handle);
             lib->api->destroyEnvironment(lib->device, neutral_);
+            for (const auto& grade : gradingCache_)
+                lib->api->destroyTexture(lib->device, grade.handle);
         }
     }
 
@@ -617,7 +625,8 @@ public:
             return false;
         for (const auto handle :
              {draw.normalTexture, draw.metallicTexture, draw.roughnessTexture,
-              draw.occlusionTexture, draw.terrainColor, draw.terrainNormal, draw.terrainRoughness})
+              draw.occlusionTexture, draw.terrainColor, draw.terrainNormal, draw.terrainRoughness,
+              draw.emissiveTexture, draw.heightTexture, draw.terrainHeight})
             if (handle && !backend_->textures_.count(handle))
                 return false;
         LuxForgeSceneDraw d = {};
@@ -636,15 +645,28 @@ public:
         d.metallicTexture = static_cast<uint32_t>(draw.metallicTexture);
         d.roughnessTexture = static_cast<uint32_t>(draw.roughnessTexture);
         d.occlusionTexture = static_cast<uint32_t>(draw.occlusionTexture);
+        d.emissiveTexture = static_cast<uint32_t>(draw.emissiveTexture);
+        d.emissive[0] = float(draw.emissive.x);
+        d.emissive[1] = float(draw.emissive.y);
+        d.emissive[2] = float(draw.emissive.z);
         d.normalScale = draw.normalScale;
         d.occlusionStrength = draw.occlusionStrength;
         d.sampling = draw.sampling;
         d.shadowOnly = draw.shadowOnly ? 1 : 0;
         d.shadowPageMask = draw.shadowPageMask;
+        d.motionInstance = draw.motionInstance;
+        d.geometryRevision = draw.geometryRevision;
         d.terrainColor = static_cast<uint32_t>(draw.terrainColor);
         d.terrainNormal = static_cast<uint32_t>(draw.terrainNormal);
         d.terrainRoughness = static_cast<uint32_t>(draw.terrainRoughness);
+        d.heightTexture = static_cast<uint32_t>(draw.heightTexture);
+        d.terrainHeight = static_cast<uint32_t>(draw.terrainHeight);
+        d.parallaxDepth = draw.parallaxDepth;
+        d.heightBlend = draw.heightBlend;
         Copy4(d.water, draw.water);
+        Copy4(d.surfaceWeather, draw.surfaceWeather);
+        Copy4(d.foliage, draw.foliage);
+        d.subsurfaceThickness = draw.subsurfaceThickness;
         draws_.push_back(d);
         models_.push_back(draw.model);
         return true;
@@ -700,14 +722,50 @@ public:
 
         LuxForgeScene scene = {};
         CopyMatrix(scene.viewProjection, viewProjection);
-        if (settings.temporalAntialiasing) {
-            scene.temporalView = temporalView_;
-        }
-        if (settings.temporalAntialiasing || (coastalWater && coastalWater->breakerHeight > 0)) {
-            scene.temporalOrigin[0] = origin.x;
-            scene.temporalOrigin[1] = origin.y;
-            scene.temporalOrigin[2] = origin.z;
-        }
+        scene.temporalView = temporalView_;
+        scene.postView = temporalView_;
+        Copy4(scene.optics, {settings.vignette, settings.filmGrain, settings.chromaticAberration,
+                             settings.lensDistortion});
+        scene.lensFlareStrength = settings.lensFlareStrength;
+        scene.temporalSharpness = settings.temporalSharpness;
+        scene.motionBlurShutter = settings.motionBlurShutter;
+        scene.temporalAntialiasing = settings.temporalAntialiasing;
+        scene.temporalRestir = settings.rayTracing.temporalRestir;
+        scene.rayDenoiser = settings.rayTracing.denoiser;
+        scene.temporalOrigin[0] = origin.x;
+        scene.temporalOrigin[1] = origin.y;
+        scene.temporalOrigin[2] = origin.z;
+        scene.gtaoRadius = settings.gtaoRadius;
+        scene.contactShadowDistance = settings.contactShadowDistance;
+        scene.shadowLightAngularRadius = settings.shadowLightAngularRadius;
+        scene.hierarchicalReflections = settings.hierarchicalReflections;
+        Copy4(scene.postEffects, {settings.bloomIntensity, settings.bloomThreshold,
+                                  settings.depthOfFieldRadius, settings.focusDistance});
+        scene.autoExposure = settings.autoExposure ? 1.f : 0.f;
+        scene.physicallyBasedBloom = settings.physicallyBasedBloom;
+        scene.localExposure = settings.localExposure;
+        scene.apertureBlades = settings.apertureBlades;
+        scene.gradingStrength = settings.colorGradingStrength;
+        scene.gradingTexture =
+            GradingTexture(*lib, settings.colorGradingLut, settings.colorGradingStrength > 0);
+        Copy4(scene.atmosphere,
+              {settings.dynamicAtmosphere ? 1.f : 0.f, settings.aerosolDensity,
+               settings.cloudCoverage, float(std::clamp(origin.y, -1000., 100000.))});
+        Copy4(scene.wind, {float(settings.windVelocity.x), float(settings.windVelocity.y),
+                           float(std::remainder(settings.weatherTime, 4096.)), 0});
+        // The wind waves repeat after 256 m. Cloud noise repeats after 262144 m.
+        const auto cloudOrigin = [&](double coordinate, double speed) {
+            constexpr double period = 262144.;
+            const double offset =
+                std::abs(speed) < 1e-12
+                    ? 0.
+                    : std::remainder(settings.weatherTime, period / std::abs(speed)) * speed;
+            return float(std::remainder(std::remainder(coordinate, period) - offset, period));
+        };
+        Copy4(scene.weatherOrigin,
+              {float(std::remainder(origin.x, 256.)), float(std::remainder(origin.z, 256.)),
+               cloudOrigin(origin.x, settings.windVelocity.x),
+               cloudOrigin(origin.z, settings.windVelocity.y)});
         for (size_t index = 0; index < draws_.size(); ++index)
             CopyMatrix(draws_[index].model, Mat4::Translate(origin * -1.0) * models_[index]);
         Copy4(scene.camera, {0, 0, 0, exposure});
@@ -719,7 +777,8 @@ public:
         scene.options[1] = settings.imageBasedLighting && active ? 1.f : 0.f;
         scene.options[2] =
             (settings.toneMapping ? 1.f : 0.f) + (settings.screenSpaceAntialiasing ? 2.f : 0.f);
-        scene.options[3] = settings.showSkybox && active ? 1.f : 0.f;
+        scene.options[3] =
+            settings.dynamicAtmosphere || (settings.showSkybox && active) ? 1.f : 0.f;
         const auto& view = camera.GetViewMatrix().elements;
         const auto& projection = camera.GetProjectionMatrix().elements;
         for (int i = 0; i < 3; ++i) {
@@ -729,6 +788,24 @@ public:
         }
         scene.right[3] = static_cast<float>(projection[10]);
         scene.up[3] = static_cast<float>(projection[14]);
+        const auto& lens = settings.physicalCamera;
+        if (lens.exposure) {
+            // Saturation-based exposure: Lmax = 1.2 * 2^EV100 in cd/m².
+            const double sensitivity = lens.iso / 100.0;
+            scene.physicalExposureGain =
+                static_cast<float>(lens.luminanceScale * sensitivity * lens.shutterSeconds /
+                                   (1.2 * lens.fNumber * lens.fNumber));
+            scene.camera[3] *= scene.physicalExposureGain;
+        }
+        if (lens.depthOfField) {
+            const double sensor = lens.sensorHeightMm / 1000.0;
+            const double focal = 0.5 * sensor * std::abs(projection[5]);
+            // A real lens cannot focus inside its focal length. Stop just outside that limit.
+            const double focus = std::max(double(settings.focusDistance), focal + .0001);
+            scene.postEffects[3] = static_cast<float>(focus);
+            scene.physicalCocFraction =
+                static_cast<float>(focal * focal / (2.0 * lens.fNumber * (focus - focal) * sensor));
+        }
         scene.forward[3] = coastalWater ? coastalWater->breakerHeight : 0.f;
         if (settings.shadows) {
             CopyMatrix(scene.shadowMatrix, SceneShadowProjection(camera, settings));
@@ -788,7 +865,7 @@ public:
         if (drawn < draws_.size())
             error = "3D object budget reached; excess objects skipped";
         for (const auto& environmentError :
-             {environment_.error,
+             {gradingError_, environment_.error,
               water.environmentPath.empty() ? std::string{} : waterEnvironment_.error})
             if (!environmentError.empty())
                 error += (error.empty() ? "" : "; ") + environmentError;
@@ -805,6 +882,79 @@ private:
         const LuxForgeEnvironmentImage images[4] = {ToForge(data.sky), ToForge(data.diffuse),
                                                     ToForge(data.specular), ToForge(data.brdf)};
         return lib.api->createEnvironment(lib.device, images);
+    }
+
+    struct GradingEntry {
+        std::string path, error;
+        uint32_t handle = 0;
+        uint64_t usedFrame = 0;
+        std::filesystem::file_time_type stamp{};
+        std::chrono::steady_clock::time_point nextCheck{};
+    };
+
+    uint32_t GradingTexture(ForgeLibrary& lib, const std::string& path, bool enabled) {
+        constexpr uint64_t idleFrames = 600;
+        constexpr size_t maxEntries = 16; // Equal to the maximum number of scene passes per frame.
+        const uint64_t frame = lib.api->framesPresented(lib.device);
+        gradingError_.clear();
+        if (frame - lastGradingSweep_ >= 60) {
+            std::erase_if(gradingCache_, [&](const GradingEntry& item) {
+                if (frame - item.usedFrame < idleFrames)
+                    return false;
+                lib.api->destroyTexture(lib.device, item.handle);
+                return true;
+            });
+            lastGradingSweep_ = frame;
+        }
+        if (path.empty() || !enabled)
+            return 0;
+        auto it = std::find_if(gradingCache_.begin(), gradingCache_.end(),
+                               [&](const GradingEntry& entry) { return entry.path == path; });
+        if (it == gradingCache_.end()) {
+            if (gradingCache_.size() >= maxEntries) {
+                it = std::min_element(gradingCache_.begin(), gradingCache_.end(),
+                                      [](const GradingEntry& a, const GradingEntry& b) {
+                                          return a.usedFrame < b.usedFrame;
+                                      });
+                // The bridge defers deletion until all submitted references complete.
+                lib.api->destroyTexture(lib.device, it->handle);
+                *it = {};
+            } else {
+                gradingCache_.emplace_back();
+                it = std::prev(gradingCache_.end());
+            }
+            it->path = path;
+        }
+        auto& grade = *it;
+        grade.usedFrame = frame;
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= grade.nextCheck) {
+            grade.nextCheck = now + std::chrono::seconds(1);
+            const auto file = std::filesystem::u8path(path);
+            std::error_code ec;
+            const auto stamp = std::filesystem::last_write_time(file, ec);
+            if (!grade.handle || grade.stamp != stamp || !grade.error.empty()) {
+                uint32_t size = 0;
+                std::vector<uint8_t> pixels;
+                grade.error.clear();
+                if (ReadColorGradingCube(file, size, pixels, grade.error)) {
+                    const void* image = pixels.data();
+                    const auto replacement =
+                        lib.api->createTexture(lib.device, size * size, size, &image, 0, 0, 1);
+                    if (replacement) {
+                        lib.api->destroyTexture(lib.device, grade.handle);
+                        grade.handle = replacement;
+                    } else {
+                        grade.error = "Color grading LUT upload failed";
+                    }
+                }
+                grade.stamp = stamp;
+                if (!grade.error.empty())
+                    grade.error += " (" + path + ")";
+            }
+        }
+        gradingError_ = grade.error;
+        return grade.handle;
     }
 
     void PollEnvironment(ForgeLibrary& lib, SceneEnvironment& state, const std::string& path,
@@ -893,6 +1043,9 @@ private:
     std::vector<LuxForgeSceneDraw> draws_;
     std::vector<Mat4> models_;
     uint32_t neutral_ = 0;
+    std::vector<GradingEntry> gradingCache_;
+    uint64_t lastGradingSweep_ = 0;
+    std::string gradingError_;
     SceneEnvironment environment_;
     SceneEnvironment waterEnvironment_;
 };

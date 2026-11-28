@@ -1,0 +1,28 @@
+#include "LuxPostResources.h"
+
+float4 ReduceTap(float2 uv) {
+    float4 color = SampleLvlTex2D(gPostSource, gSamplerTrilinearClamp, uv, 0.0f);
+    if (gPost.grading.w < 0.5f)
+        return color;
+    // The HDR source uses premultiplied coverage. Meter uncovered pixels at middle grey.
+    float luma = max(PostLuma(color.rgb / max(color.a, 1e-5f)), 1e-5f);
+    const float logLuma = lerp(log2(0.18f), log2(luma), saturate(color.a));
+    // Standalone flare extracts its own bright sources from the unthresholded pyramid.
+    if (gPost.cameraEffects.x > 0.5f || gPost.lens.x <= 0.0f)
+        return float4(color.rgb, logLuma);
+    float threshold = gPost.lens.y;
+    float knee = max(0.5f * threshold, 1e-5f);
+    float soft = clamp(luma - threshold + knee, 0.0f, 2.0f * knee);
+    float gain = max(luma - threshold, soft * soft / (4.0f * knee)) / luma;
+    return float4(color.rgb * gain, logLuma);
+}
+ROOT_SIGNATURE(DefaultRootSignature)
+float4 PS_MAIN(FullscreenOutput In)
+{
+    INIT_MAIN;
+    const float2 uv = In.position.xy * gPost.dimensions.xy;
+    const float2 o = gPost.dimensions.xy * 0.25f;
+    const float4 combined = (ReduceTap(uv + o) + ReduceTap(uv - o) +
+            ReduceTap(uv + float2(o.x, -o.y)) + ReduceTap(uv + float2(-o.x, o.y))) * 0.25f;
+    RETURN(combined);
+}

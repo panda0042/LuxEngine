@@ -257,13 +257,15 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
         if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
             !std::isfinite(position.z) || !FitsGpuVector(normal) ||
             !std::isfinite(vertex.texCoords.x) || !std::isfinite(vertex.texCoords.y) ||
-            !FiniteVertexColor(vertex.color))
+            !FiniteVertexColor(vertex.color) || !std::isfinite(vertex.windWeight) ||
+            vertex.windWeight < 0 || vertex.windWeight > 1)
             return false;
         const auto relative = position - origin;
         if (!FitsGpuVector(relative))
             return false;
         ExtendBounds(minimum, maximum, relative);
-        data.push_back({relative, vertex.color, vertex.texCoords, normal});
+        data.push_back(
+            {relative, vertex.color, vertex.texCoords, normal, {vertex.windWeight, 0, 1, 1}});
     }
     const auto vertexBytes = static_cast<uint32>(data.size() * sizeof(RenderVertex));
     const auto indexBytes = static_cast<uint32>(indices.size_bytes());
@@ -282,6 +284,7 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
     minimum_ = minimum;
     maximum_ = maximum;
     indexCount_ = static_cast<uint32>(indices.size());
+    ++geometryRevision_;
     return true;
 }
 
@@ -309,13 +312,14 @@ bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
         const auto& n = vertex.normal;
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
             !FitsGpuVector(n) || !std::isfinite(vertex.texCoords.x) ||
-            !std::isfinite(vertex.texCoords.y) || !FiniteVertexColor(vertex.color))
+            !std::isfinite(vertex.texCoords.y) || !FiniteVertexColor(vertex.color) ||
+            !std::isfinite(vertex.windWeight) || vertex.windWeight < 0 || vertex.windWeight > 1)
             return false;
         const auto relative = p - origin;
         if (!FitsGpuVector(relative))
             return false;
         ExtendBounds(minimum, maximum, relative);
-        data.push_back({relative, vertex.color, vertex.texCoords, n});
+        data.push_back({relative, vertex.color, vertex.texCoords, n, {vertex.windWeight, 0, 1, 1}});
     }
     const auto size = static_cast<uint32>(data.size() * sizeof(RenderVertex));
     if (vertices_.use_count() > 1) {
@@ -330,6 +334,7 @@ bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
     origin_ = origin;
     minimum_ = minimum;
     maximum_ = maximum;
+    ++geometryRevision_;
     return true;
 }
 
@@ -530,7 +535,8 @@ void Renderer3D::Context::EndScene() {
         return;
     impl_->active = false;
     const auto coastalWater = std::exchange(impl_->coastalWater, std::nullopt);
-    if ((!impl_->modern || !impl_->modern->DrawCount()) && !impl_->settings.showSkybox)
+    if ((!impl_->modern || !impl_->modern->DrawCount()) && !impl_->settings.showSkybox &&
+        !impl_->settings.dynamicAtmosphere)
         return;
     if (auto state = impl_->LockValidState()) {
         if (!impl_->modern)
@@ -602,7 +608,9 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
         (textures.normal && !textures.normal->BelongsTo(*impl_->device)) ||
         (textures.roughness && !textures.roughness->BelongsTo(*impl_->device)) ||
         (textures.metallic && !textures.metallic->BelongsTo(*impl_->device)) ||
-        (textures.occlusion && !textures.occlusion->BelongsTo(*impl_->device)))
+        (textures.occlusion && !textures.occlusion->BelongsTo(*impl_->device)) ||
+        (textures.emissive && !textures.emissive->BelongsTo(*impl_->device)) ||
+        (textures.height && !textures.height->BelongsTo(*impl_->device)))
         return;
     const auto model = transform * Mat4::Translate(mesh.origin_);
     const auto relativeModel = Mat4::Translate(impl_->camera * -1) * model;
@@ -616,12 +624,39 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
         breakerMargin = {std::abs(sweep.x) + std::abs(lift.x), std::abs(sweep.y) + std::abs(lift.y),
                          std::abs(sweep.z) + std::abs(lift.z)};
     }
+    if (!std::isfinite(material.parallaxDepth) || material.parallaxDepth < 0 ||
+        material.parallaxDepth > 1 ||
+        (material.terrainLayer &&
+         (!std::isfinite(material.terrainLayer->heightBlend) ||
+          material.terrainLayer->heightBlend < 0 || material.terrainLayer->heightBlend > 1)))
+        return;
+    const auto& emission = material.emissive;
+    if (!FitsGpuVector(emission) || std::min({emission.x, emission.y, emission.z}) < 0 ||
+        std::max({emission.x, emission.y, emission.z}) > 65504)
+        return;
+    const auto& scatter = material.subsurfaceRadius;
+    if (!std::isfinite(material.wettingResponse) || material.wettingResponse < 0 ||
+        material.wettingResponse > 1 || !std::isfinite(material.windAmplitude) ||
+        material.windAmplitude < 0 || material.windAmplitude > 10 || !FitsGpuVector(scatter) ||
+        std::min({scatter.x, scatter.y, scatter.z}) < 0 ||
+        std::max({scatter.x, scatter.y, scatter.z}) > 1 ||
+        !std::isfinite(material.subsurfaceThickness) || material.subsurfaceThickness < 0 ||
+        material.subsurfaceThickness > 1)
+        return;
+    if (material.windAmplitude > 0) {
+        const auto inverse = relativeModel.InverseAffine();
+        const auto x = inverse.TransformDirection({material.windAmplitude, 0, 0});
+        const auto z = inverse.TransformDirection({0, 0, material.windAmplitude});
+        breakerMargin += Vec3{std::abs(x.x) + std::abs(z.x), std::abs(x.y) + std::abs(z.y),
+                              std::abs(x.z) + std::abs(z.z)};
+    }
     const bool shadowOnly =
         OutsideClipVolume(impl_->viewProjection * relativeModel, mesh.minimum_ - breakerMargin,
                           mesh.maximum_ + breakerMargin);
     const bool outsideShadow =
         impl_->shadowProjection &&
-        OutsideClipVolume(*impl_->shadowProjection * relativeModel, mesh.minimum_, mesh.maximum_);
+        OutsideClipVolume(*impl_->shadowProjection * relativeModel, mesh.minimum_ - breakerMargin,
+                          mesh.maximum_ + breakerMargin);
     if (shadowOnly) {
         const bool opaqueCaster = !material.water && material.alphaMode != MaterialAlphaMode::Blend;
         const bool rasterCaster = opaqueCaster && impl_->shadowProjection && !outsideShadow;
@@ -646,7 +681,7 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     }
     auto normalSampling = material.textureSampling;
     normalSampling.normalMap = true;
-    std::array<Ref<GpuTexture>, 6> maps;
+    std::array<Ref<GpuTexture>, 8> maps;
     const auto map = [this, &maps](size_t index, const std::string& path,
                                    TextureSampling sampling) {
         maps[index] = ResolveTexture(path, sampling, TextureColorSpace::Linear);
@@ -663,8 +698,24 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     const uint64 occlusion = textures.occlusion
                                  ? textures.occlusion->handle_
                                  : map(3, material.occlusionTexture, material.textureSampling);
+    const auto emissiveMap =
+        textures.emissive ? nullptr
+                          : ResolveTexture(material.emissiveTexture, material.textureSampling,
+                                           TextureColorSpace::Srgb);
+    const auto emissionTexture = textures.emissive
+                                     ? textures.emissive->handle_
+                                     : (emissiveMap ? emissiveMap->handle_ : uint64{0});
     Ref<GpuTexture> terrainBase;
-    uint64 terrainColor = 0, terrainNormal = 0, terrainRoughness = 0;
+    uint64 terrainColor = 0, terrainNormal = 0, terrainRoughness = 0, terrainHeight = 0;
+    float heightBlend = 0;
+    const bool relief = material.alphaMode == MaterialAlphaMode::Opaque && !material.water &&
+                        !textures.unlitSprite &&
+                        (material.parallaxDepth > 0 ||
+                         (material.terrainLayer && material.terrainLayer->heightBlend > 0));
+    const uint64 height = !relief ? 0
+                          : textures.height
+                              ? textures.height->handle_
+                              : map(6, material.heightTexture, material.textureSampling);
     Vec4 albedo = material.albedoColor;
     if (material.terrainLayer && material.alphaMode == MaterialAlphaMode::Opaque &&
         !material.water) {
@@ -675,6 +726,10 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
             terrainColor = terrainBase->handle_;
             terrainNormal = map(4, layer.normalTexture, normalSampling);
             terrainRoughness = map(5, layer.roughnessTexture, material.textureSampling);
+            if (relief) {
+                terrainHeight = map(7, layer.heightTexture, material.textureSampling);
+                heightBlend = layer.heightBlend;
+            }
             albedo.w = 1;
         }
     }
@@ -688,50 +743,65 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     if (material.water) {
         const auto airToWater = material.water->indexOfRefraction;
         const auto absorption = material.water->absorption;
-        if (!std::isfinite(airToWater) || airToWater <= 1 || airToWater > 2.5 ||
-            !std::isfinite(absorption.x) || !std::isfinite(absorption.y) ||
+        if (!std::isfinite(material.water->rippleStrength) || material.water->rippleStrength < 0 ||
+            material.water->rippleStrength > 1 || !std::isfinite(airToWater) || airToWater <= 1 ||
+            airToWater > 2.5 || !std::isfinite(absorption.x) || !std::isfinite(absorption.y) ||
             !std::isfinite(absorption.z) ||
             std::min({absorption.x, absorption.y, absorption.z}) < 0 ||
             std::max({absorption.x, absorption.y, absorption.z}) > 100) {
-            impl_->Report("water", "Invalid water material absorption or refractive index");
+            impl_->Report("water",
+                          "Invalid water material absorption, ripple strength or refractive index");
             return;
         }
         water = {static_cast<float>(absorption.x), static_cast<float>(absorption.y),
                  static_cast<float>(absorption.z), airToWater};
     }
     const auto& settings = impl_->settings;
-    uint32 shadowPageMask =
-        settings.virtualShadows && impl_->shadowProjection
-            ? Rhi::VirtualShadowPageMask(*impl_->shadowProjection, relativeModel, mesh.minimum_,
-                                         mesh.maximum_, settings.shadowResolution,
-                                         settings.shadowNormalBias)
-            : LUX_VIRTUAL_SHADOW_ALL_PAGES;
+    uint32 shadowPageMask = settings.virtualShadows && impl_->shadowProjection
+                                ? Rhi::VirtualShadowPageMask(
+                                      *impl_->shadowProjection, relativeModel,
+                                      mesh.minimum_ - breakerMargin, mesh.maximum_ + breakerMargin,
+                                      settings.shadowResolution, settings.shadowNormalBias)
+                                : LUX_VIRTUAL_SHADOW_ALL_PAGES;
     if (outsideShadow)
         shadowPageMask = 0;
-    if (!impl_->modern->AddDraw({mesh.vertices_->handle_,
-                                 mesh.indices_->handle_,
-                                 texture ? texture->handle_ : 0,
-                                 mesh.indexCount_,
-                                 model,
-                                 albedo,
-                                 material.metallic,
-                                 material.roughness,
-                                 static_cast<uint32>(material.alphaMode),
-                                 material.alphaCutoff,
-                                 material.doubleSided,
-                                 normal,
-                                 metallic,
-                                 roughness,
-                                 occlusion,
-                                 material.normalScale,
-                                 material.occlusionStrength,
-                                 sampling,
-                                 shadowOnly,
-                                 water,
-                                 shadowPageMask,
-                                 terrainColor,
-                                 terrainNormal,
-                                 terrainRoughness}))
+    if (!impl_->modern->AddDraw(
+            {mesh.vertices_->handle_,
+             mesh.indices_->handle_,
+             texture ? texture->handle_ : 0,
+             mesh.indexCount_,
+             model,
+             albedo,
+             material.metallic,
+             material.roughness,
+             static_cast<uint32>(material.alphaMode),
+             material.alphaCutoff,
+             material.doubleSided,
+             normal,
+             metallic,
+             roughness,
+             occlusion,
+             material.normalScale,
+             material.occlusionStrength,
+             sampling,
+             shadowOnly,
+             water,
+             shadowPageMask,
+             terrainColor,
+             terrainNormal,
+             terrainRoughness,
+             material.motionInstance,
+             mesh.geometryRevision_,
+             {material.wettingResponse * settings.surfaceWetness,
+              material.water ? material.water->rippleStrength : 0.f, 0, 0},
+             {material.windAmplitude, float(scatter.x), float(scatter.y), float(scatter.z)},
+             material.subsurfaceThickness,
+             material.emissive,
+             emissionTexture,
+             height,
+             terrainHeight,
+             material.parallaxDepth,
+             heightBlend}))
         return;
     ++impl_->stats.meshCount;
     lockedState->RetainGeometry(mesh.vertices_, mesh.indices_);
@@ -888,10 +958,11 @@ bool Renderer3D::Context::DrawMeshAssetImpl(const std::string& path, const Mat4&
     auto& cached = found->second;
     cached.used = ++impl_->sequence;
     const auto revision = path.empty() ? uint64{1} : AssetManager::GetMeshRevision(path);
-    const bool requiresUv = !material.baseColorTexture.empty() || !material.normalTexture.empty() ||
-                            !material.metallicTexture.empty() ||
-                            !material.roughnessTexture.empty() ||
-                            !material.occlusionTexture.empty() || material.terrainLayer.has_value();
+    const bool requiresUv =
+        !material.baseColorTexture.empty() || !material.normalTexture.empty() ||
+        !material.metallicTexture.empty() || !material.roughnessTexture.empty() ||
+        !material.occlusionTexture.empty() || !material.emissiveTexture.empty() ||
+        !material.heightTexture.empty() || material.terrainLayer.has_value();
     if (modelSubmesh >= 0) {
         std::string error = gltfModel ? gltfError : std::string{};
         auto model = gltfModel ? *gltfModel : ModelAsset::Load(path, error);
@@ -907,7 +978,7 @@ bool Renderer3D::Context::DrawMeshAssetImpl(const std::string& path, const Mat4&
             const bool importedUv =
                 imported && (imported->baseColorTexture >= 0 || imported->normalTexture >= 0 ||
                              imported->metallicTexture >= 0 || imported->roughnessTexture >= 0 ||
-                             imported->occlusionTexture >= 0);
+                             imported->occlusionTexture >= 0 || imported->emissiveTexture >= 0);
             if (overridePose && (index >= overridePose->submeshes.size() ||
                                  overridePose->submeshes[index].size() != part.vertices.size())) {
                 impl_->Report("mesh:" + key,
@@ -1079,12 +1150,16 @@ bool Renderer3D::Context::DrawMeshAssetImpl(const std::string& path, const Mat4&
     }
     const auto previous = impl_->stats.meshCount;
     auto drawable = material;
+    if (!drawable.motionInstance)
+        drawable.motionInstance = instance;
     if (!cached.hasUvs) {
         drawable.baseColorTexture.clear();
         drawable.normalTexture.clear();
         drawable.metallicTexture.clear();
         drawable.roughnessTexture.clear();
         drawable.occlusionTexture.clear();
+        drawable.emissiveTexture.clear();
+        drawable.heightTexture.clear();
         drawable.terrainLayer.reset();
     }
     const auto* imported =
@@ -1106,6 +1181,8 @@ bool Renderer3D::Context::DrawMeshAssetImpl(const std::string& path, const Mat4&
     drawable.alphaCutoff = imported->alphaCutoff;
     drawable.normalScale = imported->normalScale;
     drawable.occlusionStrength = imported->occlusionStrength;
+    if (drawable.emissive.x == 0 && drawable.emissive.y == 0 && drawable.emissive.z == 0)
+        drawable.emissive = imported->emissive;
     if (cached.hasUvs) {
         const auto sample = drawable.textureSampling;
         const auto base =
@@ -1131,12 +1208,17 @@ bool Renderer3D::Context::DrawMeshAssetImpl(const std::string& path, const Mat4&
             map(imported->roughnessTexture, drawable.roughnessTexture, TextureChannel::Green);
         const auto occlusion =
             map(imported->occlusionTexture, drawable.occlusionTexture, TextureChannel::Red);
+        const auto emissive = drawable.emissiveTexture.empty()
+                                  ? ResolveTexture(path, sample, TextureColorSpace::Srgb, 0,
+                                                   cached.model, imported->emissiveTexture)
+                                  : nullptr;
         DrawMeshWithTextures(*cached.mesh, transform, drawable,
                              {.baseColor = base.get(),
                               .normal = normal.get(),
                               .roughness = roughness.get(),
                               .metallic = metallic.get(),
-                              .occlusion = occlusion.get()});
+                              .occlusion = occlusion.get(),
+                              .emissive = emissive.get()});
     } else {
         DrawMesh(*cached.mesh, transform, drawable);
     }

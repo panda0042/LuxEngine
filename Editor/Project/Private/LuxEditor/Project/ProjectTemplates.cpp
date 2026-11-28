@@ -110,7 +110,7 @@ constexpr auto RequiredImageCheck =
     endif()
     get_filename_component(directory "${owner}" DIRECTORY)
     string(CONCAT pattern
-        [=["(texture|sprite_sheet|base_color_texture|normal_texture|metallic_texture|roughness_texture|occlusion_texture|environment|baseline|suspended)"]=]
+        [=["(texture|sprite_sheet|base_color_texture|normal_texture|metallic_texture|roughness_texture|occlusion_texture|emissive_texture|height_texture|environment|baseline|suspended)"]=]
         "[ \r\n\t]*:[ \r\n\t]*" [=[("(\\.|[^"\\])*")]=])
     while(document MATCHES "${pattern}")
         set(match "${CMAKE_MATCH_0}")
@@ -994,7 +994,8 @@ protected:
         if (cameras.perspective || !cameras.cameraEntity) {
             auto renderSettings = settings.render3D;
             for (auto* path : {&renderSettings.environmentPath,
-                               &renderSettings.waterReflection.environmentPath})
+                               &renderSettings.waterReflection.environmentPath,
+                               &renderSettings.colorGradingLut})
                 if (!path->empty())
                     *path = scene_->ResolveAssetPath(*path);
             le::Renderer3D::BeginScene(cameras.camera3D, renderSettings, settings.exposure);

@@ -94,6 +94,8 @@ struct GpuFrameStats {
     uint32 temporalResolvePasses = 0;
     uint32 temporalHistoryPasses = 0;
     uint32 restirPasses = 0;
+    uint32 temporalRestirPasses = 0; // dispatches with a valid reprojectable previous frame
+    uint32 rayDenoiserPasses = 0, objectMotionDraws = 0;
     uint32 radianceCascadePasses = 0;
     uint32 virtualShadowPages = 0;
     uint64 vertexBytes = 0;

@@ -963,13 +963,21 @@ void EditorWindow::RefreshInspector() {
                                          material.alphaMode == LuxEngine::MaterialAlphaMode::Mask);
         materialDoubleSided_->setChecked(material.doubleSided);
         materialDoubleSided_->setEnabled(mesh);
-        const std::array<std::string, 4> paths{material.normalTexture, material.metallicTexture,
-                                               material.roughnessTexture,
-                                               material.occlusionTexture};
+        const std::array<double, 3> emission{material.emissive.x, material.emissive.y,
+                                             material.emissive.z};
+        for (size_t i = 0; i < emissive_.size(); ++i) {
+            emissive_[i]->setValue(emission[i]);
+            emissive_[i]->setEnabled(mesh);
+        }
+        const std::array<std::string, 6> paths{material.normalTexture,    material.metallicTexture,
+                                               material.roughnessTexture, material.occlusionTexture,
+                                               material.emissiveTexture,  material.heightTexture};
         for (size_t i = 0; i < paths.size(); ++i) {
             materialMapPaths_[i]->setText(Q(paths[i]));
             materialMapPaths_[i]->setEnabled(mesh);
         }
+        materialParallaxDepth_->setValue(material.parallaxDepth);
+        materialParallaxDepth_->setEnabled(mesh);
         materialNormalScale_->setValue(material.normalScale);
         materialNormalScale_->setEnabled(mesh);
         materialOcclusionStrength_->setValue(material.occlusionStrength);
@@ -1258,6 +1266,8 @@ void EditorWindow::OnMeshChanged(const LuxUI::Widget* field) {
             else if (field == materialOcclusionStrength_)
                 material.occlusionStrength =
                     static_cast<float>(materialOcclusionStrength_->value());
+            else if (field == materialParallaxDepth_)
+                material.parallaxDepth = static_cast<float>(materialParallaxDepth_->value());
             else if (field == materialMipmaps_)
                 material.textureSampling.mipmaps = materialMipmaps_->isChecked();
             else if (field == materialAddressMode_)
@@ -1265,9 +1275,12 @@ void EditorWindow::OnMeshChanged(const LuxUI::Widget* field) {
                     materialAddressMode_->currentIndex());
             else if (field == materialAnisotropic_)
                 material.textureSampling.anisotropic = materialAnisotropic_->isChecked();
-            const std::array<std::string*, 4> paths{
-                &material.normalTexture, &material.metallicTexture, &material.roughnessTexture,
-                &material.occlusionTexture};
+            if (field == emissive_[0] || field == emissive_[1] || field == emissive_[2])
+                material.emissive = {emissive_[0]->value(), emissive_[1]->value(),
+                                     emissive_[2]->value()};
+            const std::array<std::string*, 6> paths{
+                &material.normalTexture,    &material.metallicTexture, &material.roughnessTexture,
+                &material.occlusionTexture, &material.emissiveTexture, &material.heightTexture};
             for (size_t i = 0; i < paths.size(); ++i) {
                 if (field != materialMapPaths_[i])
                     continue;
@@ -1491,10 +1504,15 @@ void EditorWindow::CopyEntity() {
                !clip.rootMotionTarget.empty() || !clip.spriteSheet.empty() ||
                clip.spriteColumns != 1 || clip.spriteRows != 1;
     }();
+    const auto* renderMesh = selected.TryGetComponent<LuxEngine::MeshRendererComponent>();
+    const bool needsFullMaterial = renderMesh && (renderMesh->material.terrainLayer ||
+                                                  !renderMesh->material.heightTexture.empty() ||
+                                                  renderMesh->material.parallaxDepth > 0);
     if ((sprite && (!sprite->texturePath.empty() || sprite->frame || sprite->columns != 1 ||
                     sprite->rows != 1)) ||
         (camera && (camera->nearClip != .1f || camera->farClip != 1000000.0)) ||
-        needsFullAnimation || selected.HasComponent<LuxEngine::AnimatorComponent>() ||
+        needsFullMaterial || needsFullAnimation ||
+        selected.HasComponent<LuxEngine::AnimatorComponent>() ||
         selected.HasComponent<LuxEngine::ModelAnimationComponent>() ||
         selected.HasComponent<LuxEngine::ScriptComponent>() ||
         selected.HasComponent<LuxEngine::CapsuleCollider3DComponent>() ||
@@ -1507,14 +1525,15 @@ void EditorWindow::CopyEntity() {
          selected.GetComponent<LuxEngine::HierarchyComponent>().group)) {
         LuxEngine::Scene subtree;
         const auto ids = subtree.ImportEntities(document_.GetScene(), {selected.GetId()});
-        for (auto object : subtree.GetEntities())
-            if (auto* mesh = object.TryGetComponent<LuxEngine::MeshRendererComponent>(); mesh)
-                for (auto* resource :
-                     {&mesh->meshPath, &mesh->material.baseColorTexture,
-                      &mesh->material.normalTexture, &mesh->material.metallicTexture,
-                      &mesh->material.roughnessTexture, &mesh->material.occlusionTexture})
+        for (auto object : subtree.GetEntities()) {
+            if (auto* mesh = object.TryGetComponent<LuxEngine::MeshRendererComponent>()) {
+                if (!mesh->meshPath.empty())
+                    mesh->meshPath = document_.GetScene().ResolveAssetPath(mesh->meshPath);
+                for (auto* resource : LuxEngine::MaterialTexturePaths(mesh->material))
                     if (!resource->empty())
                         *resource = document_.GetScene().ResolveAssetPath(*resource);
+            }
+        }
         for (auto entity : subtree.GetEntities()) {
             auto resolve = [&](std::string& path) {
                 if (!path.empty())
@@ -1580,11 +1599,14 @@ void EditorWindow::CopyEntity() {
         options.insert(LUX_UI_TEXT("mipmaps"), m.textureSampling.mipmaps);
         options.insert(LUX_UI_TEXT("addressMode"), static_cast<int>(m.textureSampling.addressMode));
         options.insert(LUX_UI_TEXT("anisotropic"), m.textureSampling.anisotropic);
-        const std::array<std::pair<const char*, const std::string*>, 4> maps{
+        options.insert(LUX_UI_TEXT("emissive"),
+                       LuxUI::JsonArray{m.emissive.x, m.emissive.y, m.emissive.z});
+        const std::array<std::pair<const char*, const std::string*>, 5> maps{
             {{"normalTexture", &m.normalTexture},
              {"metallicTexture", &m.metallicTexture},
              {"roughnessTexture", &m.roughnessTexture},
-             {"occlusionTexture", &m.occlusionTexture}}};
+             {"occlusionTexture", &m.occlusionTexture},
+             {"emissiveTexture", &m.emissiveTexture}}};
         for (const auto& [name, path] : maps)
             options.insert(LuxUI::String::fromLatin1(name),
                            path->empty() ? LuxUI::String{}
@@ -1983,13 +2005,23 @@ bool ValidateClipboardJson(const LuxUI::JsonObject& object, ValidatedClipboardEn
                 static_cast<LuxEngine::TextureAddressMode>(address.toInt());
             comp.material.textureSampling.anisotropic =
                 options.value(LUX_UI_TEXT("anisotropic")).toBool();
-            const std::array<std::pair<const char*, std::string*>, 4> maps{
+            if (options.contains(LUX_UI_TEXT("emissive")) &&
+                !ParseVec3(options.value(LUX_UI_TEXT("emissive")), comp.material.emissive, 0,
+                           65504)) {
+                errorMsg = LUX_UI_TEXT("재질 발광 색의 형식 또는 범위가 올바르지 않습니다.");
+                return false;
+            }
+            const std::array<std::pair<const char*, std::string*>, 5> maps{
                 {{"normalTexture", &comp.material.normalTexture},
                  {"metallicTexture", &comp.material.metallicTexture},
                  {"roughnessTexture", &comp.material.roughnessTexture},
-                 {"occlusionTexture", &comp.material.occlusionTexture}}};
+                 {"occlusionTexture", &comp.material.occlusionTexture},
+                 {"emissiveTexture", &comp.material.emissiveTexture}}};
             for (const auto& [name, path] : maps) {
-                const auto value = options.value(LuxUI::String::fromLatin1(name));
+                const auto key = LuxUI::String::fromLatin1(name);
+                if (path == &comp.material.emissiveTexture && !options.contains(key))
+                    continue;
+                const auto value = options.value(key);
                 if (!value.isString()) {
                     errorMsg = LUX_UI_TEXT("재질 텍스처 경로가 문자열이 아닙니다.");
                     return false;

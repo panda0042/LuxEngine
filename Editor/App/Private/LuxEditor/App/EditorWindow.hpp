@@ -385,7 +385,9 @@ private:
     LuxUI::ComboBox* materialAlphaMode_ = nullptr;
     LuxUI::DoubleSpinBox* materialAlphaCutoff_ = nullptr;
     LuxUI::CheckBox* materialDoubleSided_ = nullptr;
-    std::array<LuxUI::LineEdit*, 4> materialMapPaths_{};
+    std::array<LuxUI::LineEdit*, 6> materialMapPaths_{};
+    std::array<LuxUI::DoubleSpinBox*, 3> emissive_{};
+    LuxUI::DoubleSpinBox* materialParallaxDepth_ = nullptr;
     LuxUI::DoubleSpinBox* materialNormalScale_ = nullptr;
     LuxUI::DoubleSpinBox* materialOcclusionStrength_ = nullptr;
     LuxUI::CheckBox* materialMipmaps_ = nullptr;

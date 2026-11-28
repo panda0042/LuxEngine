@@ -1,0 +1,35 @@
+#include "LuxSceneResources.h"
+#include "LuxVegetationWind.h"
+
+STRUCT(MotionInput)
+{
+    DATA(float3, position, POSITION);
+    DATA(float4, color, COLOR);
+    DATA(float2, uv, TEXCOORD0);
+    DATA(float3, normal, NORMAL);
+    DATA(float4, vertexData, TEXCOORD1);
+};
+STRUCT(MotionVertex)
+{
+    DATA(float4, position, SV_Position);
+    DATA(float4, currentClip, TEXCOORD0);
+    DATA(float4, previousClip, TEXCOORD1);
+    DATA(float3, uvAlpha, TEXCOORD2);
+};
+
+ROOT_SIGNATURE(DefaultRootSignature)
+MotionVertex VS_MAIN(MotionInput In)
+{
+    INIT_MAIN;
+    MotionVertex Out;
+    Out.uvAlpha = float3(In.uv, In.color.a * gDraw.albedo.a);
+    const float4 local = float4(In.position, 1.0f);
+    const float4 world = mul(gDraw.model, local);
+    const float3 bent = world.xyz + WindOffset(world.xyz, In.vertexData.x, gScene.wind.z);
+    Out.currentClip = mul(gDraw.viewProjection, float4(bent, 1.0f));
+    Out.position = Out.currentClip;
+    const float3 previousBend = WindOffset(world.xyz, In.vertexData.x, gDraw.previousWind.x);
+    Out.previousClip = mul(gDraw.previousMvp, local) +
+                       mul(gDraw.previousWindProjection, float4(previousBend, 0.0f));
+    RETURN(Out);
+}
