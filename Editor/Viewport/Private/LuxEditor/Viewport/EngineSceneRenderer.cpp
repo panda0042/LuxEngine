@@ -488,7 +488,8 @@ bool EngineSceneRenderer::Render3D(LuxEngine::Scene& scene, int pixelWidth, int 
 
     if (skyboxBackground) {
         *skyboxBackground = {};
-        if (scene.GetSettings().render3D.showSkybox)
+        if (scene.GetSettings().render3D.showSkybox ||
+            scene.GetSettings().render3D.dynamicAtmosphere)
             if (!Render3DPass(scene, pixelWidth, pixelHeight, focus, yaw, pitch, distance,
                               *skyboxBackground, true, true, cameraOverride))
                 return false;
@@ -534,8 +535,8 @@ bool EngineSceneRenderer::RenderGame(LuxEngine::Scene& scene, int pixelWidth, in
     try {
         if (camera.perspective) {
             auto settings = scene.GetSettings().render3D;
-            for (auto* path :
-                 {&settings.environmentPath, &settings.waterReflection.environmentPath})
+            for (auto* path : {&settings.environmentPath, &settings.waterReflection.environmentPath,
+                               &settings.colorGradingLut})
                 if (!path->empty())
                     *path = scene.ResolveAssetPath(*path);
             LuxEngine::Renderer3D::BeginScene(camera.camera3D, settings,
@@ -614,10 +615,12 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
     try {
         auto renderSettings = scene.GetSettings().render3D;
         renderSettings.showSkybox = renderSettings.showSkybox && drawSkybox;
+        renderSettings.dynamicAtmosphere = renderSettings.dynamicAtmosphere && drawSkybox;
         if (backgroundOnly)
             renderSettings.shadows = false;
         for (auto* path :
-             {&renderSettings.environmentPath, &renderSettings.waterReflection.environmentPath})
+             {&renderSettings.environmentPath, &renderSettings.waterReflection.environmentPath,
+              &renderSettings.colorGradingLut})
             if (!path->empty())
                 *path = scene.ResolveAssetPath(*path);
         LuxEngine::Renderer3D::BeginScene(camera, renderSettings, scene.GetSettings().exposure);
@@ -632,9 +635,8 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
             const auto world = scene.GetWorldMatrix(entity.GetId());
             if (const auto* mesh = entity.TryGetComponent<LuxEngine::MeshRendererComponent>()) {
                 auto material = mesh->material;
-                for (auto* resource : {&material.baseColorTexture, &material.normalTexture,
-                                       &material.metallicTexture, &material.roughnessTexture,
-                                       &material.occlusionTexture})
+                material.motionInstance = static_cast<LuxEngine::uint64>(entity.GetId()) + 1;
+                for (auto* resource : LuxEngine::MaterialTexturePaths(material))
                     if (!resource->empty())
                         *resource = scene.ResolveAssetPath(*resource);
                 if (meshPreview_ && meshPreview_->entity == entity.GetId()) {

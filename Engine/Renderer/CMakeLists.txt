@@ -9,6 +9,7 @@ lux_engine_module(Renderer
         Public/LuxEngine/Renderer/Lighting/TriangleRayScene.hpp
         Public/LuxEngine/Renderer/Renderer2D/Renderer2D.hpp
         Public/LuxEngine/Renderer/Renderer3D/Render3DSettings.hpp
+        Public/LuxEngine/Renderer/Renderer3D/Decal.hpp
         Public/LuxEngine/Renderer/Renderer3D/Renderer3D.hpp
         Public/LuxEngine/Renderer/Water/OceanSpectrum.hpp
         Public/LuxEngine/Renderer/Water/WaterSurface.hpp
@@ -23,6 +24,7 @@ lux_engine_module(Renderer
         Private/Lighting/TriangleRayScene.cpp
         Private/Renderer2D/Renderer2D.cpp
         Private/Renderer3D/Render3DSettings.cpp
+        Private/Renderer3D/Decal.cpp
         Private/Renderer3D/Renderer3D.cpp
         Private/Water/OceanSpectrum.cpp
         Private/Water/WaterSurface.cpp

@@ -14,7 +14,7 @@ public:
     void Draw(LuxEngine::Renderer3D::Context& renderer, std::string_view key, Vec3 ground,
               Vec3 dimensions, double yaw) const;
     void Draw(LuxEngine::Renderer3D::Context& renderer, std::string_view key,
-              const LuxEngine::Mat4& placement, Vec3 dimensions) const;
+              const LuxEngine::Mat4& placement, Vec3 dimensions, uint64_t motionInstance = 0) const;
 
     struct Part {
         std::unique_ptr<LuxEngine::Mesh3D> mesh;

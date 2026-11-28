@@ -315,7 +315,8 @@ void EditorWindow::ChooseModelAsset() {
         const auto& material = selected.GetComponent<LuxEngine::MeshRendererComponent>().material;
         return !material.baseColorTexture.empty() || !material.normalTexture.empty() ||
                !material.metallicTexture.empty() || !material.roughnessTexture.empty() ||
-               !material.occlusionTexture.empty();
+               !material.occlusionTexture.empty() || !material.emissiveTexture.empty() ||
+               !material.heightTexture.empty() || material.terrainLayer.has_value();
     };
     if (hasTextures() && !data.hasTexCoords) {
         ShowError(LUX_UI_TEXT("모델 불러오기"),

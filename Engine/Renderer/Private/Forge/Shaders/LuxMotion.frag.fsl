@@ -1,0 +1,22 @@
+#include "LuxSceneResources.h"
+
+STRUCT(MotionVertex)
+{
+    DATA(float4, position, SV_Position);
+    DATA(float4, currentClip, TEXCOORD0);
+    DATA(float4, previousClip, TEXCOORD1);
+    DATA(float3, uvAlpha, TEXCOORD2);
+};
+
+ROOT_SIGNATURE(DefaultRootSignature)
+float4 PS_MAIN(MotionVertex In)
+{
+    INIT_MAIN;
+    if (gDraw.options.y > 0.5f && gDraw.options.y < 1.5f &&
+        BelowAlphaCutoff(SampleMaterial(gTexture, In.uvAlpha.xy).a, In.uvAlpha.z, In.uvAlpha.xy, In.position.xy))
+        discard;
+    if (In.previousClip.w <= 0.0f || In.previousClip.w > 65504.0f)
+        RETURN(float4(0.0f, 0.0f, 0.0f, -gDraw.previousWind.y));
+    const float2 delta = In.previousClip.xy / In.previousClip.w - In.currentClip.xy / In.currentClip.w;
+    RETURN(float4(delta * float2(0.5f, -0.5f), In.previousClip.w, gDraw.previousWind.y));
+}

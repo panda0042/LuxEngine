@@ -5,7 +5,8 @@
 #include "LuxRestirCommon.h"
 #include "LuxRayVisibility.h"
 
-#define LUX_RESTIR_CANDIDATE_FLOATS4 8u
+#define LUX_RESTIR_CANDIDATE_FLOATS4 9u
+#define LUX_RESTIR_HISTORY_FLOATS4 10u
 
 struct RestirSurface {
     float3 position;

@@ -197,6 +197,24 @@ void Assets() {
                   "fixed glTF resources load without the previous diagnostic");
         }
     }
+    {
+        const auto original = files.root / "triangle.gltf";
+        std::ifstream input(original);
+        auto document = nlohmann::json::parse(input);
+        auto& material = document.at("materials").at(0);
+        material["emissiveFactor"] = {.5, 1, .25};
+        material["emissiveTexture"] = {{"index", 0}};
+        material["extensions"]["KHR_materials_emissive_strength"] = {{"emissiveStrength", 6}};
+        document["extensionsRequired"] = {"KHR_materials_emissive_strength"};
+        document["extensionsUsed"] = document["extensionsRequired"];
+        const auto emissive = files.root / "lamp.gltf";
+        std::ofstream(emissive) << document.dump();
+        const auto model = ModelAsset::Load(Utf8Path(emissive), error);
+        Check(model && model->materials.front().emissive.y == 6 &&
+                  model->materials.front().emissive.x == 3 &&
+                  model->materials.front().emissiveTexture == 0,
+              "required glTF emissive strength preserves HDR radiance and its color texture");
+    }
     std::ifstream source(files.root / "triangle.gltf", std::ios::binary);
     auto escaped = nlohmann::ordered_json::parse(source);
     const auto nested = files.root / "nested";

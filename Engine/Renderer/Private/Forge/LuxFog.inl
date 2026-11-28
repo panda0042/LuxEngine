@@ -36,10 +36,10 @@ void ShutdownFog(LuxForgeDevice* device) {
     for (auto* set : {fog->computeSet, fog->compositeSet})
         if (set)
             removeDescriptorSet(device->renderer, set);
-    for (auto* pipeline : {fog->computePipeline, fog->compositePipeline})
+    for (auto* pipeline : {fog->computePipeline, fog->compositePipeline, fog->hdrPipeline})
         if (pipeline)
             removePipeline(device->renderer, pipeline);
-    for (auto* shader : {fog->computeShader, fog->compositeShader})
+    for (auto* shader : {fog->computeShader, fog->compositeShader, fog->hdrShader})
         if (shader)
             removeShader(device->renderer, shader);
     for (auto* buffer : {fog->constants, fog->volume})
@@ -126,6 +126,15 @@ bool InitFog(LuxForgeDevice* device) {
     blend.mRenderTargetMask = BLEND_STATE_TARGET_0;
     graphics.pBlendState = &blend;
     addPipeline(device->renderer, &composite, &fog.compositePipeline);
+    fog.hdrShader = LoadShader(device, "luxfullscreen.vert", "luxfoghdr.frag");
+    if (fog.hdrShader) {
+        auto format = kHdrFormat;
+        graphics.pColorFormats = &format;
+        graphics.mDepthStencilFormat = TinyImageFormat_UNDEFINED;
+        graphics.pBlendState = nullptr;
+        graphics.pShaderProgram = fog.hdrShader;
+        addPipeline(device->renderer, &composite, &fog.hdrPipeline);
+    }
     fog.ready = fog.computePipeline && fog.compositePipeline;
     return fog.ready;
 }
@@ -180,10 +189,13 @@ void FillFogConstants(LuxForgeDevice* device, const LuxForgeScene& scene, bool s
 
 bool RenderFog(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass, bool water,
                bool shadows, [[maybe_unused]] AccelerationStructure* rayScene = nullptr,
-               const uint32_t* virtualShadowPages = nullptr, Texture* resolved = nullptr) {
+               const uint32_t* virtualShadowPages = nullptr, Texture* resolved = nullptr,
+               LuxForgeDevice::SceneTarget* hdrOutput = nullptr) {
     if (!(scene.fogColorDensity[3] > 0) || !(scene.fogOptions[0] > 0) || !InitFog(device))
         return false;
     auto& fog = *device->fog;
+    if (hdrOutput && !fog.hdrPipeline)
+        return false;
     const uint32_t entry = device->frameSlot * LuxForgeDevice::kMaxScenePasses + pass;
     const uint32_t offset = entry * kFogUniformStride;
     FogConstants constants = {};
@@ -256,10 +268,15 @@ bool RenderFog(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass
     ++device->frameStats.pipelineBinds;
     ++device->frameStats.computeDispatches;
 
-    BindPass(device, false, nullptr);
-    BindPipeline(device, cmd, fog.compositePipeline);
+    if (hdrOutput)
+        BindPostTarget(device, *hdrOutput);
+    else
+        BindPass(device, false, nullptr);
+    BindPipeline(device, cmd, hdrOutput ? fog.hdrPipeline : fog.compositePipeline);
     BindDescriptors(device, cmd, entry, fog.compositeSet);
     cmdDraw(cmd, 3, 0);
+    if (hdrOutput)
+        FinishPostTarget(device, *hdrOutput);
     device->frameStats.uniformBinds += 2;
     ++device->frameStats.drawCalls;
     ++device->frameStats.volumetricFogPasses;

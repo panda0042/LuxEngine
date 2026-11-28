@@ -197,6 +197,51 @@ SceneSettings InheritedSettings(const SceneSettings& current, const SceneSetting
             newRender.screenSpaceAntialiasing);
     inherit(render.temporalAntialiasing, oldRender.temporalAntialiasing,
             newRender.temporalAntialiasing);
+    inherit(render.gtaoRadius, oldRender.gtaoRadius, newRender.gtaoRadius);
+    inherit(render.contactShadowDistance, oldRender.contactShadowDistance,
+            newRender.contactShadowDistance);
+    inherit(render.shadowLightAngularRadius, oldRender.shadowLightAngularRadius,
+            newRender.shadowLightAngularRadius);
+    inherit(render.hierarchicalReflections, oldRender.hierarchicalReflections,
+            newRender.hierarchicalReflections);
+    inherit(render.bloomIntensity, oldRender.bloomIntensity, newRender.bloomIntensity);
+    inherit(render.bloomThreshold, oldRender.bloomThreshold, newRender.bloomThreshold);
+    inherit(render.physicallyBasedBloom, oldRender.physicallyBasedBloom,
+            newRender.physicallyBasedBloom);
+    inherit(render.localExposure, oldRender.localExposure, newRender.localExposure);
+    inherit(render.physicalCamera.exposure, oldRender.physicalCamera.exposure,
+            newRender.physicalCamera.exposure);
+    inherit(render.physicalCamera.depthOfField, oldRender.physicalCamera.depthOfField,
+            newRender.physicalCamera.depthOfField);
+    inherit(render.physicalCamera.iso, oldRender.physicalCamera.iso, newRender.physicalCamera.iso);
+    inherit(render.physicalCamera.shutterSeconds, oldRender.physicalCamera.shutterSeconds,
+            newRender.physicalCamera.shutterSeconds);
+    inherit(render.physicalCamera.fNumber, oldRender.physicalCamera.fNumber,
+            newRender.physicalCamera.fNumber);
+    inherit(render.physicalCamera.sensorHeightMm, oldRender.physicalCamera.sensorHeightMm,
+            newRender.physicalCamera.sensorHeightMm);
+    inherit(render.physicalCamera.luminanceScale, oldRender.physicalCamera.luminanceScale,
+            newRender.physicalCamera.luminanceScale);
+    inherit(render.apertureBlades, oldRender.apertureBlades, newRender.apertureBlades);
+    inherit(render.autoExposure, oldRender.autoExposure, newRender.autoExposure);
+    inherit(render.depthOfFieldRadius, oldRender.depthOfFieldRadius, newRender.depthOfFieldRadius);
+    inherit(render.focusDistance, oldRender.focusDistance, newRender.focusDistance);
+    inherit(render.colorGradingLut, oldRender.colorGradingLut, newRender.colorGradingLut);
+    inherit(render.colorGradingStrength, oldRender.colorGradingStrength,
+            newRender.colorGradingStrength);
+    inherit(render.dynamicAtmosphere, oldRender.dynamicAtmosphere, newRender.dynamicAtmosphere);
+    inherit(render.aerosolDensity, oldRender.aerosolDensity, newRender.aerosolDensity);
+    inherit(render.vignette, oldRender.vignette, newRender.vignette);
+    inherit(render.filmGrain, oldRender.filmGrain, newRender.filmGrain);
+    inherit(render.chromaticAberration, oldRender.chromaticAberration,
+            newRender.chromaticAberration);
+    inherit(render.lensDistortion, oldRender.lensDistortion, newRender.lensDistortion);
+    inherit(render.lensFlareStrength, oldRender.lensFlareStrength, newRender.lensFlareStrength);
+    inherit(render.cloudCoverage, oldRender.cloudCoverage, newRender.cloudCoverage);
+    inherit(render.surfaceWetness, oldRender.surfaceWetness, newRender.surfaceWetness);
+    inherit(render.weatherTime, oldRender.weatherTime, newRender.weatherTime);
+    inherit(render.windVelocity.x, oldRender.windVelocity.x, newRender.windVelocity.x);
+    inherit(render.windVelocity.y, oldRender.windVelocity.y, newRender.windVelocity.y);
     inherit(render.shadows, oldRender.shadows, newRender.shadows);
     inherit(render.virtualShadows, oldRender.virtualShadows, newRender.virtualShadows);
     inherit(render.shadowResolution, oldRender.shadowResolution, newRender.shadowResolution);
@@ -206,6 +251,8 @@ SceneSettings InheritedSettings(const SceneSettings& current, const SceneSetting
     auto& rays = render.rayTracing;
     const auto& oldRays = oldRender.rayTracing;
     const auto& newRays = newRender.rayTracing;
+    inherit(rays.temporalRestir, oldRays.temporalRestir, newRays.temporalRestir);
+    inherit(rays.denoiser, oldRays.denoiser, newRays.denoiser);
     inherit(rays.shadows, oldRays.shadows, newRays.shadows);
     inherit(rays.reflections, oldRays.reflections, newRays.reflections);
     inherit(rays.refractions, oldRays.refractions, newRays.refractions);
@@ -310,11 +357,11 @@ void RewriteEntityPaths(Entity entity, const fs::path& owner, const fs::path* de
         rebaseAnimationAsset(sprite->texturePath);
     if (auto* animation = entity.TryGetComponent<ModelAnimationComponent>())
         rebaseAnimationAsset(animation->modelPath);
-    if (auto* mesh = entity.TryGetComponent<MeshRendererComponent>())
-        for (auto* resource : {&mesh->meshPath, &mesh->material.baseColorTexture,
-                               &mesh->material.normalTexture, &mesh->material.metallicTexture,
-                               &mesh->material.roughnessTexture, &mesh->material.occlusionTexture})
+    if (auto* mesh = entity.TryGetComponent<MeshRendererComponent>()) {
+        rebaseAnimationAsset(mesh->meshPath);
+        for (auto* resource : LuxEngine::MaterialTexturePaths(mesh->material))
             rebaseAnimationAsset(*resource);
+    }
     auto* reference = entity.TryGetComponent<SceneReferenceComponent>();
     if (!reference)
         return;
@@ -348,7 +395,8 @@ void RewritePaths(Scene& scene, const fs::path& owner, const fs::path* destinati
     auto settings = scene.GetSettings();
     bool changed = false;
     for (auto* path :
-         {&settings.render3D.environmentPath, &settings.render3D.waterReflection.environmentPath}) {
+         {&settings.render3D.environmentPath, &settings.render3D.waterReflection.environmentPath,
+          &settings.render3D.colorGradingLut}) {
         if (path->empty())
             continue;
         const auto absolute = Canonical(Path(*path), owner);

@@ -356,6 +356,14 @@ void Game::AdvanceWeather(double dt) {
     cloud_ += float((cloud - cloud_) * fade);
     fog_ += float((fog - fog_) * fade);
     wetness_ += (wet - wetness_) * (1 - std::exp(-dt * .13));
+    // Rain fills exposed pores quickly. Stored water evaporates more slowly under cloud cover.
+    const bool snow = weather_ == Weather::Snow || weather_ == Weather::Blizzard;
+    const double precipitation = wetness_ * (snow ? .18 : 1.);
+    const double daylight = std::max(0., std::sin((hour_ - 6.) * std::numbers::pi / 12.));
+    const double evaporation = .012 + .035 * daylight * (1. - cloud_);
+    const double totalRate = .28 * precipitation + evaporation;
+    const double equilibrium = .28 * precipitation / totalRate;
+    surfaceWetness_ += (equilibrium - surfaceWetness_) * -std::expm1(-totalRate * dt);
     const double lightningPhase = std::fmod(elapsed_ + 2.4, 7.8);
     flash_ = weather_ == Weather::Thunder ? float(std::max(0., 1. - lightningPhase * 9.)) : 0;
 }

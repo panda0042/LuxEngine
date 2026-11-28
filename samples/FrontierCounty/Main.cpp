@@ -278,12 +278,14 @@ void FrontierApp::OnInit() {
     ground_.alphaMode = MaterialAlphaMode::Opaque;
     ground_.baseColorTexture = texture("gravel_albedo.jpg");
     ground_.normalTexture = texture("gravel_normal.png");
+    ground_.heightTexture = texture("gravel_height.png");
+    ground_.parallaxDepth = options_.quality.radius > 1 ? .035f : 0.f;
     ground_.roughnessTexture = texture("gravel_roughness.png");
     scenery_.alphaMode = MaterialAlphaMode::Opaque;
     const auto meadow = assets_ / "FrontierMeadow";
     ground_.terrainLayer =
         TerrainLayer3D{Utf8Path(meadow / "albedo.jpg"), Utf8Path(meadow / "normal.png"),
-                       Utf8Path(meadow / "roughness.png")};
+                       Utf8Path(meadow / "roughness.png"), Utf8Path(meadow / "height.png"), .8f};
     scenery_.roughness = .78f;
     const auto asphalt = assets_ / "FrontierAsphalt";
     road_.alphaMode = MaterialAlphaMode::Opaque;
@@ -301,6 +303,43 @@ void FrontierApp::OnInit() {
     settings_.screenSpaceAntialiasing = !settings_.temporalAntialiasing && options_.edgeAA;
     settings_.environmentPath = Utf8Path(assets_ / "LakesideOcean" / "lakeside_physical_noon.hdr");
     settings_.shadowResolution = options_.quality.shadow;
+    const bool high = options_.quality.radius > 1;
+    const bool cinematic =
+        options_.quality.name == "cinematic" || options_.quality.name == "extreme";
+    settings_.gtaoRadius = high ? 1.25f : 0.f;
+    settings_.contactShadowDistance = high ? .6f : 0.f;
+    settings_.shadowLightAngularRadius = high ? .00465f : 0.f;
+    settings_.hierarchicalReflections = high;
+    settings_.dynamicAtmosphere = true;
+    settings_.bloomIntensity = high ? .12f : 0.f;
+    settings_.physicallyBasedBloom = high;
+    settings_.autoExposure = high;
+    settings_.localExposure = high ? .25f : 0.f;
+    settings_.physicalCamera.exposure = high;
+    settings_.physicalCamera.depthOfField = cinematic;
+    settings_.physicalCamera.iso = 100;
+    settings_.physicalCamera.fNumber = cinematic ? 2.8f : 8.f;
+    settings_.physicalCamera.shutterSeconds = cinematic ? .001f : .008f;
+    settings_.physicalCamera.sensorHeightMm = 24;
+    settings_.physicalCamera.luminanceScale = 9600;
+    settings_.apertureBlades = cinematic ? 7u : 0u;
+    settings_.focusDistance = 8.f;
+    if (cinematic) {
+        settings_.lensFlareStrength = .1f;
+        settings_.vignette = .15f;
+        settings_.filmGrain = .12f;
+        settings_.chromaticAberration = .6f;
+        settings_.lensDistortion = -.025f;
+    }
+    settings_.colorGradingLut = Utf8Path(assets_ / "FrontierCounty" / "noon.cube");
+    settings_.colorGradingStrength = .55f;
+    foliage_.windAmplitude = .32f;
+    ground_.roughness = 1;
+    ground_.wettingResponse = 1;
+    road_.wettingResponse = .95f;
+    foliage_.wettingResponse = .6f;
+    foliage_.subsurfaceRadius = {.00035, .0009, .00022};
+    foliage_.subsurfaceThickness = .0007f;
     settings_.shadowRange = 120;
     settings_.shadowNormalBias = .049f;
     settings_.virtualShadows = options_.quality.virtualShadows;
@@ -436,8 +475,11 @@ void FrontierApp::UpdateLight() {
     const double daylight = std::clamp(height * 4 + .12, 0., 1.);
     const double dusk = std::max(0., 1 - 4 * std::abs(height)) * daylight;
     const float clouds = game_.CloudCover();
-    settings_.sun.direction =
-        Vec3{-.78 * std::cos(angle) - .29, -std::max(.025, height), -.64}.Normalized();
+    settings_.weatherTime = time_;
+    settings_.aerosolDensity = .85f + clouds * 1.4f;
+    settings_.cloudCoverage = options_.quality.radius > 1 ? .25f + .68f * clouds : 0.f;
+    settings_.windVelocity = {2.5 + 7. * clouds, 1.2 + 3. * clouds};
+    settings_.sun.direction = Vec3{-.78 * std::cos(angle) - .29, -height, -.64}.Normalized();
     settings_.sun.color = {1, .95 - .3 * dusk, .89 - .48 * dusk};
     settings_.sun.intensity =
         float(daylight * (2.9 - 2.3 * clouds) + .035 + game_.StormFlash() * 6);
@@ -453,9 +495,13 @@ void FrontierApp::UpdateLight() {
     settings_.rayTracing.reflections = rt_;
     settings_.rayTracing.refractions = rt_;
     settings_.rayTracing.indirectDiffuse = rt_;
+    settings_.rayTracing.restirDirect = rt_;
+    settings_.rayTracing.restirIndirect = rt_;
+    settings_.rayTracing.denoiser = rt_;
+    settings_.hierarchicalReflections = options_.quality.radius > 1 && !rt_;
     settings_.rayTracing.maxDistance = 95;
     settings_.rayTracing.maxBounces = 2;
-    ground_.roughness = float(1 - .48 * game_.Wetness());
+    settings_.surfaceWetness = static_cast<float>(game_.SurfaceWetness());
 }
 
 void FrontierApp::DrawVegetation(Vec3 eye, bool allowUploads, FrameSample& sample) {
@@ -543,7 +589,7 @@ void FrontierApp::DrawActors(const TransformComponent& truckPose) {
     if (nearby(truckPose.position, 440)) {
         const auto placement = truckPose.GetTransform() * Mat4::Translate({0, -.81, 0}) *
                                Mat4::RotateY(std::numbers::pi);
-        props_.Draw(renderer_, "pickup-truck", placement, {1.9, 1.77, 4.53});
+        props_.Draw(renderer_, "pickup-truck", placement, {1.9, 1.77, 4.53}, 0x10000u);
     }
     for (const auto& structure : Structures()) {
         const auto base = OnGround(structure.position, options_.seed, -.07);
@@ -650,6 +696,9 @@ void FrontierApp::OnRender(float) {
             ? GetFixedUpdateStep()
             : std::clamp(std::chrono::duration<double>(now - lastRender_).count(), .001, .12);
     lastRender_ = now;
+    if (settings_.physicalCamera.depthOfField)
+        settings_.motionBlurShutter = static_cast<float>(
+            std::clamp(settings_.physicalCamera.shutterSeconds / cameraDt, 0., 1.));
     const bool automated = options_.benchmark || options_.smoke || !options_.capture.empty();
     const auto view = game_.GetRenderView(cameraDt, automated ? 1 : GetRenderInterpolationAlpha());
     camera.SetPosition(view.cameraPosition);
@@ -681,6 +730,7 @@ void FrontierApp::OnRender(float) {
         auto water = WaterSurface::MakeMaterial();
         water.roughness = float(.07 + .12 * game_.Wetness());
         water.water->absorption = {.42, .18, .097};
+        water.water->rippleStrength = options_.quality.radius > 1 ? .8f : 0.f;
         renderer_.DrawMesh(lake_.GetMesh(),
                            Mat4::Translate({LakeCenter.x, LakeLevel, LakeCenter.y}), water);
     }

@@ -117,3 +117,36 @@
 #comp luxoceanassemble.comp
 #include "LuxOceanAssemble.comp.fsl"
 #end
+
+#frag luxdepthreduce.frag
+#include "LuxDepthReduce.frag.fsl"
+#end
+
+#vert luxmotion.vert
+#include "LuxMotion.vert.fsl"
+#end
+
+#frag luxmotion.frag
+#include "LuxMotion.frag.fsl"
+#end
+
+#frag luxpostreduce.frag
+#include "LuxPostReduce.frag.fsl"
+#end
+
+#frag luxpostexposure.frag
+#include "LuxPostExposure.frag.fsl"
+#end
+
+#frag luxpostfinal.frag
+#include "LuxPostFinal.frag.fsl"
+#end
+
+#frag luxfoghdr.frag
+#define LUX_FOG_HDR
+#include "LuxFogComposite.frag.fsl"
+#end
+
+#frag luxmotionblur.frag
+#include "LuxMotionBlur.frag.fsl"
+#end

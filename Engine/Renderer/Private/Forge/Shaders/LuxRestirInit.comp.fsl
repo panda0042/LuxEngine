@@ -53,6 +53,37 @@ float3 RestirSecondaryRadiance(RestirSurface surface, float limit) {
     return diffuse * irradiance;
 }
 
+// Glossy samples jitter around the ideal reflection. The contribution is
+// accumulated separately from primary albedo, direct light and screen overlays.
+float3 RestirReflection(RestirSurface surface, float3 cameraRay, uint seed) {
+    float3 incident = cameraRay;
+    float3 result = float3(0.0f, 0.0f, 0.0f);
+    float3 throughput = float3(1.0f, 1.0f, 1.0f);
+    const uint bounces = uint(gScene.rayOptions.z);
+    for (uint bounce = 0u; bounce < bounces; ++bounce) {
+        const float3 mirror = reflect(incident, surface.normal);
+        const float2 xi = float2(RestirRandom(seed + bounce * 2u), RestirRandom(seed + bounce * 2u + 1u));
+        const float3 lobe = RestirCosineSample(mirror, xi);
+        float3 direction = SafeDirection(lerp(mirror, lobe, surface.roughness * surface.roughness), mirror);
+        if (dot(surface.normal, direction) < 0.0f)
+            direction = mirror;
+        const RestirSurface hit = RestirTrace(surface.position + 0.004f * surface.normal, direction, gScene.rayOptions.y);
+        if (hit.distance <= 0.0f) {
+            result += throughput * RestirSky(direction, surface.roughness * 7.0f);
+            break;
+        }
+        const float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), hit.base, hit.metallic);
+        const float3 fresnel = Fresnel(dot(-direction, hit.normal), f0);
+        result += throughput * (1.0f - fresnel) * RestirSecondaryRadiance(hit, gScene.rayOptions.y);
+        throughput *= fresnel;
+        if (bounce + 1u == bounces)
+            result += throughput * RestirSky(reflect(direction, hit.normal), hit.roughness * 7.0f);
+        incident = direction;
+        surface = hit;
+    }
+    return result;
+}
+
 void RestirStoreCandidates(uint start, RestirSurface surface, RestirDIReservoir direct,
                            RestirGIReservoir indirect) {
     gRestirCandidates[start] = float4(surface.position, surface.distance);
@@ -90,9 +121,10 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
     RestirDIReservoir direct = RestirEmptyDI();
     RestirGIReservoir indirect = RestirEmptyGI();
     const uint effects = uint(gScene.rayOptions.x);
+    float4 glossy = float4(0.0f, 0.0f, 0.0f, 0.0f);
     if (surface.distance > 0.0f) {
         const uint lightCount = min(gLights.count.x, 16u);
-        const uint seed = RestirHash(cell);
+        const uint seed = RestirHash(cell ^ RestirHash(uint(gRayHistoryParams.controls.x)));
         if ((effects & LUX_RESTIR_DI) != 0u && lightCount > 0u) {
             const uint candidateCount = 4u;
             for (uint i = 0u; i < candidateCount; ++i) {
@@ -104,7 +136,10 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
                                         RestirRandom(baseSeed + 1u));
             }
         }
-        if ((effects & LUX_RESTIR_GI) != 0u && surface.metallic < 0.999f) {
+        if (gRayHistoryParams.controls.z > 0.5f && (effects & 2u) != 0u && surface.roughness < 0.85f)
+            glossy = float4(RestirReflection(surface, direction, seed ^ 0x22aeb5a9u), 1.0f);
+        if (((effects & LUX_RESTIR_GI) != 0u ||
+             (gRayHistoryParams.controls.z > 0.5f && (effects & 8u) != 0u)) && surface.metallic < 0.999f) {
             for (uint i = 0u; i < 2u; ++i) {
                 const uint baseSeed = seed ^ (0xa511e9b3u + i * 3u);
                 const float2 uniformPair = float2(RestirRandom(baseSeed),
@@ -134,6 +169,7 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
             }
         }
     }
+    gRestirCandidates[cell * LUX_RESTIR_CANDIDATE_FLOATS4 + 8u] = glossy;
     RestirStoreCandidates(cell * LUX_RESTIR_CANDIDATE_FLOATS4, surface, direct, indirect);
     RETURN();
 }

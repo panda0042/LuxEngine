@@ -643,7 +643,8 @@ void EditorWindow::BuildLayout() {
             const bool needsUv =
                 !mesh.material.baseColorTexture.empty() || !mesh.material.normalTexture.empty() ||
                 !mesh.material.metallicTexture.empty() || !mesh.material.roughnessTexture.empty() ||
-                !mesh.material.occlusionTexture.empty();
+                !mesh.material.occlusionTexture.empty() || !mesh.material.emissiveTexture.empty() ||
+                !mesh.material.heightTexture.empty() || mesh.material.terrainLayer.has_value();
             if (mesh.modelSubmesh < 0) {
                 if (!LuxEngine::AssetManager::ReloadMesh(path, error, needsUv))
                     errors << LuxUI::String::fromUtf8(error);
@@ -652,9 +653,7 @@ void EditorWindow::BuildLayout() {
                     errors << LuxUI::String::fromUtf8(error);
             }
         }
-        for (const auto* path : {&mesh.material.baseColorTexture, &mesh.material.normalTexture,
-                                 &mesh.material.metallicTexture, &mesh.material.roughnessTexture,
-                                 &mesh.material.occlusionTexture}) {
+        for (const auto* path : LuxEngine::MaterialTexturePaths(mesh.material)) {
             if (path->empty())
                 continue;
             requested = true;
@@ -696,9 +695,19 @@ void EditorWindow::BuildLayout() {
     meshLayout->addRow(LUX_UI_TEXT("표면 모드"), materialAlphaMode_);
     meshLayout->addRow(LUX_UI_TEXT("알파 임계값"), materialAlphaCutoff_);
     meshLayout->addRow(materialDoubleSided_);
-    const std::array<LuxUI::String, 4> mapNames{
+    auto* emissionRow = new LuxUI::HBoxLayout;
+    for (size_t i = 0; i < emissive_.size(); ++i) {
+        auto* channel = Number(meshGroup, 0, 65504, 0, .1);
+        channel->setObjectName(LUX_UI_TEXT("materialEmission%1").arg(i));
+        emissionRow->addWidget(channel);
+        emissive_[i] = channel;
+        connect(channel, qOverload<double>(&LuxUI::DoubleSpinBox::valueChanged), this,
+                [this, channel] { OnMeshChanged(channel); });
+    }
+    meshLayout->addRow(LUX_UI_TEXT("발광 RGB (HDR)"), emissionRow);
+    const std::array<LuxUI::String, 6> mapNames{
         LUX_UI_TEXT("노멀 텍스처"), LUX_UI_TEXT("금속성 텍스처"), LUX_UI_TEXT("거칠기 텍스처"),
-        LUX_UI_TEXT("AO 텍스처")};
+        LUX_UI_TEXT("AO 텍스처"),   LUX_UI_TEXT("발광 텍스처"),   LUX_UI_TEXT("높이 텍스처")};
     for (size_t i = 0; i < materialMapPaths_.size(); ++i) {
         auto* field = new LuxUI::LineEdit(meshGroup);
         field->setObjectName(LUX_UI_TEXT("materialMap%1").arg(i));
@@ -720,6 +729,9 @@ void EditorWindow::BuildLayout() {
             OnMeshChanged(field);
         });
     }
+    materialParallaxDepth_ = Number(meshGroup, 0, 1, 0, .005);
+    materialParallaxDepth_->setDecimals(3);
+    materialParallaxDepth_->setObjectName(LUX_UI_TEXT("materialParallaxDepth"));
     materialNormalScale_ = Number(meshGroup, 0, 16, 1, .05);
     materialNormalScale_->setObjectName(LUX_UI_TEXT("materialNormalScale"));
     materialOcclusionStrength_ = Number(meshGroup, 0, 1, 1, .05);
@@ -731,6 +743,9 @@ void EditorWindow::BuildLayout() {
     materialAddressMode_->addItems({LUX_UI_TEXT("가장자리 고정"), LUX_UI_TEXT("반복")});
     materialAnisotropic_ = new LuxUI::CheckBox(LUX_UI_TEXT("이방성 필터링"), meshGroup);
     materialAnisotropic_->setObjectName(LUX_UI_TEXT("materialAnisotropic"));
+    meshLayout->addRow(LUX_UI_TEXT("시차 깊이 (m)"), materialParallaxDepth_);
+    connect(materialParallaxDepth_, qOverload<double>(&LuxUI::DoubleSpinBox::valueChanged), this,
+            [this] { OnMeshChanged(materialParallaxDepth_); });
     meshLayout->addRow(LUX_UI_TEXT("노멀 강도"), materialNormalScale_);
     meshLayout->addRow(LUX_UI_TEXT("AO 강도"), materialOcclusionStrength_);
     meshLayout->addRow(materialMipmaps_);

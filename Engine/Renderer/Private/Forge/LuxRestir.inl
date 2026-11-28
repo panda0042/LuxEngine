@@ -1,8 +1,9 @@
 // Included by LuxForge.cpp. Runtime ray tracing is currently enabled on Vulkan.
 #if defined(VULKAN) && defined(ENABLE_RAYTRACING)
 constexpr uint32_t kRestirMaxAxis = 640;
-constexpr uint32_t kRestirCandidateVectors = 8;
-constexpr uint32_t kRestirOutputVectors = 4;
+constexpr uint32_t kRestirCandidateVectors = 9;
+constexpr uint32_t kRestirOutputVectors = 5;
+constexpr uint32_t kRestirHistoryVectors = 10;
 constexpr uint32_t kRestirVectorSize = sizeof(float) * 4;
 constexpr uint32_t kRestirEffects = 16u | 32u;
 
@@ -22,9 +23,16 @@ void ShutdownRestir(LuxForgeDevice* device) {
         removeResource(restir.candidates);
     if (restir.output)
         removeResource(restir.output);
+    if (restir.temporalParams)
+        removeResource(restir.temporalParams);
+    for (auto* history : restir.history)
+        if (history)
+            removeResource(history);
     for (const auto& resources : restir.retired) {
         removeResource(resources.candidates);
         removeResource(resources.output);
+        for (auto* history : resources.history)
+            removeResource(history);
     }
     delete device->restir;
     device->restir = nullptr;
@@ -40,6 +48,8 @@ void CollectRestir(LuxForgeDevice* device) {
                                          return false;
                                      removeResource(resources.candidates);
                                      removeResource(resources.output);
+                                     for (auto* history : resources.history)
+                                         removeResource(history);
                                      return true;
                                  }),
                   retired.end());
@@ -51,6 +61,17 @@ bool InitRestir(LuxForgeDevice* device, LuxForgeRestir& restir) {
     restir.initAttempted = true;
 
     const uint32_t entries = device->framesInFlight * LuxForgeDevice::kMaxScenePasses;
+    BufferLoadDesc constants = {};
+    constants.ppBuffer = &restir.temporalParams;
+    constants.mDesc.mSize = uint64_t(entries) * LuxForgeDevice::kSceneStride;
+    constants.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_CPU_TO_GPU;
+    constants.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
+    constants.mDesc.mDescriptors = UniformBufferDescriptor;
+    constants.mDesc.pName = "LuxForge temporal ray parameters";
+    addResource(&constants, nullptr);
+    waitForAllResourceLoads();
+    if (!restir.temporalParams || !restir.temporalParams->pCpuMappedAddress)
+        return false;
     const DescriptorSetDesc initSet = SRT_SET_DESC(LuxRestirInitSrt, Persistent, entries, 0);
     const DescriptorSetDesc resolveSet = SRT_SET_DESC(LuxRestirResolveSrt, Persistent, entries, 0);
     addDescriptorSet(device->renderer, &initSet, &restir.sets[0]);
@@ -96,8 +117,9 @@ Buffer* CreateRestirBuffer(uint32_t elements, ResourceState sampleState, const c
     return buffer;
 }
 
-bool ResizeRestir(LuxForgeDevice* device, LuxForgeRestir& restir, uint32_t cells) {
-    if (cells <= restir.capacity)
+bool ResizeRestir(LuxForgeDevice* device, LuxForgeRestir& restir, uint32_t cells,
+                  bool fullHistory) {
+    if (cells <= restir.capacity && restir.fullHistory == fullHistory)
         return true;
     Buffer* candidates = CreateRestirBuffer(cells * kRestirCandidateVectors,
                                             RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -105,7 +127,15 @@ bool ResizeRestir(LuxForgeDevice* device, LuxForgeRestir& restir, uint32_t cells
     Buffer* output =
         CreateRestirBuffer(cells * kRestirOutputVectors, RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                            "LuxForge ReSTIR resolved lighting");
-    if (!candidates || !output) {
+    Buffer* history[2] = {};
+    for (auto& buffer : history)
+        buffer =
+            CreateRestirBuffer(fullHistory ? cells * kRestirHistoryVectors : 1u,
+                               RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, "LuxForge ray history");
+    if (!candidates || !output || !history[0] || !history[1]) {
+        for (auto* buffer : history)
+            if (buffer)
+                removeResource(buffer);
         if (candidates)
             removeResource(candidates);
         if (output)
@@ -113,16 +143,24 @@ bool ResizeRestir(LuxForgeDevice* device, LuxForgeRestir& restir, uint32_t cells
         return false;
     }
     if (restir.candidates)
-        restir.retired.push_back({restir.candidates, restir.output, device->frameNumber + 1});
+        restir.retired.push_back({restir.candidates,
+                                  restir.output,
+                                  {restir.history[0], restir.history[1]},
+                                  device->frameNumber + 1});
+    std::copy_n(history, 2, restir.history);
+    restir.frame = 0;
     restir.candidates = candidates;
     restir.output = output;
     restir.capacity = cells;
+    restir.fullHistory = fullHistory;
     return true;
 }
 
 Buffer* DispatchRestir(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass,
                        const ForgeRayScene& rays, Texture* specularEnvironment) {
-    if ((static_cast<uint32_t>(scene.rayOptions[0]) & kRestirEffects) == 0)
+    const uint32_t effects = static_cast<uint32_t>(scene.rayOptions[0]);
+    const bool denoise = scene.rayDenoiser && (effects & (2u | 8u | 32u));
+    if (!(effects & kRestirEffects) && !denoise)
         return nullptr;
     if (!rays.scene || !rays.instances || !rays.triangles || !specularEnvironment)
         return nullptr;
@@ -133,16 +171,46 @@ Buffer* DispatchRestir(LuxForgeDevice* device, const LuxForgeScene& scene, uint3
         2u, (std::max(device->width, device->height) + kRestirMaxAxis - 1) / kRestirMaxAxis);
     const uint32_t width = (device->width + spacing - 1) / spacing;
     const uint32_t height = (device->height + spacing - 1) / spacing;
-    if (!InitRestir(device, restir) || !ResizeRestir(device, restir, width * height))
+    const bool temporalReuse = scene.temporalRestir && (effects & kRestirEffects);
+    if (!InitRestir(device, restir) ||
+        !ResizeRestir(device, restir, width * height, temporalReuse || denoise))
         return nullptr;
 
     const uint32_t entry = device->frameSlot * LuxForgeDevice::kMaxScenePasses + pass;
     DescriptorDataRange range = {pass * LuxForgeDevice::kSceneStride, LuxForgeDevice::kSceneStride,
                                  0};
+    const uint64_t frame = device->frameNumber + 1;
+    const uint32_t signature =
+        effects | (denoise ? 512u : 0u) | (scene.temporalRestir ? 1024u : 0u);
+    const uint32_t next = restir.index ^ 1u;
+    std::array<float, 24> parameters{};
+    double distanceSquared = 0, alignment = 0;
+    for (unsigned i = 0; i < 3; ++i) {
+        // Stored primary/secondary hit points use the camera origin of their frame.
+        const double displacement = scene.temporalOrigin[i] - restir.origin[i];
+        parameters[16 + i] = static_cast<float>(displacement);
+        distanceSquared += displacement * displacement;
+        alignment += scene.forward[i] * restir.forward[i];
+    }
+    const bool history = restir.fullHistory && restir.frame && restir.frame + 1 == frame &&
+                         pass == 0 && restir.view == scene.temporalView &&
+                         restir.environment == scene.environmentMap &&
+                         device->width == restir.width && device->height == restir.height &&
+                         restir.effects == signature && distanceSquared < 576 && alignment > .75;
+    std::copy(restir.matrix.begin(), restir.matrix.end(), parameters.begin());
+    parameters[19] = history ? 1.f : 0.f;
+    parameters[20] = (scene.temporalRestir || denoise) ? float(frame % 65536) : 0.f;
+    parameters[21] = temporalReuse ? 1.f : 0.f;
+    parameters[22] = denoise ? 1.f : 0.f;
+    DescriptorDataRange paramRange{entry * LuxForgeDevice::kSceneStride,
+                                   LuxForgeDevice::kSceneStride, 0};
+    std::memcpy(static_cast<uint8_t*>(restir.temporalParams->pCpuMappedAddress) +
+                    paramRange.mOffset,
+                parameters.data(), sizeof(parameters));
     auto* acceleration = rays.scene;
     auto* instanceData = rays.instances;
     auto* triangleData = rays.triangles;
-    DescriptorData init[6] = {};
+    DescriptorData init[7] = {};
     init[0].mIndex = SRT_RES_IDX(LuxRestirInitSrt, Persistent, gScene);
     init[0].ppBuffers = &device->sceneUniforms[device->frameSlot];
     init[0].pRanges = &range;
@@ -156,9 +224,12 @@ Buffer* DispatchRestir(LuxForgeDevice* device, const LuxForgeScene& scene, uint3
     init[4].ppTextures = &specularEnvironment;
     init[5].mIndex = SRT_RES_IDX(LuxRestirInitSrt, Persistent, gRestirCandidates);
     init[5].ppBuffers = &restir.candidates;
-    updateDescriptorSet(device->renderer, entry, restir.sets[0], 6, init);
+    init[6].mIndex = SRT_RES_IDX(LuxRestirInitSrt, Persistent, gRayHistoryParams);
+    init[6].ppBuffers = &restir.temporalParams;
+    init[6].pRanges = &paramRange;
+    updateDescriptorSet(device->renderer, entry, restir.sets[0], std::size(init), init);
 
-    DescriptorData resolve[6] = {};
+    DescriptorData resolve[9] = {};
     resolve[0].mIndex = SRT_RES_IDX(LuxRestirResolveSrt, Persistent, gScene);
     resolve[0].ppBuffers = &device->sceneUniforms[device->frameSlot];
     resolve[0].pRanges = &range;
@@ -172,14 +243,23 @@ Buffer* DispatchRestir(LuxForgeDevice* device, const LuxForgeScene& scene, uint3
     resolve[4].ppBuffers = &restir.candidates;
     resolve[5].mIndex = SRT_RES_IDX(LuxRestirResolveSrt, Persistent, gRestirResult);
     resolve[5].ppBuffers = &restir.output;
-    updateDescriptorSet(device->renderer, entry, restir.sets[1], 6, resolve);
+    resolve[6].mIndex = SRT_RES_IDX(LuxRestirResolveSrt, Persistent, gRayHistoryParams);
+    resolve[6].ppBuffers = &restir.temporalParams;
+    resolve[6].pRanges = &paramRange;
+    resolve[7].mIndex = SRT_RES_IDX(LuxRestirResolveSrt, Persistent, gPreviousReservoirs);
+    resolve[7].ppBuffers = &restir.history[restir.index];
+    resolve[8].mIndex = SRT_RES_IDX(LuxRestirResolveSrt, Persistent, gNextReservoirs);
+    resolve[8].ppBuffers = &restir.history[next];
+    updateDescriptorSet(device->renderer, entry, restir.sets[1], std::size(resolve), resolve);
 
     Cmd* cmd = device->element.pCmds[0];
-    BufferBarrier write[2] = {
+    BufferBarrier write[3] = {
+        {restir.history[next], RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+         RESOURCE_STATE_UNORDERED_ACCESS},
         {restir.candidates, RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
          RESOURCE_STATE_UNORDERED_ACCESS},
         {restir.output, RESOURCE_STATE_PIXEL_SHADER_RESOURCE, RESOURCE_STATE_UNORDERED_ACCESS}};
-    cmdResourceBarrier(cmd, 2, write, 0, nullptr, 0, nullptr);
+    cmdResourceBarrier(cmd, 3, write, 0, nullptr, 0, nullptr);
     const uint32_t lighting =
         device->frameSlot * LuxForgeDevice::kMaxLightBlocks + device->currentLight;
     BindPipeline(device, cmd, restir.pipelines[0]);
@@ -195,12 +275,27 @@ Buffer* DispatchRestir(LuxForgeDevice* device, const LuxForgeScene& scene, uint3
     BindDescriptors(device, cmd, lighting, device->lightSet);
     cmdDispatch(cmd, (width + 7) / 8, (height + 7) / 8, 1);
 
-    BufferBarrier readOutput = {restir.output, RESOURCE_STATE_UNORDERED_ACCESS,
-                                RESOURCE_STATE_PIXEL_SHADER_RESOURCE};
-    cmdResourceBarrier(cmd, 1, &readOutput, 0, nullptr, 0, nullptr);
+    BufferBarrier readOutput[] = {
+        {restir.output, RESOURCE_STATE_UNORDERED_ACCESS, RESOURCE_STATE_PIXEL_SHADER_RESOURCE},
+        {restir.history[next], RESOURCE_STATE_UNORDERED_ACCESS,
+         RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
+    cmdResourceBarrier(cmd, 2, readOutput, 0, nullptr, 0, nullptr);
     device->frameStats.computeDispatches += 2;
     device->frameStats.uniformBinds += 2; // The two persistent sets each bind the scene cbuffer.
-    ++device->frameStats.restirPasses;
+    device->frameStats.restirPasses += (effects & kRestirEffects) != 0;
+    device->frameStats.temporalRestirPasses +=
+        history && scene.temporalRestir && (effects & kRestirEffects);
+    device->frameStats.rayDenoiserPasses += denoise;
+    restir.index = next;
+    restir.frame = pass == 0 ? frame : 0;
+    restir.view = scene.temporalView;
+    restir.width = device->width;
+    restir.height = device->height;
+    restir.effects = signature;
+    restir.environment = scene.environmentMap;
+    std::copy_n(scene.viewProjection, 16, restir.matrix.begin());
+    std::copy_n(scene.temporalOrigin, 3, restir.origin.begin());
+    std::copy_n(scene.forward, 3, restir.forward.begin());
     return restir.output;
 }
 #else

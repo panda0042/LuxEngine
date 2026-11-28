@@ -60,12 +60,32 @@ void PropModels::Load(GpuDevice& gpu, const std::filesystem::path& assets) {
         Model result;
         const auto infinity = std::numeric_limits<double>::infinity();
         Vec3 low{infinity, infinity, infinity}, high{-infinity, -infinity, -infinity};
+        double rootY = infinity, crownY = -infinity;
+        if (vegetation) {
+            for (const auto& part : asset->submeshes) {
+                const auto& node = asset->nodes.at(part.node).worldTransform;
+                for (const auto& vertex : part.vertices) {
+                    const double y = node.TransformPoint(vertex.position).y;
+                    rootY = std::min(rootY, y);
+                    crownY = std::max(crownY, y);
+                }
+            }
+        }
         for (const auto& submesh : asset->submeshes) {
             const auto& node = asset->nodes.at(submesh.node).worldTransform;
             const auto found = materials.find(asset->materials.at(size_t(submesh.material)).name);
             if (found == materials.end())
                 throw std::runtime_error("Prop material missing for " + path + " (" +
                                          asset->materials.at(size_t(submesh.material)).name + ")");
+            auto material = found->second;
+            material.wettingResponse = vegetation ? .62f : .8f;
+            if (vegetation) {
+                material.windAmplitude = cover ? .12f : .32f;
+                if (material.alphaMode == MaterialAlphaMode::Mask) {
+                    material.subsurfaceRadius = {.00035, .0009, .00022};
+                    material.subsurfaceThickness = .0007f;
+                }
+            }
             std::vector<Vertex3D> vertices;
             vertices.reserve(submesh.vertices.size());
             for (const auto& source : submesh.vertices) {
@@ -74,17 +94,23 @@ void PropModels::Load(GpuDevice& gpu, const std::filesystem::path& assets) {
                        std::min(low.z, position.z)};
                 high = {std::max(high.x, position.x), std::max(high.y, position.y),
                         std::max(high.z, position.z)};
-                vertices.push_back({position, node.TransformDirection(source.normal).Normalized(),
-                                    source.texCoords});
+                vertices.push_back(
+                    {position,
+                     node.TransformDirection(source.normal).Normalized(),
+                     source.texCoords,
+                     {1, 1, 1, 1},
+                     vegetation
+                         ? float(std::clamp((position.y - rootY) / std::max(crownY - rootY, .001),
+                                            0., 1.))
+                         : 0.f});
             }
             if (cover) {
-                result.batchGeometry.push_back(
-                    {{std::move(vertices), submesh.indices}, found->second});
+                result.batchGeometry.push_back({{std::move(vertices), submesh.indices}, material});
             } else {
                 auto mesh = std::make_unique<Mesh3D>();
                 if (!mesh->Upload(&gpu, vertices, submesh.indices))
                     throw std::runtime_error("Could not upload prop: " + path);
-                result.parts.push_back({std::move(mesh), found->second});
+                result.parts.push_back({std::move(mesh), material});
             }
         }
         result.dimensions = high - low;
@@ -101,7 +127,7 @@ void PropModels::Draw(Renderer3D::Context& renderer, std::string_view key, Vec3 
 }
 
 void PropModels::Draw(Renderer3D::Context& renderer, std::string_view key, const Mat4& placement,
-                      Vec3 dimensions) const {
+                      Vec3 dimensions, uint64_t motionInstance) const {
     const auto model = models_.find(key);
     if (model == models_.end())
         throw std::runtime_error("Unknown prop asset: " + std::string(key));
@@ -109,8 +135,15 @@ void PropModels::Draw(Renderer3D::Context& renderer, std::string_view key, const
     const Vec3 scale{dimensions.x / source.dimensions.x, dimensions.y / source.dimensions.y,
                      dimensions.z / source.dimensions.z};
     const auto transform = placement * Mat4::Scale(scale) * Mat4::Translate(source.center * -1);
-    for (const auto& part : source.parts)
-        renderer.DrawMesh(*part.mesh, transform, part.material);
+    for (const auto& part : source.parts) {
+        if (motionInstance) {
+            auto material = part.material;
+            material.motionInstance = motionInstance;
+            renderer.DrawMesh(*part.mesh, transform, material);
+        } else {
+            renderer.DrawMesh(*part.mesh, transform, part.material);
+        }
+    }
 }
 
 std::deque<PropModels::Geometry> PropModels::BuildGroundCover(ChunkKey tile, unsigned seed) const {
@@ -158,7 +191,7 @@ void PropModels::BuildBatches(std::string_view key, std::span<const Plant> plant
                                 {normal.x / scale.x, normal.y / scale.y, normal.z / scale.z})
                             .Normalized();
                     data.vertices.push_back({transform.TransformPoint(vertex.position), direction,
-                                             vertex.texCoords, vertex.color});
+                                             vertex.texCoords, vertex.color, vertex.windWeight});
                 }
                 for (const auto index : source.mesh.indices)
                     data.indices.push_back(base + index);

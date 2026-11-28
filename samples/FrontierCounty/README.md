@@ -16,7 +16,7 @@ A LuxEngine outdoor rendering sample. Silverlake, the forest, a textured roadsid
 | T, G, H | Cycle weather, toggle hardware ray tracing if supported, toggle TAA |
 | F1, F3, P, Esc | Controls, diagnostics, pause, exit |
 
-The default sky starts at noon. Twenty-four in-world hours take 3,600 real seconds. Use --day-seconds 180 for a shorter cycle. Quality presets low, medium, high, ultra, cinematic and extreme control chunk radius, vegetation population, shadow-map resolution, fog distance and virtual shadows. Use --rt for hardware ray effects. High and above enable TAA. Use --no-taa to disable temporal filtering. Use --no-edge-aa to disable the spatial filter on the standard tone path. P pauses and releases the cursor.
+The default sky starts at noon. Twenty-four in-world hours take 3,600 real seconds. Use --day-seconds 180 for a shorter cycle. Quality presets low, medium, high, ultra, cinematic and extreme control chunk radius, vegetation population, shadow-map resolution, fog distance and virtual shadows. Use --rt for hardware ray effects. High and above enable TAA, GTAO, contact shadows, PCSS, volumetric clouds, threshold-free HDR bloom, eye adaptation and local exposure. In raster mode these presets also use hierarchical screen-space reflections. High uses ISO 100, f/8 and a 1/125 s shutter. Cinematic and Extreme use a seven-blade f/2.8 aperture focused at 8 m and a 1/1000 s shutter; its duration also drives per-object motion blur. These presets add subtle lens flare, vignetting, grain, chromatic aberration and radial distortion. Use --no-taa to disable temporal filtering. Use --no-edge-aa to disable the spatial filter on the standard tone path. P pauses and releases the cursor.
 
 ## Capture and benchmark
 

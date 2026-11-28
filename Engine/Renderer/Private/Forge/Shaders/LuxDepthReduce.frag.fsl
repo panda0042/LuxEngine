@@ -1,0 +1,23 @@
+#include "LuxStructs.h"
+#include "LuxDepthReduce.srt.h"
+
+STRUCT(FullscreenOutput)
+{
+    DATA(float4, position, SV_Position);
+    DATA(float2, uv, TEXCOORD0);
+};
+
+ROOT_SIGNATURE(DefaultRootSignature)
+float PS_MAIN(FullscreenOutput In)
+{
+    INIT_MAIN;
+    const int2 base = int2(In.position.xy) * 4;
+    const int2 last = int2(gReduce.options.xy) - 1;
+    float closest = 1.0f;
+    UNROLL for (int y = 0; y < 4; ++y) {
+        UNROLL for (int x = 0; x < 4; ++x)
+            closest = min(closest, LoadTex2D(gReduceSource, NO_SAMPLER,
+                                             min(base + int2(x, y), last), 0).r);
+    }
+    RETURN(closest);
+}

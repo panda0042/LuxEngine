@@ -27,6 +27,8 @@ def prepare(cache, cached, asset):
     gathered = [{"path": license_file.name, "bytes": license_file.stat().st_size,
                  "sha256": checksum(license_file, "sha256")}]
     for key, filename, color, before, after in MAPS:
+        if key == "Displacement" and asset != "leafy_grass":
+            continue
         entry = files[key]["8k"]["jpg"]
         raw = cache / f"{prefix}-{key}.jpg"
         original(raw, entry)

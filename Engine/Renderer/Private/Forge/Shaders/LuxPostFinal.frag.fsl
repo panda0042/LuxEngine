@@ -1,0 +1,82 @@
+#include "LuxPostResources.h"
+#include "LuxToneMapping.h"
+#include "LuxLensOptics.h"
+
+#include "LuxBokeh.h"
+#include "LuxLocalExposure.h"
+
+float3 GradeColor(float3 color) {
+    const float n = gPost.grading.x;
+    if (n < 2.0f || gPost.grading.y <= 0.0f)
+        return color;
+    const float3 coords = saturate(color) * (n - 1.0f);
+    const float slice = floor(coords.z);
+    const float2 texel = float2(1.0f / (n*n), 1.0f / n);
+    const float2 uv = (coords.xy + 0.5f + float2(slice*n, 0.0f)) * texel;
+    const float3 low = SampleLvlTex2D(gGradingLut, gSamplerTrilinearClamp, uv, 0.0f).rgb;
+    const float2 next = uv + float2(min(1.0f, n - 1.0f - slice)/n, 0.0f);
+    const float3 high = SampleLvlTex2D(gGradingLut, gSamplerTrilinearClamp, next, 0.0f).rgb;
+    return lerp(color, lerp(low, high, coords.z - slice), gPost.grading.y);
+}
+
+float3 EdgeTap(int2 pixel, int2 upper, float3 fallback) {
+    const float4 sampleColor = LoadTex2D(gPostSource, NO_SAMPLER, clamp(pixel, int2(0, 0), upper), 0);
+    return sampleColor.a > 0.0f ? sampleColor.rgb / sampleColor.a : fallback;
+}
+
+ROOT_SIGNATURE(DefaultRootSignature)
+float4 PS_MAIN(FullscreenOutput In)
+{
+    INIT_MAIN;
+    const float2 outputUv = In.position.xy * gPost.dimensions.xy;
+    const float r2 = LensRadiusSquared(outputUv);
+    const float2 sourceUv = DistortedUv(outputUv, r2);
+    const int2 upper = int2(round(1.0f / gPost.dimensions.xy)) - 1;
+    const int2 pixel = clamp(int2(sourceUv / gPost.dimensions.xy), int2(0, 0), upper);
+    const float4 source = gPost.optics.w != 0.0f
+        ? SampleLvlTex2D(gPostSource, gSamplerTrilinearClamp, sourceUv, 0.0f)
+        : LoadTex2D(gPostSource, NO_SAMPLER, pixel, 0);
+    if (source.a <= 0.0f)
+        discard;
+    float3 color = ApplyLens(pixel, upper, source);
+    if (gPost.optics.z > 0.0f) {
+        // The chromatic taps read sharp HDR samples. An out-of-focus edge has a
+        // shallower gradient; attenuate the shift to keep a sharp fringe out of its bokeh.
+        const float coc = gPost.lens.z > 0.0f ? BlurRadius(EyeDepth(pixel)) : 0.0f;
+        color = LensChromaticShift(color, source, sourceUv, r2 / sqrt(1.0f + coc * coc));
+    }
+    const uint flags = uint(gPost.camera.w);
+    if ((flags & 2u) != 0u && gPost.lens.z <= 0.0f) {
+        const float3 n = EdgeTap(pixel - int2(0,1), upper, color);
+        const float3 s = EdgeTap(pixel + int2(0,1), upper, color);
+        const float3 w = EdgeTap(pixel - int2(1,0), upper, color);
+        const float3 e = EdgeTap(pixel + int2(1,0), upper, color);
+        const float l = PostLuma(color);
+        const float h = max(abs(PostLuma(w)-l), abs(PostLuma(e)-l));
+        const float v = max(abs(PostLuma(n)-l), abs(PostLuma(s)-l));
+        const float3 pair = v > h ? 0.5f*(n+s) : 0.5f*(e+w);
+        color = lerp(color, pair, 0.45f * smoothstep(0.1f, 0.65f, abs(PostLuma(pair)-l)/max(l, 0.05f)));
+    }
+    if (gPost.lens.x > 0.0f) {
+        const float2 uv = sourceUv;
+        const float3 bloom = 0.32f * SampleLvlTex2D(gBloomNear, gSamplerTrilinearClamp, uv, 0.0f).rgb +
+            0.43f * SampleLvlTex2D(gBloomMid, gSamplerTrilinearClamp, uv, 0.0f).rgb +
+            0.25f * SampleLvlTex2D(gBloomFar, gSamplerTrilinearClamp, uv, 0.0f).rgb;
+        if (gPost.cameraEffects.x > 0.5f) {
+            // Normalized low-pass lobes redistribute a fraction of the source radiance.
+            // The DC response stays at unity for any scattering coefficient.
+            color = lerp(color, bloom, 1.0f - exp(-gPost.lens.x));
+        } else {
+            color += bloom * gPost.lens.x;
+        }
+    }
+    color += LensGhosts(sourceUv);
+    color *= exp2(-2.5f * gPost.optics.x * r2 * r2);
+    float globalEV = 0.0f;
+    if (gPost.grading.z > 0.5f)
+        globalEV = LoadTex2D(gAdaptation, NO_SAMPLER, int2(0, 0), 0).r;
+    const float localEV = LocalExposureEV(sourceUv, pixel, upper, source.rgb / source.a, globalEV + gPost.adaptation.z);
+    float exposure = gPost.camera.z * exp2(globalEV + localEV);
+    const float3 display = GradeColor(ToneMapSdr(color, exposure, float(flags & 1u)));
+    RETURN(float4(FilmResponse(display, uint2(In.position.xy)), source.a));
+}

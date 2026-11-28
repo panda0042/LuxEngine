@@ -167,8 +167,8 @@ Material3D Material(const ModelAsset& model, const ModelSubmesh& part,
     value.roughnessTexture = texture(source.roughnessTexture);
     value.occlusionTexture = texture(source.occlusionTexture);
     value.doubleSided = source.doubleSided;
-    if (source.emissiveTexture >= 0 || source.emissive.Dot(source.emissive) > 0)
-        Warn(result, "현재 렌더러에 없는 FBX 발광 재질 속성은 적용하지 않았습니다: " + source.name);
+    value.emissive = source.emissive;
+    value.emissiveTexture = texture(source.emissiveTexture);
     return value;
 }
 

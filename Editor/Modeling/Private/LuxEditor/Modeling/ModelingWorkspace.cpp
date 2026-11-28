@@ -81,6 +81,11 @@ bool SameMaterial(Scene& scene, const Material3D& left, const Material3D& right)
                           value.roughness,
                           value.normalScale,
                           value.occlusionStrength,
+                          value.parallaxDepth,
+                          value.terrainLayer ? value.terrainLayer->heightBlend : 0.f,
+                          value.emissive.x,
+                          value.emissive.y,
+                          value.emissive.z,
                           value.textureSampling.mipmaps,
                           value.textureSampling.addressMode,
                           value.textureSampling.anisotropic,
@@ -91,13 +96,14 @@ bool SameMaterial(Scene& scene, const Material3D& left, const Material3D& right)
     };
     if (numbers(left) != numbers(right))
         return false;
-    for (const auto field :
-         {&Material3D::baseColorTexture, &Material3D::normalTexture, &Material3D::metallicTexture,
-          &Material3D::roughnessTexture, &Material3D::occlusionTexture}) {
-        if ((left.*field).empty() != (right.*field).empty())
-            return false;
-        if (!(left.*field).empty() &&
-            scene.ResolveAssetPath(left.*field) != scene.ResolveAssetPath(right.*field))
+    const auto leftMaps = MaterialTexturePaths(left), rightMaps = MaterialTexturePaths(right);
+    if (leftMaps.count != rightMaps.count)
+        return false;
+    for (size_t i = 0; i < leftMaps.count; ++i) {
+        const auto& a = *leftMaps.values[i];
+        const auto& b = *rightMaps.values[i];
+        if (a.empty() != b.empty() ||
+            (!a.empty() && scene.ResolveAssetPath(a) != scene.ResolveAssetPath(b)))
             return false;
     }
     return true;
@@ -106,7 +112,8 @@ bool SameMaterial(Scene& scene, const Material3D& left, const Material3D& right)
 bool UsesTextures(const Material3D& material) {
     return !material.baseColorTexture.empty() || !material.normalTexture.empty() ||
            !material.metallicTexture.empty() || !material.roughnessTexture.empty() ||
-           !material.occlusionTexture.empty();
+           !material.occlusionTexture.empty() || !material.emissiveTexture.empty() ||
+           !material.heightTexture.empty() || material.terrainLayer.has_value();
 }
 
 std::string Label(Entity entity) {

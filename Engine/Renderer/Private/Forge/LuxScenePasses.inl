@@ -40,21 +40,22 @@ void DrawShadowPass(const ScenePass& pass, uint32_t entry, const VirtualShadowPl
 }
 
 void DrawHdrPass(const ScenePass& pass, uint32_t entry, bool showSkybox, bool water,
-                 bool rayTracing) {
+                 bool rayTracing, LuxForgeDevice::SceneTarget& color,
+                 LuxForgeDevice::SceneTarget& depth) {
     auto* device = pass.device;
     auto* cmd = pass.command;
     // HDR pass. Alpha 0 marks pixels no 3D geometry touched; the tone pass skips them.
-    Transition(cmd, device->hdr, RESOURCE_STATE_RENDER_TARGET);
-    Transition(cmd, device->sceneDepth, RESOURCE_STATE_DEPTH_WRITE);
+    Transition(cmd, color, RESOURCE_STATE_RENDER_TARGET);
+    Transition(cmd, depth, RESOURCE_STATE_DEPTH_WRITE);
     {
         BindRenderTargetsDesc bind = {};
         bind.mRenderTargetCount = 1;
-        bind.mRenderTargets[0].pRenderTarget = device->hdr.target;
+        bind.mRenderTargets[0].pRenderTarget = color.target;
         bind.mRenderTargets[0].mLoadAction = LOAD_ACTION_CLEAR;
         bind.mRenderTargets[0].mStoreAction = STORE_ACTION_STORE;
         bind.mRenderTargets[0].mClearValue = {{0.0f, 0.0f, 0.0f, 0.0f}};
         bind.mRenderTargets[0].mOverrideClearValue = 1;
-        bind.mDepthStencil.pDepthStencil = device->sceneDepth.target;
+        bind.mDepthStencil.pDepthStencil = depth.target;
         bind.mDepthStencil.mLoadAction = LOAD_ACTION_CLEAR;
         bind.mDepthStencil.mStoreAction = STORE_ACTION_STORE;
         bind.mDepthStencil.mLoadActionStencil = LOAD_ACTION_DONTCARE;
@@ -64,6 +65,9 @@ void DrawHdrPass(const ScenePass& pass, uint32_t entry, bool showSkybox, bool wa
     SetSceneViewport(device, cmd);
     if (showSkybox) {
         BindPipeline(device, cmd, device->pipelineSky);
+        BindDescriptors(device, cmd,
+                        device->frameSlot * LuxForgeDevice::kMaxLightBlocks + device->currentLight,
+                        device->lightSet);
         BindDescriptors(device, cmd, entry, device->sceneSet);
         cmdDraw(cmd, 3, 0);
         ++device->frameStats.drawCalls;
@@ -71,8 +75,8 @@ void DrawHdrPass(const ScenePass& pass, uint32_t entry, bool showSkybox, bool wa
     const size_t end = water ? pass.draws.opaqueEnd : pass.draws.colorEnd;
     DrawColorMeshes(device, cmd, pass.draws.meshes, pass.firstDraw, 0, end, entry, rayTracing);
     cmdBindRenderTargets(cmd, nullptr);
-    Transition(cmd, device->hdr, RESOURCE_STATE_SHADER_RESOURCE);
-    device->hdr.lastUsedFrame = device->sceneDepth.lastUsedFrame = pass.frame;
+    Transition(cmd, color, RESOURCE_STATE_SHADER_RESOURCE);
+    color.lastUsedFrame = depth.lastUsedFrame = pass.frame;
 }
 
 void DrawWaterPass(const ScenePass& pass, uint32_t entry, bool waterRayTracing, bool rayTracing,

@@ -4,8 +4,10 @@
 #include <LuxEngine/Core/Math.hpp>
 #include <LuxEngine/Renderer/RHI/GpuDevice.hpp>
 #include <LuxEngine/Renderer/Renderer3D/Render3DSettings.hpp>
+#include <array>
 #include <memory>
 #include <optional>
+#include <type_traits>
 #include <vector>
 
 namespace LuxEngine {
@@ -17,6 +19,7 @@ struct Vertex3D {
     Vec3 normal;
     Vec2 texCoords;
     Vec4 color{1, 1, 1, 1};
+    float windWeight = 0; // 0 at a rooted vertex, 1 at a flexible tip.
 };
 
 enum class MaterialAlphaMode { Opaque, Mask, Blend };
@@ -25,6 +28,8 @@ struct WaterMaterial3D {
     // Beer–Lambert absorption coefficients in inverse world units.
     Vec3 absorption{.36, .14, .065};
     float indexOfRefraction = 1.333f;
+    float rippleStrength =
+        0; // Strength of wind-driven surface slopes below the mesh resolution, 0..1.
 };
 
 // Secondary PBR layer for opaque custom meshes. Vertex3D::color.a selects the
@@ -33,6 +38,8 @@ struct TerrainLayer3D {
     std::string baseColorTexture;
     std::string normalTexture;
     std::string roughnessTexture;
+    std::string heightTexture; // Linear red, white is the top of the surface.
+    float heightBlend = 0;     // Height contrast in [0,1]; zero keeps the vertex-only blend.
 };
 
 struct Material3D {
@@ -52,7 +59,47 @@ struct Material3D {
     bool doubleSided = true;
     std::optional<WaterMaterial3D> water;
     std::optional<TerrainLayer3D> terrainLayer;
+    // Nonzero, stable ID for this placement in one render context. Mesh buffers distinguish
+    // its parts. Supply separate IDs for moving copies of the same mesh.
+    uint64 motionInstance = 0;
+    float wettingResponse = 0;     // Exposed surface fraction that can develop a rain film.
+    float windAmplitude = 0;       // Maximum vertex displacement, in world metres.
+    Vec3 subsurfaceRadius{};       // RGB diffusion lengths, in metres.
+    float subsurfaceThickness = 0; // Authored thickness for thin-sheet transmission, in metres.
+    Vec3 emissive{};             // Linear HDR radiance added after lighting, before camera effects.
+    std::string emissiveTexture; // sRGB color multiplied by emissive.
+    std::string heightTexture;   // Linear height, sampled for opaque mesh relief.
+    float parallaxDepth = 0;     // Maximum virtual relief below the mesh surface, in metres.
 };
+
+// Enumerate all file references, including an optional terrain layer, for editing and packaging.
+template <typename Material> auto MaterialTexturePaths(Material& material) {
+    using Path = std::remove_reference_t<decltype((material.heightTexture))>;
+
+    struct Paths {
+        std::array<Path*, 11> values;
+        size_t count;
+
+        auto begin() const {
+            return values.begin();
+        }
+
+        auto end() const {
+            return values.begin() + count;
+        }
+    };
+
+    Paths paths{{&material.baseColorTexture, &material.normalTexture, &material.metallicTexture,
+                 &material.roughnessTexture, &material.occlusionTexture, &material.emissiveTexture,
+                 &material.heightTexture},
+                7};
+    if (auto& layer = material.terrainLayer) {
+        for (auto* path : {&layer->baseColorTexture, &layer->normalTexture,
+                           &layer->roughnessTexture, &layer->heightTexture})
+            paths.values[paths.count++] = path;
+    }
+    return paths;
+}
 
 struct MaterialTextures3D {
     GpuTexture* baseColor = nullptr;
@@ -61,6 +108,8 @@ struct MaterialTextures3D {
     bool unlitSprite = false;
     GpuTexture* metallic = nullptr;
     GpuTexture* occlusion = nullptr;
+    GpuTexture* emissive = nullptr;
+    GpuTexture* height = nullptr;
 };
 
 struct PointLight {
@@ -134,6 +183,7 @@ private:
     Ref<GpuBuffer> vertices_;
     Ref<GpuBuffer> indices_;
     uint32 indexCount_ = 0;
+    uint64 geometryRevision_ = 0;
     bool ocean_ = false;
     Vec3 origin_;
     Vec3 minimum_, maximum_;

@@ -62,7 +62,25 @@ bool ValidateRender3DSettings(const Render3DSettings& s) {
            (s.waterReflection.faceSize == 128 || s.waterReflection.faceSize == 256 ||
             s.waterReflection.faceSize == 512) &&
            bounded(s.radianceCascades.strength, 0, 1) &&
-           bounded(s.radianceCascades.spacing, .5, 64);
+           bounded(s.radianceCascades.spacing, .5, 64) && bounded(s.gtaoRadius, 0, 100) &&
+           bounded(s.temporalSharpness, 0, 1) && bounded(s.motionBlurShutter, 0, 1) &&
+           bounded(s.vignette, 0, 1) && bounded(s.filmGrain, 0, 1) &&
+           bounded(s.chromaticAberration, 0, 10) && bounded(s.lensDistortion, -0.35f, 0.35f) &&
+           bounded(s.lensFlareStrength, 0, 2) && bounded(s.contactShadowDistance, 0, 100) &&
+           bounded(s.shadowLightAngularRadius, 0, .25) && bounded(s.bloomIntensity, 0, 2) &&
+           bounded(s.bloomThreshold, 0, 65504) && bounded(s.localExposure, 0, 1) &&
+           bounded(s.physicalCamera.iso, 1, 409600) &&
+           bounded(s.physicalCamera.shutterSeconds, 1.0 / 65536, 60) &&
+           bounded(s.physicalCamera.fNumber, .5, 128) &&
+           bounded(s.physicalCamera.sensorHeightMm, 1, 100) &&
+           bounded(s.physicalCamera.luminanceScale, .00001, 1e7) &&
+           (s.apertureBlades == 0 || (s.apertureBlades >= 3 && s.apertureBlades <= 12)) &&
+           bounded(s.depthOfFieldRadius, 0, 16) && bounded(s.focusDistance, .001, 1e8) &&
+           bounded(s.colorGradingStrength, 0, 1) && Utf8(s.colorGradingLut) &&
+           s.colorGradingLut.size() <= 4096 && s.colorGradingLut.find('\0') == std::string::npos &&
+           bounded(s.aerosolDensity, 0, 10) && bounded(s.cloudCoverage, 0, 1) &&
+           bounded(s.windVelocity.x, -150, 150) && bounded(s.windVelocity.y, -150, 150) &&
+           bounded(s.surfaceWetness, 0, 1) && std::isfinite(s.weatherTime);
 }
 
 bool IsDefaultRender3DSettings(const Render3DSettings& s) {
@@ -82,7 +100,15 @@ bool IsDefaultRender3DSettings(const Render3DSettings& s) {
             v.rayTracing.restirIndirect, v.virtualShadows, v.waterReflection.environmentPath,
             v.waterReflection.rotation, v.waterReflection.intensity, v.waterReflection.faceSize,
             v.radianceCascades.strength, v.radianceCascades.spacing, v.screenSpaceAntialiasing,
-            v.temporalAntialiasing, v.rayTracing.waterReflections);
+            v.temporalAntialiasing, v.temporalSharpness, v.motionBlurShutter,
+            v.rayTracing.waterReflections, v.rayTracing.temporalRestir, v.rayTracing.denoiser,
+            v.vignette, v.filmGrain, v.chromaticAberration, v.lensDistortion, v.lensFlareStrength,
+            v.gtaoRadius, v.contactShadowDistance, v.shadowLightAngularRadius,
+            v.hierarchicalReflections, v.bloomIntensity, v.bloomThreshold, v.physicallyBasedBloom,
+            v.localExposure, v.apertureBlades, v.physicalCamera, v.autoExposure,
+            v.depthOfFieldRadius, v.focusDistance, v.colorGradingLut, v.colorGradingStrength,
+            v.dynamicAtmosphere, v.aerosolDensity, v.cloudCoverage, v.surfaceWetness, v.weatherTime,
+            v.windVelocity.x, v.windVelocity.y);
     };
     return fields(s) == fields(d);
 }

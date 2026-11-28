@@ -1,5 +1,6 @@
 BEGIN_SRT_SET(Persistent)
 DECL_CBUFFER(Persistent, CBUFFER(LuxSceneData), gScene)
+DECL_CBUFFER(Persistent, CBUFFER(LuxRayHistoryParams), gRayHistoryParams)
 DECL_RAYTRACING(Persistent, RaytracingAccelerationStructure, gRayScene)
 DECL_BUFFER(Persistent, Buffer(float4), gRayInstances)
 DECL_BUFFER(Persistent, Buffer(float4), gRayTriangles)
@@ -9,6 +10,8 @@ DECL_RWBUFFER(Persistent, RWBuffer(float4), gRestirCandidates)
 #else
 DECL_BUFFER(Persistent, Buffer(float4), gRestirCandidates)
 DECL_RWBUFFER(Persistent, RWBuffer(float4), gRestirResult)
+DECL_BUFFER(Persistent, Buffer(float4), gPreviousReservoirs)
+DECL_RWBUFFER(Persistent, RWBuffer(float4), gNextReservoirs)
 #endif
 END_SRT_SET(Persistent)
 BEGIN_SRT_SET(PerFrame)

@@ -36,6 +36,14 @@ struct SceneDrawDesc {
     Vec4 water{0, 0, 0, 0}; // RGB absorption and refractive index. W=0 disables water.
     uint32 shadowPageMask = 0xffffu;
     uint64 terrainColor = 0, terrainNormal = 0, terrainRoughness = 0;
+    uint64 motionInstance = 0, geometryRevision = 0;
+    Vec4 surfaceWeather{};
+    Vec4 foliage{};
+    float subsurfaceThickness = 0;
+    Vec3 emissive{};
+    uint64 emissiveTexture = 0;
+    uint64 heightTexture = 0, terrainHeight = 0;
+    float parallaxDepth = 0, heightBlend = 0;
 };
 
 // HDR scene path (PBR, shadows, image-based lighting) owned by a backend.

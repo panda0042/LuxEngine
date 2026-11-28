@@ -6,7 +6,8 @@
 #define LUX_RESTIR_MAX_AXIS 640u
 #define LUX_RESTIR_DI 16u
 #define LUX_RESTIR_GI 32u
-#define LUX_RESTIR_OUTPUT_FLOATS4 4u
+#define LUX_RESTIR_OUTPUT_FLOATS4 5u
+#define LUX_RAY_DENOISE 256u
 
 uint RestirSpacing(uint2 size) {
     return max(2u, (max(size.x, size.y) + LUX_RESTIR_MAX_AXIS - 1u) / LUX_RESTIR_MAX_AXIS);

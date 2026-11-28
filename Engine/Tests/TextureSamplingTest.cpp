@@ -81,6 +81,26 @@ void AlphaMaskCoverage() {
     Check(BuildTextureMipChain(4, 1, pixels, TextureColorSpace::Srgb, false, levels, .2f) &&
               levels.back().pixels[3] == 255,
           "Mask coverage ignored the material cutoff");
+
+    // Irregular 13x7 footprints must preserve the integral even at 3x1 and 1x1.
+    std::vector<uint8> thin(13 * 7 * 4, 0);
+    unsigned covered = 0;
+    for (unsigned y = 0; y < 7; ++y)
+        for (unsigned x = 0; x < 13; ++x) {
+            const bool leaf = (x + y * 2) % 5 == 0;
+            thin[4 * (y * 13 + x) + 3] = leaf ? 191 : 48;
+            covered += leaf;
+        }
+    Check(BuildTextureMipChain(13, 7, thin, TextureColorSpace::Srgb, false, levels, .5f),
+          "Irregular alpha-coverage mips build");
+    const double expected = double(covered) / 91.;
+    for (size_t i = 1; i < levels.size(); ++i) {
+        double total = 0;
+        for (size_t a = 3; a < levels[i].pixels.size(); a += 4)
+            total += levels[i].pixels[a] / 255.;
+        Check(std::abs(total / (levels[i].width * levels[i].height) - expected) <= 1.5 / 255.,
+              "A masked NPOT mip lost source coverage");
+    }
 }
 
 void AtomicFailure() {
