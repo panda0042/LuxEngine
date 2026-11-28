@@ -17,6 +17,7 @@ RUNTIME = SAMPLE.parent / "Assets" / "FrontierCounty"
 MAPS = (
     ("Diffuse", "gravel_albedo.jpg", "sRGB", ["--colorconvert", "sRGB", "linear"], ["--colorconvert", "linear", "sRGB", "--quality", "91"]),
     ("nor_gl", "gravel_normal.png", "Linear tangent-space OpenGL", [], []),
+    ("Displacement", "gravel_height.png", "Linear", [], ["--ch", "0"]),
     ("Rough", "gravel_roughness.png", "Linear", [], ["--ch", "0"]),
 )
 

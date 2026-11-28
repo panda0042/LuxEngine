@@ -71,6 +71,27 @@
             "colorSpace": "Linear"
           },
           "runtimePath": "assets/FrontierCounty/gravel_roughness.png"
+        },
+        {
+          "map": "Displacement",
+          "original": {
+            "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/rocky_gravel/rocky_gravel_disp_8k.jpg",
+            "width": 8192,
+            "height": 8192,
+            "format": "JPEG",
+            "bytes": 18756761,
+            "md5": "2565c45d6e83d800703e33a7bca73c3a",
+            "sha256": "00f35d16ac5f48d778e9e813bffa9ac8332662d4e2cf57cc887c92a61ddba062"
+          },
+          "processed": {
+            "path": "samples/Assets/FrontierCounty/gravel_height.png",
+            "bytes": 662080,
+            "sha256": "badce7883f37cec7fb9b0a80accb30eb495e01346a570675d1491bd1cb7041be",
+            "width": 1024,
+            "height": 1024,
+            "colorSpace": "Linear"
+          },
+          "runtimePath": "assets/FrontierCounty/gravel_height.png"
         }
       ]
     },
@@ -1350,6 +1371,25 @@
           },
           "runtimePath": "assets/FrontierMeadow/roughness.png",
           "processedPath": "samples/Assets/FrontierMeadow/roughness.png"
+        },
+        {
+          "path": "height.png",
+          "bytes": 702730,
+          "sha256": "7ad6aa27c6cdad45ae923f88fb1d30eab86c1b7e5ac7b73dc6d477e8746fee1b",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "Linear",
+          "original": {
+            "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/leafy_grass/leafy_grass_disp_8k.jpg",
+            "width": 8192,
+            "height": 8192,
+            "format": "JPEG",
+            "bytes": 22612266,
+            "md5": "ed3e91a01891e8ce433baee86befb894",
+            "sha256": "3fdaff7dab2f2facba1eb1c3cb71be2c60d6a26768fcc34f431ad72e71038ae5"
+          },
+          "runtimePath": "assets/FrontierMeadow/height.png",
+          "processedPath": "samples/Assets/FrontierMeadow/height.png"
         }
       ]
     }

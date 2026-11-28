@@ -62,6 +62,23 @@
         "md5": "f74c8ad676a73a351598e5e115cfde08",
         "sha256": "3516079c5ea9402389a793ec2f241919e515851b12f2d5121ac8ea5b008f57b0"
       }
+    },
+    {
+      "path": "height.png",
+      "bytes": 702730,
+      "sha256": "7ad6aa27c6cdad45ae923f88fb1d30eab86c1b7e5ac7b73dc6d477e8746fee1b",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "Linear",
+      "original": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/leafy_grass/leafy_grass_disp_8k.jpg",
+        "width": 8192,
+        "height": 8192,
+        "format": "JPEG",
+        "bytes": 22612266,
+        "md5": "ed3e91a01891e8ce433baee86befb894",
+        "sha256": "3fdaff7dab2f2facba1eb1c3cb71be2c60d6a26768fcc34f431ad72e71038ae5"
+      }
     }
   ]
 }

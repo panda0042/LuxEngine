@@ -70,6 +70,10 @@ public:
         return wetness_;
     }
 
+    double SurfaceWetness() const {
+        return surfaceWetness_;
+    }
+
     float CloudCover() const {
         return cloud_;
     }
@@ -139,7 +143,7 @@ private:
     Vec2 previousLook_{yaw_, pitch_};
     Vec2 vehicleCameraLook_{};
     double vehicleCameraArm_ = 1;
-    double elapsed_ = 0, hour_ = 12, wetness_ = 0;
+    double elapsed_ = 0, hour_ = 12, wetness_ = 0, surfaceWetness_ = 0;
     float cloud_ = 0, fog_ = .0015f, flash_ = 0;
     Weather weather_ = Weather::Clear;
     bool firstPerson_ = false, driving_ = false, crouched_ = false, swimming_ = false,

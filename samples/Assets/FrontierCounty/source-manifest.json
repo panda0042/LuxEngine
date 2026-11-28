@@ -26,6 +26,11 @@
       "path": "gravel_roughness.png",
       "bytes": 517342,
       "sha256": "c1bc83ae47a54db92dbda27f29ed6e1eb51c344faec72285fe8d705c5e6c15bd"
+    },
+    {
+      "path": "gravel_height.png",
+      "bytes": 662080,
+      "sha256": "badce7883f37cec7fb9b0a80accb30eb495e01346a570675d1491bd1cb7041be"
     }
   ]
 }

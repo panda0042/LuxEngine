@@ -1,4 +1,5 @@
 #include "World.hpp"
+#include <LuxEngine/Renderer/Renderer3D/Decal.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -190,11 +191,12 @@ void Tree(MeshData& mesh, Vec3 base, double height, double variation) {
         const Vec3 edge = side * (height * .28125);
         const Vec3 up{0, height, 0};
         const auto a = uint32(mesh.vertices.size());
-        mesh.vertices.insert(mesh.vertices.end(),
-                             {{base - edge, (normal - side * .47).Normalized(), {0, 1}, color},
-                              {base - edge + up, (normal - side * .38).Normalized(), {0, 0}, color},
-                              {base + edge + up, (normal + side * .38).Normalized(), {1, 0}, color},
-                              {base + edge, (normal + side * .47).Normalized(), {1, 1}, color}});
+        mesh.vertices.insert(
+            mesh.vertices.end(),
+            {{base - edge, (normal - side * .47).Normalized(), {0, 1}, color},
+             {base - edge + up, (normal - side * .38).Normalized(), {0, 0}, color, 1},
+             {base + edge + up, (normal + side * .38).Normalized(), {1, 0}, color, 1},
+             {base + edge, (normal + side * .47).Normalized(), {1, 1}, color}});
         mesh.indices.insert(mesh.indices.end(), {a, a + 1, a + 2, a, a + 2, a + 3});
     }
 }
@@ -313,9 +315,20 @@ Draft Generate(ChunkKey key, unsigned seed, unsigned vegetation) {
                     {p + across * left, p + across * right, q + across * right, q + across * left},
                     origin, seed, bias, color);
             };
+            const auto roadStart = result.road.indices.size();
             patch(-4.05, 4.05, .012, {.88f, .88f, .87f, 1}, result.road);
-            if (i % 2 == 0)
-                patch(-.065, .065, .018, {.49f, .33f, .11f, 1}, result.scenery);
+            if (i % 2 == 0) {
+                DecalProjector stripe;
+                const auto midpoint = (p + q) * .5;
+                stripe.center = OnGround(midpoint, seed) - Vec3{origin.x, 0, origin.y};
+                stripe.tangent = {ray.x / length, 0, ray.y / length};
+                stripe.halfSize = {Distance(p, q) * .5, .065, 6};
+                stripe.normalOffset = .006;
+                stripe.tint = {.49f, .33f, .11f, 1};
+                AppendProjectedDecal(stripe, result.road.vertices,
+                                     std::span(result.road.indices).subspan(roadStart),
+                                     result.scenery.vertices, result.scenery.indices);
+            }
         }
     }
     for (const auto& site : Sites) {
@@ -457,8 +470,8 @@ std::shared_ptr<const LuxEngine::TriangleMeshCollider3DData> TerrainCollision(Ch
 void MeshData::Quad(Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec4 color) {
     const auto normal = (b - a).Cross(c - a).Normalized();
     const auto first = uint32(vertices.size());
-    vertices.insert(vertices.end(), {{a, normal, {0, 0}, color},
-                                     {b, normal, {1, 0}, color},
+    vertices.insert(vertices.end(), {{a, normal, {0, 0}, color, 1},
+                                     {b, normal, {1, 0}, color, 1},
                                      {c, normal, {1, 1}, color},
                                      {d, normal, {0, 1}, color}});
     indices.insert(indices.end(), {first, first + 1, first + 2, first, first + 2, first + 3});
