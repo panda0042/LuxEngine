@@ -664,6 +664,97 @@ void SharedGroupCarriesCharacter(uint32 substeps) {
     Check(characterFollows(), "shared translation and platform-local motion contribute once each");
 }
 
+void RotatingGroupCarriesJumpingCharacter(uint32 substeps) {
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.overrideGravity = true;
+    settings.gravity3D = {0, -9.81, 0};
+    settings.physicsSubsteps = substeps;
+    Check(scene.SetSettings(settings), "apply rotating group substeps");
+
+    auto group = scene.CreateEntity("Rotating group");
+    auto platform = scene.CreateEntity("Kinematic platform");
+    platform.AddComponent<BoxCollider3DComponent>().size = {12, 1, 12};
+    platform.AddComponent<Rigidbody3DComponent>().type = BodyType::Kinematic;
+    auto& platformLocal = platform.GetComponent<TransformComponent>();
+    platformLocal.position.x = 4;
+    auto character = scene.CreateEntity("Character");
+    character.AddComponent<CharacterController3DComponent>();
+    auto& characterLocal = character.GetComponent<TransformComponent>();
+    constexpr Vec3 riderOffset{1.25, 1.45, .75};
+    characterLocal.position = platformLocal.position + riderOffset;
+    Check(scene.SetParent(platform.GetId(), group.GetId(), false) &&
+              scene.SetParent(character.GetId(), group.GetId(), false),
+          "the rider and platform share the rotating group");
+
+    const double dt = settings.fixedStep;
+    for (int i = 0; i < 60; ++i)
+        scene.OnUpdate(dt);
+    const auto riderFollows = [&] {
+        CharacterController3DState state;
+        const auto expected = scene.GetWorldMatrix(platform.GetId()).TransformPoint(riderOffset);
+        return scene.GetCharacterState3D(character.GetId(), state) && state.grounded &&
+               std::hypot(state.position.x - expected.x, state.position.z - expected.z) < .06;
+    };
+    Check(riderFollows(), "the rider settles at the offset from the platform center");
+
+    auto& groupPose = group.GetComponent<TransformComponent>();
+    const auto step = [&](bool rotate, bool movePlatform) {
+        if (rotate)
+            groupPose.rotation.y += .8 * dt;
+        if (movePlatform)
+            platformLocal.position.z += .7 * dt;
+        scene.OnUpdate(dt);
+    };
+    for (int i = 0; i < 30; ++i)
+        step(true, false);
+    Check(riderFollows(), "the common rotation moves the grounded rider once");
+    for (int i = 0; i < 30; ++i)
+        step(false, true);
+    Check(riderFollows(), "platform-only motion moves the grounded rider once");
+    for (int i = 0; i < 120; ++i)
+        step(true, true);
+    Check(riderFollows(),
+          "common rotation and platform-local translation both move the rider once");
+
+    CharacterController3DState state;
+    Check(scene.GetCharacterState3D(character.GetId(), state), "read the grounded rider state");
+    const auto startingHeight = state.position.y;
+    const auto beforeJump = characterLocal.position;
+    constexpr double jumpSpeed = 5;
+    constexpr int jumpSteps = 10;
+    Check(scene.SetCharacterMotion3D(character.GetId(), {}, jumpSpeed), "queue the rotating jump");
+    step(true, true);
+    const auto atTakeoff = characterLocal.position;
+    Check(std::abs(atTakeoff.x - beforeJump.x) < .005 &&
+              std::abs(atTakeoff.z - (beforeJump.z + .7 * dt / substeps)) < .005,
+          "the rotating rider receives one substep of platform motion at takeoff");
+    for (int i = 1; i < jumpSteps; ++i)
+        step(true, true);
+    const auto expectedVerticalVelocity = jumpSpeed + settings.gravity3D.y * dt * jumpSteps;
+    Check(scene.GetCharacterState3D(character.GetId(), state) && !state.grounded &&
+              state.position.y - startingHeight > .58 &&
+              std::abs(state.velocity.y - expectedVerticalVelocity) < .1 &&
+              std::abs(characterLocal.position.x - atTakeoff.x) < .005 &&
+              std::abs(characterLocal.position.z - atTakeoff.z) < .005,
+          "the rotating rider keeps jump momentum without airborne platform-local motion");
+    for (int i = 0; i < 70; ++i)
+        step(true, true);
+    Check(scene.GetCharacterState3D(character.GetId(), state) && state.grounded &&
+              scene.GetLastPhysicsError3D().empty(),
+          "the rider lands on the moving platform after the jump");
+    const auto landingOffset =
+        scene.GetWorldMatrix(platform.GetId()).InverseAffine().TransformPoint(state.position);
+    for (int i = 0; i < 60; ++i) {
+        platformLocal.rotation.y += .3 * dt;
+        step(true, true);
+    }
+    const auto expected = scene.GetWorldMatrix(platform.GetId()).TransformPoint(landingOffset);
+    Check(scene.GetCharacterState3D(character.GetId(), state) && state.grounded &&
+              std::hypot(state.position.x - expected.x, state.position.z - expected.z) < .06,
+          "local platform rotation carries the off-center rider within the rotating group");
+}
+
 void ParentedCharacterKeepsJumpVelocity(uint32 substeps) {
     Scene scene;
     auto settings = scene.GetSettings();
@@ -975,6 +1066,8 @@ int main() {
         ParentedCharacterKeepsJumpVelocity(8);
         SharedGroupCarriesCharacter(1);
         SharedGroupCarriesCharacter(8);
+        RotatingGroupCarriesJumpingCharacter(1);
+        RotatingGroupCarriesJumpingCharacter(8);
         CapacityAndReplacement();
         StableContactIdentity();
         PlanarColliderHierarchy();

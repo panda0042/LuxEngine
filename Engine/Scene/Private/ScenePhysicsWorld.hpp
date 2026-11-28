@@ -27,8 +27,9 @@ public:
                  uint32 ignoreEntity, bool includeTriggers) const;
 
 private:
-    void StepCharacters(Scene& scene, std::span<const uint32> characters, double dt, uint32 count,
-                        const std::unordered_map<uint32, Vec3>& rootMotion, const Vec3& gravity);
+    void StepCharacters(Scene& scene, std::span<const uint32> characters, double dt, uint32 index,
+                        uint32 count, const std::unordered_map<uint32, Vec3>& rootMotion,
+                        const Vec3& gravity);
     bool planar_;
     PhysicsWorld world_;
     std::vector<uint32> active_;
@@ -41,9 +42,20 @@ private:
         Mat4 parentWorld;
     };
 
+    struct LocalKinematicMotion {
+        Vec3 startPosition;
+        Vec3 targetPosition;
+        Vec3 startRotation;
+        Vec3 targetRotation;
+        Mat4 parentWorld;
+        Mat4 inverseParentWorld;
+
+        Vec3 StepVelocity(const Vec3& worldPoint, double dt, uint32 index, uint32 count) const;
+    };
+
     struct InheritedKinematicMotion {
         uint32 parent;
-        std::optional<Vec3> sharedVelocity;
+        std::optional<LocalKinematicMotion> localMotion;
     };
 
     std::unordered_map<uint32, LocalPose> previousKinematicLocals_;
