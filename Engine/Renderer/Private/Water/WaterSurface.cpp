@@ -95,11 +95,14 @@ bool WaterSurface::Configure(const WaterSurfaceDesc& desc, std::span<const Water
 bool WaterSurface::SetTime(double seconds) {
     if (vertices_.empty() || !std::isfinite(seconds))
         return false;
-    if (time_ && *time_ == seconds)
+    if (time_ && *time_ == seconds && !disturbancesChanged_)
         return true;
     // Only the temporal part needs trigonometry each frame. Precomputed spatial
     // phases let vertices reuse the same factors via the angle addition identities.
-    bool changed = !time_;
+    bool changed = !time_ || disturbancesChanged_ || !disturbances_.empty();
+    disturbancesChanged_ = false;
+    std::erase_if(disturbances_,
+                  [&](const auto& impulse) { return seconds - impulse.start > 12.; });
     for (size_t i = 0; i < waveCount_; ++i) {
         const auto& wave = waves_[i];
         const double angle =
@@ -113,7 +116,7 @@ bool WaterSurface::SetTime(double seconds) {
         return true;
     for (size_t i = 0; i < vertices_.size(); ++i) {
         const auto& point = grid_[i];
-        const auto value = Evaluate(point.phases);
+        const auto value = Evaluate(point.phases, point.planar);
         const auto location = point.planar + value.displacement;
         auto& vertex = vertices_[i];
         vertex.position = {location.x, value.sample.height, location.y};
@@ -124,7 +127,20 @@ bool WaterSurface::SetTime(double seconds) {
     return true;
 }
 
-WaterSurface::Evaluation WaterSurface::Evaluate(const std::array<Vec2, MaxWaves>& spatial) const {
+bool WaterSurface::AddDisturbance(Vec2 center, double start, double amplitude, double wavelength) {
+    if (vertices_.empty() || !Bounded(center.x, LocalLimit) || !Bounded(center.y, LocalLimit) ||
+        !std::isfinite(start) || !Bounded(amplitude, 10) || !std::isfinite(wavelength) ||
+        wavelength < .05 || wavelength > 1000)
+        return false;
+    if (disturbances_.size() >= 32)
+        disturbances_.erase(disturbances_.begin());
+    disturbances_.push_back({center, start, amplitude, wavelength});
+    disturbancesChanged_ = true;
+    return true;
+}
+
+WaterSurface::Evaluation WaterSurface::Evaluate(const std::array<Vec2, MaxWaves>& spatial,
+                                                Vec2 position) const {
     Evaluation value;
     value.sample.height = level_;
     Vec3 tangentX{1, 0, 0}, tangentZ{0, 0, 1};
@@ -141,6 +157,29 @@ WaterSurface::Evaluation WaterSurface::Evaluate(const std::array<Vec2, MaxWaves>
         tangentX += slope * wave.waveVector.x;
         tangentZ += slope * wave.waveVector.y;
         value.sample.velocity += slope * wave.angularVelocity;
+    }
+    for (const auto& pulse : disturbances_) {
+        const double age = time_.value_or(pulse.start) - pulse.start;
+        if (age < 0 || age >= 12.)
+            continue;
+        const Vec2 offset = position + value.displacement - pulse.center;
+        const double radius = std::hypot(offset.x, offset.y);
+        const double k = Tau / pulse.wavelength, speed = std::sqrt(9.81 / k);
+        const double u = (radius - speed * age) / pulse.wavelength;
+        if (std::abs(u) > 3.)
+            continue;
+        const double damping =
+            std::exp(-2. * u * u - .44 * age) / std::sqrt(1. + radius / pulse.wavelength);
+        const double phase = Tau * u;
+        const double height = pulse.amplitude * damping * std::cos(phase);
+        const double profile = pulse.amplitude * damping *
+                               (-4. * u * std::cos(phase) - Tau * std::sin(phase)) /
+                               pulse.wavelength;
+        const double radial = profile - .5 * height / (pulse.wavelength + radius);
+        tangentX.y += radial * offset.x / std::max(radius, .001);
+        tangentZ.y += radial * offset.y / std::max(radius, .001);
+        value.sample.height += height;
+        value.sample.velocity.y += -speed * profile - .44 * height;
     }
     const Vec3 normal = tangentZ.Cross(tangentX);
     value.sample.jacobian = normal.y;
@@ -163,7 +202,7 @@ std::optional<WaterSample> WaterSurface::Sample(double x, double z) const {
             spatial[j] =
                 Phase(wave.waveVector.x * planar.x + wave.waveVector.y * planar.y + wave.phase);
         }
-        const auto value = Evaluate(spatial);
+        const auto value = Evaluate(spatial, planar);
         // Solve displaced XZ = rest XZ + horizontal displacement for the rest point.
         const Vec2 next = target - value.displacement;
         if (std::abs(next.x - planar.x) <= tolerance && std::abs(next.y - planar.y) <= tolerance) {

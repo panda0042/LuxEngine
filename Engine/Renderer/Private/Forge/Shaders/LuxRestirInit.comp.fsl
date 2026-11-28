@@ -1,8 +1,15 @@
 #include "fsl_ext.h"
 #include "LuxRestirInit.srt.h"
 #include "LuxRestirResampling.h"
+#include "LuxSkyAtlas.h"
+#define LUX_SKY_GLOSS gRaySkyGloss
+#define LUX_SKY_SH gRaySkySH
+#include "LuxSkyLighting.h"
+#undef LUX_SKY_GLOSS
+#undef LUX_SKY_SH
 
 float3 RestirSky(float3 direction, float mip) {
+    if (gScene.skyLighting.x > .5f) return SkySpecularLighting(direction,mip/7.0f) * gScene.environment.w;
     if (gScene.options.y < 0.5f)
         return gScene.environment.rgb * gScene.environment.w;
     const float c = cos(gScene.options.x), s = sin(gScene.options.x);
@@ -23,11 +30,13 @@ float3 RestirCosineSample(float3 normal, float2 uniformPair) {
            normal * sqrt(1.0f - uniformPair.x);
 }
 
-float3 RestirSecondaryRadiance(RestirSurface surface, float limit) {
+float3 RestirSecondaryLighting(RestirSurface surface, float limit, bool addSky) {
     // The outgoing radiance stored at the secondary vertex is diffuse, so it
     // transfers to neighboring receivers without a view-dependent specular lobe.
     const float3 diffuse = surface.base * (1.0f - surface.metallic);
-    float3 irradiance = RestirSky(surface.normal, 7.0f);
+    float3 irradiance = float3(0,0,0);
+    if (addSky)
+        irradiance = gScene.skyLighting.x > .5f ? SkyDiffuseLighting(surface.normal) * gScene.environment.w : RestirSky(surface.normal, 7.0f);
     const float3 sunDirection = -gLights.direction.xyz;
     const float sunCosine = saturate(dot(surface.normal, sunDirection));
     const float3 origin = surface.position + surface.normal * 0.004f;
@@ -53,9 +62,31 @@ float3 RestirSecondaryRadiance(RestirSurface surface, float limit) {
     return diffuse * irradiance;
 }
 
+float3 RestirDiffusePath(RestirSurface surface, float limit, uint seed) {
+    const uint bounces = min(max(uint(gScene.rayOptions.z), 1u), 4u);
+    float3 throughput = float3(1,1,1);
+    float3 radiance = float3(0,0,0);
+    for (uint bounce = 0u; bounce < bounces; ++bounce) {
+        const bool last = bounce + 1u == bounces;
+        radiance += throughput * RestirSecondaryLighting(surface, limit, last);
+        if (last) break;
+        throughput *= surface.base * (1.0f - surface.metallic);
+        if (max(throughput.r,max(throughput.g,throughput.b)) < .002f) break;
+        seed = RestirHash(seed + bounce);
+        const float3 wi = RestirCosineSample(surface.normal, float2(RestirRandom(seed),RestirRandom(seed+1u)));
+        surface = RestirTrace(surface.position + .004f*surface.normal, wi, limit);
+        if (surface.distance <= 0.0f) {
+            radiance += throughput * RestirSky(wi, 0.0f);
+            break;
+        }
+    }
+    return radiance;
+}
+
 // Glossy samples jitter around the ideal reflection. The contribution is
 // accumulated separately from primary albedo, direct light and screen overlays.
-float3 RestirReflection(RestirSurface surface, float3 cameraRay, uint seed) {
+float3 RestirReflection(RestirSurface surface, float3 cameraRay, uint seed, out(float) hitDistance) {
+    hitDistance = -1.0f;
     float3 incident = cameraRay;
     float3 result = float3(0.0f, 0.0f, 0.0f);
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
@@ -68,13 +99,14 @@ float3 RestirReflection(RestirSurface surface, float3 cameraRay, uint seed) {
         if (dot(surface.normal, direction) < 0.0f)
             direction = mirror;
         const RestirSurface hit = RestirTrace(surface.position + 0.004f * surface.normal, direction, gScene.rayOptions.y);
+        if (bounce == 0u) hitDistance = hit.distance;
         if (hit.distance <= 0.0f) {
             result += throughput * RestirSky(direction, surface.roughness * 7.0f);
             break;
         }
         const float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), hit.base, hit.metallic);
         const float3 fresnel = Fresnel(dot(-direction, hit.normal), f0);
-        result += throughput * (1.0f - fresnel) * RestirSecondaryRadiance(hit, gScene.rayOptions.y);
+        result += throughput * (1.0f - fresnel) * RestirSecondaryLighting(hit, gScene.rayOptions.y, true);
         throughput *= fresnel;
         if (bounce + 1u == bounces)
             result += throughput * RestirSky(reflect(direction, hit.normal), hit.roughness * 7.0f);
@@ -121,6 +153,7 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
     RestirDIReservoir direct = RestirEmptyDI();
     RestirGIReservoir indirect = RestirEmptyGI();
     const uint effects = uint(gScene.rayOptions.x);
+    float hitDistance = -1.0f;
     float4 glossy = float4(0.0f, 0.0f, 0.0f, 0.0f);
     if (surface.distance > 0.0f) {
         const uint lightCount = min(gLights.count.x, 16u);
@@ -137,7 +170,7 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
             }
         }
         if (gRayHistoryParams.controls.z > 0.5f && (effects & 2u) != 0u && surface.roughness < 0.85f)
-            glossy = float4(RestirReflection(surface, direction, seed ^ 0x22aeb5a9u), 1.0f);
+            glossy = float4(RestirReflection(surface, direction, seed ^ 0x22aeb5a9u, hitDistance), 1.0f);
         if (((effects & LUX_RESTIR_GI) != 0u ||
              (gRayHistoryParams.controls.z > 0.5f && (effects & 8u) != 0u)) && surface.metallic < 0.999f) {
             for (uint i = 0u; i < 2u; ++i) {
@@ -153,7 +186,7 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
                                                                          : wi;
                 proposal.normal = secondary.normal;
                 proposal.radiance = secondary.distance > 0.0f
-                                        ? RestirSecondaryRadiance(secondary, limit)
+                                        ? RestirDiffusePath(secondary, limit, baseSeed ^ 0x8cb3c54fu)
                                         : RestirSky(wi, 3.0f);
                 float pdf = saturate(dot(surface.normal, wi)) * (1.0f / 3.141592653589793f);
                 if (proposal.kind == 1.0f) {
@@ -171,5 +204,6 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
     }
     gRestirCandidates[cell * LUX_RESTIR_CANDIDATE_FLOATS4 + 8u] = glossy;
     RestirStoreCandidates(cell * LUX_RESTIR_CANDIDATE_FLOATS4, surface, direct, indirect);
+    gRestirCandidates[cell * LUX_RESTIR_CANDIDATE_FLOATS4 + 3u] = float4(surface.roughness, indirect.count, hitDistance, 0.0f);
     RETURN();
 }

@@ -75,6 +75,8 @@ def prepare(cache, catalog):
             subprocess.run(["oiiotool", decoded / "metallicRoughness_1.png", "--ch", "G",
                             "-o", target / "roughness.png"], check=True)
             runtime.append(target / "roughness.png")
+            from bake_tissue_mask import bake as bake_tissue
+            runtime.append(bake_tissue(target))
         packages[package].append((item, {**original, "url": url, "format": "GLB"}, runtime))
     return packages
 
@@ -97,7 +99,7 @@ def manifest(packages):
                 if p.suffix == ".png":
                     with Image.open(p) as image:
                         entry["width"], entry["height"] = image.size
-                    entry["colorSpace"] = "sRGB" if p.stem.startswith(("albedo", "spruce")) else "Linear"
+                    entry["colorSpace"] = "sRGB" if (p.stem.startswith("albedo") or p.stem in ("spruce", "spruce-views-color")) else "Linear"
                 files.append(entry)
         data = {"name": package, "author": "tevy", "source": "https://tevy.dev/models",
                 "license": "CC0-1.0", "sources": sources, "files": files}

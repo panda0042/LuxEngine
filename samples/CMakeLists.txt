@@ -8,14 +8,15 @@ add_custom_target(LuxSampleAssets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/Assets" "${_lux_sample_assets_dir}"
     VERBATIM)
 function(lux_add_sample target)
-    add_executable(${target} ${ARGN})
+    cmake_parse_arguments(PARSE_ARGV 1 sample "NO_CLI" "" "")
+    add_executable(${target} ${sample_UNPARSED_ARGUMENTS})
     target_link_libraries(${target} PRIVATE LuxSampleSupport)
     lux_set_target_warnings(${target})
     lux_copy_runtime(${target})
     add_dependencies(${target} LuxSampleAssets)
     set_target_properties(${target} PROPERTIES
         VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:${target}>")
-    if(LUX_BUILD_TESTS)
+    if(LUX_BUILD_TESTS AND NOT sample_NO_CLI)
         add_test(NAME ${target}_smoke COMMAND ${target} --smoke-test)
         set_tests_properties(${target}_smoke PROPERTIES TIMEOUT 60 LABELS "gpu;sample"
             WORKING_DIRECTORY "$<TARGET_FILE_DIR:${target}>"

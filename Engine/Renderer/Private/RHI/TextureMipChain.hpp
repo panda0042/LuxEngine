@@ -34,6 +34,7 @@ constexpr TextureLayout GetTextureLayout(uint32 width, uint32 height, bool mipma
 
 bool BuildTextureMipTail(uint32 width, uint32 height, std::span<const uint8> pixels,
                          TextureColorSpace colorSpace, bool normalMap,
-                         std::vector<TextureMipLevel>& output, float alphaMaskCutoff);
+                         std::vector<TextureMipLevel>& output, float alphaMaskCutoff,
+                         TextureMipSemantic semantic);
 
 } // namespace LuxEngine::Rhi

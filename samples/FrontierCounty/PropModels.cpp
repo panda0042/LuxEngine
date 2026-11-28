@@ -1,5 +1,6 @@
 #include "PropModels.hpp"
 
+#include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/Assets/ModelAsset.hpp>
 #include <algorithm>
 #include <fstream>
@@ -83,7 +84,12 @@ void PropModels::Load(GpuDevice& gpu, const std::filesystem::path& assets) {
                 material.windAmplitude = cover ? .12f : .32f;
                 if (material.alphaMode == MaterialAlphaMode::Mask) {
                     material.subsurfaceRadius = {.00035, .0009, .00022};
-                    material.subsurfaceThickness = .0007f;
+                    material.subsurfaceThickness = cover ? .00024f : .00038f;
+                    auto& leaf = material.surface.emplace();
+                    leaf.model = SurfaceModel::Foliage;
+                    leaf.indexOfRefraction = 1.43f;
+                    leaf.transmission = cover ? .67f : .48f;
+                    leaf.anisotropy = cover ? .42f : .28f;
                 }
             }
             std::vector<Vertex3D> vertices;
@@ -119,15 +125,92 @@ void PropModels::Load(GpuDevice& gpu, const std::filesystem::path& assets) {
         result.center = {(low.x + high.x) * .5, low.y, (low.z + high.z) * .5};
         models_.emplace(name, std::move(result));
     }
+    LoadGroundScans(assets);
+}
+
+void PropModels::LoadGroundScans(const std::filesystem::path& assets) {
+    struct PartSource {
+        GroundSpecies species;
+        const char* mesh;
+        const char* texture;
+        bool foliage;
+    };
+
+    const std::array sources{
+        PartSource{GroundSpecies::Fern, "Models/fern_b.obj", "Textures/fern.png", true},
+        PartSource{GroundSpecies::Sapling, "Models/pine_bark_far.obj", "Textures/pine_bark.png",
+                   false},
+        PartSource{GroundSpecies::Sapling, "Models/pine_needles_far.obj",
+                   "Textures/pine_needles.png", true},
+        PartSource{GroundSpecies::Deadwood, "Models/trunk_far.obj", "Textures/trunk.png", false},
+        PartSource{GroundSpecies::Dandelion, "flower.obj", "albedo.png", true}};
+    for (const auto& part : sources) {
+        const auto key = std::string(GroundSpeciesNames[size_t(part.species)]);
+        const bool flower = part.species == GroundSpecies::Dandelion;
+        const auto root = flower ? assets / "FrontierFlowers" : assets / "rainy-creek";
+        const auto path = Utf8Path(root / part.mesh);
+        RawMeshData raw;
+        if (!AssetManager::LoadMesh(path, raw) || !raw.hasTexCoords || raw.indices.empty())
+            throw std::runtime_error("Could not load scanned ground cover: " + path);
+        auto& model = models_[key];
+        Vec3 low = raw.boundsMin, high = raw.boundsMax;
+        if (!model.batchGeometry.empty()) {
+            const auto hw = Vec3{model.dimensions.x * .5, 0, model.dimensions.z * .5};
+            const auto lo = model.center - hw, hi = lo + model.dimensions;
+            low = {std::min(low.x, lo.x), std::min(low.y, lo.y), std::min(low.z, lo.z)};
+            high = {std::max(high.x, hi.x), std::max(high.y, hi.y), std::max(high.z, hi.z)};
+        }
+        model.center = {(low.x + high.x) * .5, low.y, (low.z + high.z) * .5};
+        model.dimensions = high - low;
+        auto& geometry = model.batchGeometry.emplace_back();
+        auto& mat = geometry.material;
+        mat.baseColorTexture = Utf8Path(root / part.texture);
+        mat.textureSampling = {true, TextureAddressMode::Clamp, true, false};
+        mat.wettingResponse = .7f;
+        mat.roughness = part.foliage ? .71f : .86f;
+        if (flower) {
+            mat.normalTexture = Utf8Path(root / "normal.png");
+            mat.roughnessTexture = Utf8Path(root / "roughness.png");
+            mat.roughness = 1;
+        }
+        if (part.foliage) {
+            mat.alphaMode = MaterialAlphaMode::Mask;
+            mat.alphaCutoff = .45f;
+            mat.doubleSided = true;
+            mat.windAmplitude = part.species == GroundSpecies::Sapling ? .09f : .045f;
+            mat.subsurfaceRadius = {.0004, .0007, .0003};
+            mat.subsurfaceThickness = .00028f;
+            auto& leaf = mat.surface.emplace();
+            leaf.model = SurfaceModel::Foliage;
+            leaf.transmission = .52f;
+            leaf.indexOfRefraction = 1.43f;
+        }
+        geometry.mesh.indices = std::move(raw.indices);
+        geometry.mesh.vertices.reserve(raw.vertices.size() / 3);
+        for (size_t i = 0; i < raw.vertices.size() / 3; ++i) {
+            const Vec3 p{raw.vertices[i * 3], raw.vertices[i * 3 + 1], raw.vertices[i * 3 + 2]};
+            const float flexibility =
+                part.foliage
+                    ? float(std::clamp((p.y - model.center.y) / std::max(.001, model.dimensions.y),
+                                       0., 1.))
+                    : 0.f;
+            geometry.mesh.vertices.push_back(
+                {p,
+                 {raw.normals[i * 3], raw.normals[i * 3 + 1], raw.normals[i * 3 + 2]},
+                 {raw.texCoords[i * 2], raw.texCoords[i * 2 + 1]},
+                 {1, 1, 1, 1},
+                 flexibility});
+        }
+    }
 }
 
 void PropModels::Draw(Renderer3D::Context& renderer, std::string_view key, Vec3 ground,
-                      Vec3 dimensions, double yaw) const {
-    Draw(renderer, key, Mat4::Translate(ground) * Mat4::RotateY(yaw), dimensions);
+                      Vec3 dimensions, double yaw, float lodTransition) const {
+    Draw(renderer, key, Mat4::Translate(ground) * Mat4::RotateY(yaw), dimensions, 0, lodTransition);
 }
 
 void PropModels::Draw(Renderer3D::Context& renderer, std::string_view key, const Mat4& placement,
-                      Vec3 dimensions, uint64_t motionInstance) const {
+                      Vec3 dimensions, uint64_t motionInstance, float lodTransition) const {
     const auto model = models_.find(key);
     if (model == models_.end())
         throw std::runtime_error("Unknown prop asset: " + std::string(key));
@@ -136,9 +219,10 @@ void PropModels::Draw(Renderer3D::Context& renderer, std::string_view key, const
                      dimensions.z / source.dimensions.z};
     const auto transform = placement * Mat4::Scale(scale) * Mat4::Translate(source.center * -1);
     for (const auto& part : source.parts) {
-        if (motionInstance) {
+        if (motionInstance || lodTransition != 0) {
             auto material = part.material;
             material.motionInstance = motionInstance;
+            material.lodTransition = lodTransition;
             renderer.DrawMesh(*part.mesh, transform, material);
         } else {
             renderer.DrawMesh(*part.mesh, transform, part.material);
@@ -150,8 +234,8 @@ std::deque<PropModels::Geometry> PropModels::BuildGroundCover(ChunkKey tile, uns
     const auto plants = GroundCover(tile, seed);
     const Vec3 origin{double(tile.x * CoverTileSize), 0, double(tile.z * CoverTileSize)};
     std::deque<Geometry> batches;
-    BuildBatches("grass-clump", plants[0], origin, batches);
-    BuildBatches("sedge-tuft", plants[1], origin, batches);
+    for (size_t i = 0; i < GroundSpeciesNames.size(); ++i)
+        BuildBatches(GroundSpeciesNames[i], plants[i], origin, batches);
     return batches;
 }
 
@@ -179,7 +263,8 @@ void PropModels::BuildBatches(std::string_view key, std::span<const Plant> plant
                 const Vec3 scale{plant.dimensions.x / model.dimensions.x,
                                  plant.dimensions.y / model.dimensions.y,
                                  plant.dimensions.z / model.dimensions.z};
-                const auto rotation = Mat4::RotateY(plant.yaw);
+                const auto rotation =
+                    Mat4::RotateY(plant.yaw) * Mat4::RotateZ(plant.longitudinalTilt);
                 const auto transform = Mat4::Translate(plant.ground - origin) * rotation *
                                        Mat4::Scale(scale) * Mat4::Translate(model.center * -1);
                 const uint32 base = uint32(data.vertices.size());

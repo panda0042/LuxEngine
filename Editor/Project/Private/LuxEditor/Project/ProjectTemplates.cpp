@@ -995,7 +995,7 @@ protected:
             auto renderSettings = settings.render3D;
             for (auto* path : {&renderSettings.environmentPath,
                                &renderSettings.waterReflection.environmentPath,
-                               &renderSettings.colorGradingLut})
+                               &renderSettings.colorGradingLut, &renderSettings.secondaryColorGradingLut})
                 if (!path->empty())
                     *path = scene_->ResolveAssetPath(*path);
             le::Renderer3D::BeginScene(cameras.camera3D, renderSettings, settings.exposure);

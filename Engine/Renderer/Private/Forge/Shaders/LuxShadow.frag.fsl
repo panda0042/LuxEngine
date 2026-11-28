@@ -11,6 +11,7 @@ ROOT_SIGNATURE(DefaultRootSignature)
 void PS_MAIN(ShadowOutput In)
 {
     INIT_MAIN;
+    if (BelowLodCoverage(In.position.xy)) discard;
     if (gDraw.options.y > 0.5f &&
         BelowAlphaCutoff(SampleMaterial(gTexture, In.uv).a, In.color.a, In.uv, In.position.xy))
         discard;

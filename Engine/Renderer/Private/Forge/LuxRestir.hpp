@@ -2,9 +2,9 @@
 
 #if defined(VULKAN) && defined(ENABLE_RAYTRACING)
 struct LuxForgeRestir {
-    Shader* shaders[2] = {};
-    Pipeline* pipelines[2] = {};
-    DescriptorSet* sets[2] = {};
+    Shader* shaders[4] = {};
+    Pipeline* pipelines[4] = {};
+    DescriptorSet* sets[4] = {};
     Buffer* candidates = nullptr;
     Buffer* output = nullptr;
     Buffer* history[2] = {};
@@ -13,6 +13,7 @@ struct LuxForgeRestir {
     uint64_t frame = 0, view = 0;
     std::array<float, 16> matrix{};
     std::array<float, 3> forward{};
+    std::array<float, 12> illumination{};
     std::array<double, 3> origin{};
     size_t capacity = 0;
 

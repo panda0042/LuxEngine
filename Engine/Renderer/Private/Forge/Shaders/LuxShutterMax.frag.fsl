@@ -1,0 +1,40 @@
+#include "LuxShutterVelocity.h"
+
+ROOT_SIGNATURE(DefaultRootSignature)
+float4 PS_MAIN(ShutterInput In)
+{
+    INIT_MAIN;
+    const int2 tile = int2(In.position.xy);
+    const int2 size = int2(gTemporal.viewport.xy);
+    float2 fastest = float2(0, 0);
+#ifdef LUX_SHUTTER_NEIGHBOR
+    const int2 tiles = (size + int2(15, 15)) / 16;
+    for (int y = -2; y <= 2; ++y)
+        for (int x = -2; x <= 2; ++x) {
+            const int2 q = tile + int2(x, y);
+            if (q.x < 0 || q.y < 0 || q.x >= tiles.x || q.y >= tiles.y) continue;
+            const float4 value = LoadTex2D(gShutterTiles, NO_SAMPLER, q, 0);
+            const float2 start = float2(q * 16) + value.zw, end = start + value.xy;
+            const float2 lo = min(start, end), hi = max(start, end);
+            if (hi.x < float(tile.x*16)-1 || lo.x > float(tile.x*16+16) ||
+                hi.y < float(tile.y*16)-1 || lo.y > float(tile.y*16+16)) continue;
+            if (dot(value.xy, value.xy) > dot(fastest, fastest)) fastest = value.xy;
+        }
+    RETURN(float4(fastest, 0, 0));
+#else
+    int2 location = int2(0, 0);
+    for (int y = 0; y < 16; ++y)
+        for (int x = 0; x < 16; ++x) {
+            const int2 q = tile * 16 + int2(x, y);
+            if (q.x >= size.x || q.y >= size.y) continue;
+            const float4 stored = LoadTex2D(gMotionVectors, NO_SAMPLER, q, 0);
+            if (stored.w < 0) continue;
+            const float2 v = stored.w > 0 ? ShutterVelocity(stored.xy) : CameraShutterVelocity(q, ShutterDepth(q));
+            if (dot(v, v) > dot(fastest, fastest)) {
+                fastest = v;
+                location = int2(x, y);
+            }
+        }
+    RETURN(float4(fastest, float2(location)));
+#endif
+}

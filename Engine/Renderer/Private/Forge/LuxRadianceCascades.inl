@@ -152,7 +152,7 @@ Buffer* RenderRadianceCascades(LuxForgeDevice* device, const LuxForgeScene& scen
         constants.interval[3] = project ? 1.f : 0.f;
         std::memcpy(constants.environment, scene.environment, sizeof(constants.environment));
         constants.optics[0] = scene.options[0];
-        constants.optics[1] = scene.options[1];
+        constants.optics[1] = scene.skyLighting[0] > .5f ? 2.f : scene.options[1];
         constants.optics[2] = scene.cascadeOptions[0];
         constants.optics[3] = std::max(14.f * spacing, scene.rayOptions[1]);
 
@@ -169,7 +169,18 @@ Buffer* RenderRadianceCascades(LuxForgeDevice* device, const LuxForgeScene& scen
         auto* input = cascades.radiance[(index + 1) % 2];
         auto* output = project ? cascades.irradiance : cascades.radiance[index % 2];
         DescriptorDataRange range = {offset, sizeof(CascadeConstants), 0};
-        DescriptorData params[7] = {};
+        auto* fallback = device->textures[device->whiteTexture].texture;
+        auto* gloss = constants.optics[1] > 1.5f
+                          ? device->skyCache.stages[2].output.target->pTexture
+                          : fallback;
+        auto* harmonics = constants.optics[1] > 1.5f
+                              ? device->skyCache.stages[1].output.target->pTexture
+                              : fallback;
+        DescriptorData params[9] = {};
+        params[7].mIndex = SRT_RES_IDX(LuxRadianceCascadesSrt, Persistent, gRaySkyGloss);
+        params[7].ppTextures = &gloss;
+        params[8].mIndex = SRT_RES_IDX(LuxRadianceCascadesSrt, Persistent, gRaySkySH);
+        params[8].ppTextures = &harmonics;
         params[0].mIndex = SRT_RES_IDX(LuxRadianceCascadesSrt, Persistent, gCascade);
         params[0].ppBuffers = &uniform;
         params[0].pRanges = &range;
@@ -185,7 +196,7 @@ Buffer* RenderRadianceCascades(LuxForgeDevice* device, const LuxForgeScene& scen
         params[5].ppBuffers = &input;
         params[6].mIndex = SRT_RES_IDX(LuxRadianceCascadesSrt, Persistent, gCascadeOutput);
         params[6].ppBuffers = &output;
-        updateDescriptorSet(device->renderer, entry, cascades.set, 7, params);
+        updateDescriptorSet(device->renderer, entry, cascades.set, 9, params);
 
         BufferBarrier write = {output, kCascadeSample, kCascadeWrite};
         cmdResourceBarrier(cmd, 1, &write, 0, nullptr, 0, nullptr);

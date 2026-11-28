@@ -24,7 +24,9 @@
         "norway-spruce/normal-1.png",
         "norway-spruce/albedo-2.png",
         "norway-spruce/normal-2.png",
-        "norway-spruce/materials.txt"
+        "norway-spruce/materials.txt",
+        "norway-spruce/spruce-views-color.png",
+        "norway-spruce/spruce-views-normal-depth.png"
       ]
     },
     {
@@ -197,6 +199,24 @@
       "bytes": 76,
       "sha256": "f57b4aa73d7cefba02e1e1dae7d0c5b3ee34d72de149fa70cbc160d33ec9b3ca",
       "format": "TXT"
+    },
+    {
+      "path": "norway-spruce/spruce-views-color.png",
+      "bytes": 572270,
+      "sha256": "cf2b8a6dc2deead550a96be530935cacdf48ab896011045ad301e0c2bc5d39ca",
+      "format": "PNG",
+      "width": 1152,
+      "height": 640,
+      "colorSpace": "sRGB"
+    },
+    {
+      "path": "norway-spruce/spruce-views-normal-depth.png",
+      "bytes": 834440,
+      "sha256": "8ff0c25149cfdef84d99459ed5126fe04f533c2f45d109b95920ec2768cd3e39",
+      "format": "PNG",
+      "width": 1152,
+      "height": 640,
+      "colorSpace": "Linear"
     }
   ]
 }

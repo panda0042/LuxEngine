@@ -12,6 +12,17 @@ STRUCT(LuxPostData) {
     DATA(float4, flare, None);  // flare strength, temporal seed
     // elapsed seconds, history valid, log2 of photometric exposure calibration
     DATA(float4, adaptation, None);
+    DATA(float4, meterRange, None);
+    DATA(float4, meterResponse, None);
+    DATA(float4, bloomFocus, None); // radius, scatter, focal length, spare
+    DATA(float4, gradeControls, None);
+    DATA(float4, gradeLift, None);
+    DATA(float4, gradeGamma, None);
+    DATA(float4, gradeGain, None);
+    DATA(float4, gradeShadows, None);
+    DATA(float4, gradeMids, None);
+    DATA(float4, gradeHighs, None);
+    DATA(float4, diagnostics, None);
 };
 
 #include "LuxPost.srt.h"

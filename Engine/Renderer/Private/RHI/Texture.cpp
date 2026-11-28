@@ -14,7 +14,8 @@ GpuTexture::~GpuTexture() {
 GpuTexture::GpuTexture(GpuTexture&& other) noexcept
     : owner_(std::move(other.owner_)), handle_(other.handle_), width_(other.width_),
       height_(other.height_), mipCount_(other.mipCount_), storageBytes_(other.storageBytes_),
-      alphaMaskCutoff_(other.alphaMaskCutoff_), colorSpace_(other.colorSpace_) {
+      normalVariance_(other.normalVariance_), alphaMaskCutoff_(other.alphaMaskCutoff_),
+      colorSpace_(other.colorSpace_) {
     other.owner_.reset();
     other.handle_ = 0;
     other.width_ = other.height_ = 0;
@@ -31,6 +32,7 @@ GpuTexture& GpuTexture::operator=(GpuTexture&& other) noexcept {
         colorSpace_ = other.colorSpace_;
         mipCount_ = other.mipCount_;
         storageBytes_ = other.storageBytes_;
+        normalVariance_ = other.normalVariance_;
         alphaMaskCutoff_ = other.alphaMaskCutoff_;
         other.owner_.reset();
         other.handle_ = 0;
@@ -46,7 +48,13 @@ bool GpuTexture::Initialize(GpuDevice* device, uint32 width, uint32 height, cons
     if (!device || !device->IsReady())
         return false;
     const auto layout = Rhi::GetTextureLayout(width, height, sampling.mipmaps);
-    if (!layout.mipCount || (filter != TextureFilter::Linear && filter != TextureFilter::Nearest) ||
+    const bool variance = sampling.mipSemantic == TextureMipSemantic::NormalVariance;
+    const bool roughness = sampling.mipSemantic == TextureMipSemantic::PerceptualRoughness;
+    if ((sampling.mipSemantic != TextureMipSemantic::Default && !variance && !roughness) ||
+        (variance && !sampling.normalMap) || (roughness && sampling.normalMap) ||
+        ((variance || roughness) &&
+         (colorSpace != TextureColorSpace::Linear || alphaMaskCutoff != 0)) ||
+        !layout.mipCount || (filter != TextureFilter::Linear && filter != TextureFilter::Nearest) ||
         (colorSpace != TextureColorSpace::Linear && colorSpace != TextureColorSpace::Srgb) ||
         (sampling.normalMap && (colorSpace == TextureColorSpace::Srgb || alphaMaskCutoff != 0)) ||
         !std::isfinite(alphaMaskCutoff) || alphaMaskCutoff < 0 || alphaMaskCutoff > 1 ||
@@ -60,10 +68,24 @@ bool GpuTexture::Initialize(GpuDevice* device, uint32 width, uint32 height, cons
         const std::span<const uint8> basePixels(static_cast<const uint8*>(pixelData),
                                                 pixelData ? size_t(width) * height * 4 : 0);
         if (!Rhi::BuildTextureMipTail(width, height, basePixels, colorSpace, sampling.normalMap,
-                                      tail, alphaMaskCutoff))
+                                      tail, alphaMaskCutoff, sampling.mipSemantic))
             return false;
         for (size_t level = 0; level < tail.size(); ++level)
             mipPixels[level + 1] = tail[level].pixels.data();
+    }
+    std::vector<uint8> normalBase;
+    if (variance && pixelData && layout.mipCount > 1) {
+        const auto* base = static_cast<const uint8*>(pixelData);
+        const size_t size = size_t(width) * height * 4;
+        // Ordinary RGB normal assets already have opaque alpha; avoid another full-size allocation.
+        for (size_t i = 3; i < size; i += 4)
+            if (base[i] != 255) {
+                normalBase.assign(base, base + size);
+                for (size_t a = 3; a < size; a += 4)
+                    normalBase[a] = 255;
+                mipPixels[0] = normalBase.data();
+                break;
+            }
     }
     uint64 handle = 0;
     if (!device->backend_->CreateTexture(width, height, {mipPixels.data(), layout.mipCount}, filter,
@@ -76,6 +98,7 @@ bool GpuTexture::Initialize(GpuDevice* device, uint32 width, uint32 height, cons
     height_ = height;
     colorSpace_ = colorSpace;
     mipCount_ = layout.mipCount;
+    normalVariance_ = variance && layout.mipCount > 1 && pixelData;
     alphaMaskCutoff_ = layout.mipCount > 1 ? alphaMaskCutoff : 0;
     storageBytes_ = layout.bytes;
     return true;
@@ -90,6 +113,7 @@ void GpuTexture::Release() {
     colorSpace_ = TextureColorSpace::Linear;
     mipCount_ = 0;
     storageBytes_ = 0;
+    normalVariance_ = false;
     alphaMaskCutoff_ = 0;
 }
 

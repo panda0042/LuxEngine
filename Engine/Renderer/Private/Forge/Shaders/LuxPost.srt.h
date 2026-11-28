@@ -10,6 +10,8 @@ DECL_TEXTURE(Persistent, Tex2D(float4), gBloomMid)
 DECL_TEXTURE(Persistent, Tex2D(float4), gBloomFar)
 DECL_TEXTURE(Persistent, Tex2D(float4), gAdaptation)
 DECL_TEXTURE(Persistent, Tex2D(float4), gGradingLut)
+DECL_TEXTURE(Persistent, Tex2D(float4), gGradingLutB)
+DECL_BUFFER(Persistent, Buffer(uint2), gHistogram)
 END_SRT_SET(Persistent)
 END_SRT(LuxPostSrt)
 #endif

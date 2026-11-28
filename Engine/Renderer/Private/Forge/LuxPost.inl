@@ -43,10 +43,14 @@ bool InitPost(LuxForgeDevice* device) {
     blend.mBlendAlphaModes[0] = BM_ADD;
     blend.mColorWriteMasks[0] = COLOR_MASK_ALL;
     blend.mRenderTargetMask = BLEND_STATE_TARGET_0;
-    const char* names[] = {"luxpostreduce.frag", "luxpostexposure.frag", "luxpostfinal.frag"};
+    const char* names[] = {"luxpostreduce.frag", "luxpostexposure.frag", "luxpostfinal.frag",
+                           "luxpostup.frag"};
     auto format = kHdrFormat;
     graphics.pColorFormats = &format;
-    for (uint32_t i = 0; i < 3; ++i) {
+    for (uint32_t i = 0; i < 4; ++i) {
+        graphics.pBlendState = nullptr;
+        graphics.mDepthStencilFormat = TinyImageFormat_UNDEFINED;
+        format = kHdrFormat;
         post.shaders[i] = LoadShader(device, "luxfullscreen.vert", names[i]);
         if (!post.shaders[i])
             return false;
@@ -60,6 +64,33 @@ bool InitPost(LuxForgeDevice* device) {
         if (!post.pipelines[i])
             return false;
     }
+    ShaderLoadDesc meter{};
+    meter.mComp.pFileName = "luxmeter.comp";
+    addShader(device->renderer, &meter, &post.meterShader);
+    if (!post.meterShader)
+        return false;
+    const DescriptorSetDesc meterSet =
+        SRT_SET_DESC(LuxMeterSrt, Persistent, entries / State::kStages, 0);
+    addDescriptorSet(device->renderer, &meterSet, &post.meterSet);
+    PipelineDesc compute{};
+    compute.mType = PIPELINE_TYPE_COMPUTE;
+    PIPELINE_LAYOUT_DESC(compute, SRT_LAYOUT_DESC(LuxMeterSrt, Persistent), NULL, NULL, NULL);
+    compute.mComputeDesc.pShaderProgram = post.meterShader;
+    addPipeline(device->renderer, &compute, &post.meterPipeline);
+    BufferLoadDesc bins{};
+    bins.ppBuffer = &post.histogram;
+    bins.mDesc.mElementCount = 16 * 64;
+    bins.mDesc.mStructStride = sizeof(uint32_t) * 2;
+    bins.mDesc.mSize = bins.mDesc.mElementCount * bins.mDesc.mStructStride;
+    bins.mDesc.mDescriptors =
+        static_cast<DescriptorType>(DESCRIPTOR_TYPE_BUFFER | DESCRIPTOR_TYPE_RW_BUFFER);
+    bins.mDesc.mStartState = RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    bins.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
+    bins.mDesc.pName = "LuxForge per-tile luminance histogram";
+    addResource(&bins, nullptr);
+    waitForAllResourceLoads();
+    if (!post.meterSet || !post.meterPipeline || !post.histogram)
+        return false;
     post.ready = true;
     return true;
 }
@@ -75,10 +106,10 @@ bool PreparePost(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pa
                             const char* name) {
         return target.target || AddSceneTarget(device, target, w, h, kHdrFormat, 8, name);
     };
-    if (scene.fogColorDensity[3] > 0 &&
+    if ((scene.fogColorDensity[3] > 0 || scene.fogMedia[3] > 0) &&
         !ensure(post.fogColor, device->width, device->height, "LuxForge fogged HDR"))
         return false;
-    if (scene.postEffects[0] > 0 || scene.autoExposure > 0 || scene.lensFlareStrength > 0) {
+    if (scene.postEffects[0] > 0 || scene.lensFlareStrength > 0) {
         uint32_t w = device->width, h = device->height;
         do {
             w = std::max(1u, (w + 1) / 2);
@@ -87,10 +118,16 @@ bool PreparePost(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pa
                         "LuxForge HDR highlight and luminance reduction"))
                 return false;
             ++levels;
-        } while ((w > 1 || h > 1) && levels < LuxForgeDevice::PostState::kLevels &&
-                 (scene.autoExposure > 0 || levels < 6));
+        } while ((w > 1 || h > 1) && levels < LuxForgeDevice::PostState::kLevels);
+        if (scene.postEffects[0] > 0)
+            for (uint32_t i = 0; i + 1 < levels; ++i)
+                if (!ensure(post.upsample[i], post.pyramid[i].target->mWidth,
+                            post.pyramid[i].target->mHeight, "LuxForge progressive bloom"))
+                    return false;
     }
-    if (scene.autoExposure > 0) {
+    if (scene.postDebugView == 1u || scene.autoExposure > 0 ||
+        (scene.meterResponse[3] > 0 &&
+         (scene.physicalCocFraction > 0 || scene.postEffects[2] > 0))) {
         for (auto& target : post.exposure[pass].values)
             if (!ensure(target, 1, 1, "LuxForge adapted exposure"))
                 return false;
@@ -126,11 +163,15 @@ struct PostConstants {
     float cameraEffects[4]{};
     float optics[4]{};
     float flare[4]{};
-    float adaptation[4]{};
+    float adaptation[4]{}, meterRange[4]{}, meterResponse[4]{}, bloomFocus[4]{};
+    float gradeControls[4]{}, gradeLift[4]{}, gradeGamma[4]{}, gradeGain[4]{};
+    float gradeShadows[4]{}, gradeMids[4]{}, gradeHighs[4]{}, diagnostics[4]{};
 };
 
+static_assert(sizeof(PostConstants) <= LuxForgeDevice::kSceneStride);
+
 void DrawPost(LuxForgeDevice* device, uint32_t pass, uint32_t stage, uint32_t pipeline,
-              const PostConstants& constants, const std::array<Texture*, 7>& textures,
+              const PostConstants& constants, const std::array<Texture*, 8>& textures,
               LuxForgeDevice::SceneTarget* output) {
     using State = LuxForgeDevice::PostState;
     auto& post = device->post;
@@ -140,14 +181,15 @@ void DrawPost(LuxForgeDevice* device, uint32_t pass, uint32_t stage, uint32_t pi
     std::memcpy(static_cast<uint8_t*>(post.constants->pCpuMappedAddress) + offset, &constants,
                 sizeof(constants));
     DescriptorDataRange range{offset, sizeof(constants), 0};
-    DescriptorData data[8]{};
+    DescriptorData data[10]{};
     const uint32_t slots[] = {SRT_RES_IDX(LuxPostSrt, Persistent, gPostSource),
                               SRT_RES_IDX(LuxPostSrt, Persistent, gPostDepth),
                               SRT_RES_IDX(LuxPostSrt, Persistent, gBloomNear),
                               SRT_RES_IDX(LuxPostSrt, Persistent, gBloomMid),
                               SRT_RES_IDX(LuxPostSrt, Persistent, gBloomFar),
                               SRT_RES_IDX(LuxPostSrt, Persistent, gAdaptation),
-                              SRT_RES_IDX(LuxPostSrt, Persistent, gGradingLut)};
+                              SRT_RES_IDX(LuxPostSrt, Persistent, gGradingLut),
+                              SRT_RES_IDX(LuxPostSrt, Persistent, gGradingLutB)};
     data[0].mIndex = SRT_RES_IDX(LuxPostSrt, Persistent, gPost);
     data[0].ppBuffers = &post.constants;
     data[0].pRanges = &range;
@@ -157,7 +199,9 @@ void DrawPost(LuxForgeDevice* device, uint32_t pass, uint32_t stage, uint32_t pi
         data[i + 1].mIndex = slots[i];
         data[i + 1].ppTextures = &bound[i];
     }
-    updateDescriptorSet(device->renderer, entry, post.set, 8, data);
+    data[9].mIndex = SRT_RES_IDX(LuxPostSrt, Persistent, gHistogram);
+    data[9].ppBuffers = &post.histogram;
+    updateDescriptorSet(device->renderer, entry, post.set, 10, data);
     if (output)
         BindPostTarget(device, *output);
     else
@@ -175,9 +219,26 @@ void RenderPost(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pas
                 Texture* source, LuxForgeDevice::SceneTarget& depth) {
     auto& post = device->post;
     PostConstants constants;
+    constants.diagnostics[0] = float(scene.postDebugView);
+    constants.diagnostics[1] = scene.luminanceScale;
     std::copy_n(scene.postEffects, 4, constants.lens);
     std::copy_n(scene.optics, 4, constants.optics);
+    constants.bloomFocus[0] = scene.bloomRadius;
+    constants.bloomFocus[1] = scene.bloomScatter;
+    constants.bloomFocus[2] = scene.focalMetres;
+    std::copy_n(scene.meterRange, 4, constants.meterRange);
+    std::copy_n(scene.meterResponse, 4, constants.meterResponse);
+    std::copy_n(scene.gradeControls, 4, constants.gradeControls);
+    std::copy_n(scene.gradeLift, 4, constants.gradeLift);
+    std::copy_n(scene.gradeGamma, 4, constants.gradeGamma);
+    std::copy_n(scene.gradeGain, 4, constants.gradeGain);
+    std::copy_n(scene.gradeShadows, 4, constants.gradeShadows);
+    std::copy_n(scene.gradeMids, 4, constants.gradeMids);
+    std::copy_n(scene.gradeHighs, 4, constants.gradeHighs);
+
     constants.flare[0] = scene.lensFlareStrength;
+    constants.bloomFocus[3] = scene.bloomFirefly;
+    constants.flare[2] = scene.gradeMix;
     constants.flare[1] = float(device->frameNumber % 4096);
     constants.cameraEffects[0] = scene.physicallyBasedBloom != 0;
     constants.cameraEffects[1] = scene.localExposure;
@@ -193,7 +254,7 @@ void RenderPost(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pas
     constants.camera[1] = scene.up[3];
     constants.camera[2] = scene.camera[3];
     constants.camera[3] = scene.options[2];
-    std::array<Texture*, 7> inputs;
+    std::array<Texture*, 8> inputs;
     inputs.fill(device->textures[device->whiteTexture].texture);
     inputs[0] = source;
     for (uint32_t i = 0; i < levels; ++i) {
@@ -205,7 +266,36 @@ void RenderPost(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pas
         inputs[0] = level.target->pTexture;
     }
     using State = LuxForgeDevice::PostState;
-    if (scene.autoExposure > 0) {
+    if (scene.postDebugView == 1u || scene.autoExposure > 0 ||
+        (scene.meterResponse[3] > 0 &&
+         (scene.physicalCocFraction > 0 || scene.postEffects[2] > 0))) {
+        if (scene.autoExposure > 0 || scene.postDebugView == 1u) {
+            auto* cmd = device->element.pCmds[0];
+            const uint32_t entry = device->frameSlot * LuxForgeDevice::kMaxScenePasses + pass;
+            DescriptorData histogram[2]{};
+            histogram[0].mIndex = SRT_RES_IDX(LuxMeterSrt, Persistent, gMeterSource);
+            histogram[0].ppTextures = &source;
+            histogram[1].mIndex = SRT_RES_IDX(LuxMeterSrt, Persistent, gMeterBins);
+            histogram[1].ppBuffers = &post.histogram;
+            updateDescriptorSet(device->renderer, entry, post.meterSet, 2, histogram);
+            BufferBarrier write{post.histogram, RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                RESOURCE_STATE_UNORDERED_ACCESS};
+            BufferBarrier read{post.histogram, RESOURCE_STATE_UNORDERED_ACCESS,
+                               RESOURCE_STATE_PIXEL_SHADER_RESOURCE};
+            cmdResourceBarrier(cmd, 1, &write, 0, nullptr, 0, nullptr);
+            BindPipeline(device, cmd, post.meterPipeline);
+            BindDescriptors(device, cmd, entry, post.meterSet);
+            cmdDispatch(cmd, 4, 4, 1);
+            cmdResourceBarrier(cmd, 1, &read, 0, nullptr, 0, nullptr);
+            ++device->frameStats.computeDispatches;
+        }
+        constants.grading[2] = scene.autoExposure;
+        if (scene.meterResponse[3] > 0) {
+            Transition(device->element.pCmds[0], depth, RESOURCE_STATE_SHADER_RESOURCE);
+            inputs[1] = depth.target->pTexture;
+        }
+        constants.dimensions[0] = 1.f / device->width;
+        constants.dimensions[1] = 1.f / device->height;
         auto& history = post.exposure[pass];
         const auto now = std::chrono::steady_clock::now();
         const uint64_t frame = device->frameNumber + 1;
@@ -226,6 +316,19 @@ void RenderPost(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pas
         history.view = scene.postView;
         history.frame = frame;
     }
+    if (scene.postEffects[0] > 0 && levels > 1) {
+        inputs[0] = post.pyramid[levels - 1].target->pTexture;
+        for (uint32_t i = levels - 1; i > 0; --i) {
+            auto& up = post.upsample[i - 1];
+            inputs[2] = post.pyramid[i - 1].target->pTexture;
+            constants.dimensions[0] = 1.f / up.target->mWidth;
+            constants.dimensions[1] = 1.f / up.target->mHeight;
+            constants.dimensions[2] = 1.f / inputs[0]->mWidth;
+            constants.dimensions[3] = 1.f / inputs[0]->mHeight;
+            DrawPost(device, pass, State::kLevels + 1 + i, 3, constants, inputs, &up);
+            inputs[0] = up.target->pTexture;
+        }
+    }
     inputs[0] = source;
     if (scene.postEffects[2] > 0 || scene.physicalCocFraction > 0 || scene.localExposure > 0) {
         Transition(device->element.pCmds[0], depth, RESOURCE_STATE_SHADER_RESOURCE);
@@ -235,14 +338,21 @@ void RenderPost(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pas
         constexpr uint32_t widths[] = {1, 3, 5};
         for (uint32_t i = 0; i < 3; ++i)
             inputs[2 + i] = post.pyramid[std::min(widths[i], levels - 1)].target->pTexture;
+        if (scene.postEffects[0] > 0)
+            inputs[2] =
+                levels > 1 ? post.upsample[0].target->pTexture : post.pyramid[0].target->pTexture;
     }
     if (HasTexture(device, scene.gradingTexture)) {
         inputs[6] = device->textures[scene.gradingTexture].texture;
         constants.grading[0] = float(inputs[6]->mHeight);
-        constants.grading[1] = scene.gradingStrength;
+    }
+    if (HasTexture(device, scene.gradingTextureB)) {
+        inputs[7] = device->textures[scene.gradingTextureB].texture;
+        constants.flare[3] = float(inputs[7]->mHeight);
     }
     constants.dimensions[0] = 1.f / device->width;
     constants.dimensions[1] = 1.f / device->height;
+    constants.grading[1] = scene.gradingStrength;
     constants.grading[2] = scene.autoExposure;
     DrawPost(device, pass, State::kLevels + 1, 2, constants, inputs, nullptr);
     device->boundPipeline = post.pipelines[2];

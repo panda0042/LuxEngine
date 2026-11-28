@@ -1,4 +1,5 @@
 #include "World.hpp"
+#include <LuxEngine/Environment/TerrainHeightfield.hpp>
 #include <LuxEngine/Renderer/Renderer3D/Decal.hpp>
 
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <deque>
+#include <future>
 #include <map>
 #include <mutex>
 #include <numbers>
@@ -37,8 +39,7 @@ constexpr std::array Roads{
     std::array<Vec2, 2>{{{-550, -541}, {-447, -667}}},
     std::array<Vec2, 2>{{{-447, -667}, {-374, -840}}},
 };
-constexpr unsigned Cells = 32;
-constexpr double TerrainStep = double(ChunkSize) / Cells;
+constexpr unsigned Cells = TerrainCells;
 
 double Blend(double from, double to, double fraction) {
     return from + (to - from) * fraction;
@@ -78,7 +79,7 @@ double LakeRadius(Vec2 p) {
 
 // A broad drainage valley joins the county's inhabited areas. Narrower gullies
 // cut across the uplift along the northwestern ridge.
-double Relief(Vec2 p, unsigned seed) {
+double UnweatheredRelief(Vec2 p, unsigned seed) {
     const double local = Distance(p, Regions[0].center);
     const double west = Curve(122, 710, -p.x);
     const double north = Curve(100, 780, -p.y);
@@ -97,8 +98,75 @@ double Relief(Vec2 p, unsigned seed) {
                                    (1 - Curve(285, 705, Distance(p, LakeCenter))) *
                                    (21 * eastBank + 18 * southBank);
     y += shorelineRidges * (.58 + 1.17 * ridge);
+    // Folded strata and branching ridges above the opposite shore. Keep the lake basin,
+    // the floodplain and the settled valley at their surveyed elevations.
+    const Vec2 warped{p.x + 73 * (Noise(p, 330, seed + 92) - .5),
+                      p.y + 59 * (Noise(p, 290, seed + 47) - .5)};
+    const double foothills = Curve(1.20, 3.65, shore) * Curve(350, 625, p.x + p.y * .35) *
+                             (1. - Curve(670, 1450, Distance(p, LakeCenter)));
+    double ridges = 0, amplitude = .54, wavelength = 380, previous = 1;
+    for (unsigned octave = 0; octave < 4; ++octave) {
+        const double r =
+            1. - std::abs(2. * Noise(warped, wavelength, seed + 127 + octave * 7) - 1.);
+        ridges += amplitude * r * r * previous;
+        previous = std::min(1., 1.65 * r);
+        wavelength *= .49;
+        amplitude *= .51;
+    }
+    y += foothills * (47. + 127. * ridges);
     const double bed = LakeLevel + (shore - .82) * (shore < .82 ? 10. : 23.);
     return Blend(bed, y, Curve(.96, 1.45, shore));
+}
+
+// The coarse watershed spans the populated basin. Its shared erosion correction is
+// blended into the high-frequency survey, including the collision and road surfaces.
+struct Watershed {
+    static constexpr int Count = 145;
+    static constexpr double Spacing = 20;
+    static constexpr Vec2 Origin{-1440, -1440};
+    TerrainHeightfield survey, bed;
+
+    static TerrainHeightfield Survey(unsigned seed) {
+        std::vector<float> h(Count * Count);
+        for (int z = 0; z < Count; ++z)
+            for (int x = 0; x < Count; ++x)
+                h[z * Count + x] =
+                    float(UnweatheredRelief(Origin + Vec2{x * Spacing, z * Spacing}, seed));
+        return {Count, Count, Spacing, Origin, h};
+    }
+
+    explicit Watershed(unsigned seed) : survey(Survey(seed)), bed(survey) {
+        bed.Erode({38, .12, .16, .42, .64});
+    }
+};
+
+const Watershed& Basin(unsigned seed) {
+    // Main, terrain streaming and foliage preparation can sample different worlds concurrently.
+    static std::mutex mutex;
+    static std::map<unsigned, std::weak_ptr<const Watershed>> basins;
+    thread_local unsigned localSeed{};
+    thread_local std::shared_ptr<const Watershed> local;
+    if (!local || localSeed != seed) {
+        std::lock_guard lock(mutex);
+        std::erase_if(basins, [](const auto& entry) { return entry.second.expired(); });
+        auto& stored = basins[seed];
+        local = stored.lock();
+        if (!local) {
+            local = std::make_shared<Watershed>(seed);
+            stored = local;
+        }
+        localSeed = seed;
+    }
+    return *local;
+}
+
+double Relief(Vec2 p, unsigned seed) {
+    const double original = UnweatheredRelief(p, seed);
+    const double influence = 1. - Curve(1320., 1440., std::max(std::abs(p.x), std::abs(p.y)));
+    if (influence == 0.)
+        return original;
+    const auto& basin = Basin(seed);
+    return original + influence * (basin.bed.Height(p) - basin.survey.Height(p));
 }
 
 struct RoadPoint {
@@ -187,16 +255,15 @@ void Tree(MeshData& mesh, Vec3 base, double height, double variation) {
     for (int plane = 0; plane < 3; ++plane) {
         const double angle = (variation + plane / 3.) * Tau;
         const Vec3 side{std::cos(angle), 0, std::sin(angle)};
-        const Vec3 normal{-side.z, .27, side.x};
-        const Vec3 edge = side * (height * .28125);
+        const Vec3 normal{-side.z, 0., side.x};
+        const Vec3 edge = side * (height * .30);
         const Vec3 up{0, height, 0};
         const auto a = uint32(mesh.vertices.size());
-        mesh.vertices.insert(
-            mesh.vertices.end(),
-            {{base - edge, (normal - side * .47).Normalized(), {0, 1}, color},
-             {base - edge + up, (normal - side * .38).Normalized(), {0, 0}, color, 1},
-             {base + edge + up, (normal + side * .38).Normalized(), {1, 0}, color, 1},
-             {base + edge, (normal + side * .47).Normalized(), {1, 1}, color}});
+        mesh.vertices.insert(mesh.vertices.end(),
+                             {{base - edge, normal, {double(plane) / 3., 1}, color},
+                              {base - edge + up, normal, {double(plane) / 3., 0}, color, 1},
+                              {base + edge + up, normal, {double(plane + 1) / 3., 0}, color, 1},
+                              {base + edge, normal, {double(plane + 1) / 3., 1}, color}});
         mesh.indices.insert(mesh.indices.end(), {a, a + 1, a + 2, a, a + 2, a + 3});
     }
 }
@@ -274,6 +341,99 @@ const std::vector<uint32>& TerrainIndices() {
     return indices;
 }
 
+Vertex3D TerrainVertex(Vec2 p, Vec3 position, unsigned seed, double normalStep) {
+    const double y = position.y;
+    const auto normal = Vec3{AnalyticHeight(p - Vec2{normalStep, 0}, seed) -
+                                 AnalyticHeight(p + Vec2{normalStep, 0}, seed),
+                             2. * normalStep,
+                             AnalyticHeight(p - Vec2{0, normalStep}, seed) -
+                                 AnalyticHeight(p + Vec2{0, normalStep}, seed)}
+                            .Normalized();
+    const double shore = LakeRadius(p);
+    const double drainage = Basin(seed).bed.Drainage(p);
+    const double moisture =
+        std::clamp(.67 * Noise(p, 115, seed + 31) + .22 * Noise(p, 32, seed + 55) +
+                       .15 * Curve(2, 10, drainage) + .28 * (1 - Curve(.97, 1.27, shore)),
+                   0., 1.);
+    const double rock = Curve(.075, .38, 1. - normal.y) + .3 * Curve(65, 145, y);
+    const double beach = 1. - Curve(.90, 1.22, shore);
+    const double meadow = (1. - beach) * (1. - Curve(.07, .25, 1. - normal.y)) *
+                          (.6 + .38 * Noise(p, 90, seed + 16)) * Curve(5, 14, RoadDistance(p));
+    const double cliff = std::clamp(rock, 0., 1.);
+    return {position,
+            normal,
+            {p.x * .32, p.y * .32},
+            {float(cliff), float((1. - cliff) * meadow), float((1. - cliff) * beach),
+             float(Curve(.21, .62, moisture))}};
+}
+
+MeshData DistantTerrain(ChunkKey center, unsigned seed, int radius) {
+    MeshData result;
+    // Each coarse chunk shares all edge vertices with its neighbours. Sample its four edges
+    // at the fine mesh's 8 m interval, then triangulate the 32 m interior to those points.
+    constexpr int steps = 8;
+    const Vec2 origin = ChunkOrigin(center);
+    for (int dz = -9; dz <= 9; ++dz)
+        for (int dx = -9; dx <= 9; ++dx) {
+            if (std::max(std::abs(dx), std::abs(dz)) <= radius)
+                continue;
+            const ChunkKey key{center.x + dx, center.z + dz};
+            const Vec2 chunk = ChunkOrigin(key);
+            if (chunk.x < -WorldHalf || chunk.y < -WorldHalf || chunk.x >= WorldHalf ||
+                chunk.y >= WorldHalf)
+                continue;
+            const auto point = [&](double x, double z) {
+                const Vec2 p = chunk + Vec2{x, z};
+                const auto id = uint32(result.vertices.size());
+                result.vertices.push_back(TerrainVertex(
+                    p, {p.x - origin.x, AnalyticHeight(p, seed), p.y - origin.y}, seed, 10));
+                return id;
+            };
+            std::array<uint32, (steps + 1) * (steps + 1)> grid{};
+            constexpr double stride = double(ChunkSize) / steps;
+            for (int z = 0; z <= steps; ++z)
+                for (int x = 0; x <= steps; ++x)
+                    grid[z * (steps + 1) + x] = point(x * stride, z * stride);
+            for (int z = 0; z < steps; ++z)
+                for (int x = 0; x < steps; ++x) {
+                    const int index = z * (steps + 1) + x;
+                    const std::array corners = {grid[index], grid[index + steps + 1],
+                                                grid[index + steps + 2], grid[index + 1]};
+                    const bool edge = std::max(std::abs(dx), std::abs(dz)) == radius + 1 &&
+                                      (x == 0 || z == 0 || x == steps - 1 || z == steps - 1);
+                    if (!edge) {
+                        result.indices.insert(result.indices.end(),
+                                              {corners[0], corners[1], corners[3], corners[3],
+                                               corners[1], corners[2]});
+                        continue;
+                    }
+                    const auto middle = point((x + .5) * stride, (z + .5) * stride);
+                    const std::array<Vec2, 4> coords = {
+                        Vec2{double(x), double(z)}, Vec2{double(x), z + 1.}, Vec2{x + 1., z + 1.},
+                        Vec2{x + 1., double(z)}};
+                    const std::array boundary = {
+                        x == 0 && dx == radius + 1, z == steps - 1 && dz == -radius - 1,
+                        x == steps - 1 && dx == -radius - 1, z == 0 && dz == radius + 1};
+                    for (unsigned e = 0; e < 4; ++e) {
+                        const unsigned n = (e + 1) % 4;
+                        auto previous = corners[e];
+                        if (boundary[e])
+                            for (int k = 1; k < 4; ++k) {
+                                const auto pt =
+                                    (coords[e] + (coords[n] - coords[e]) * (double(k) / 4)) *
+                                    stride;
+                                const auto next = point(pt.x, pt.y);
+                                result.indices.insert(result.indices.end(),
+                                                      {middle, previous, next});
+                                previous = next;
+                            }
+                        result.indices.insert(result.indices.end(), {middle, previous, corners[n]});
+                    }
+                }
+        }
+    return result;
+}
+
 Draft Generate(ChunkKey key, unsigned seed, unsigned vegetation) {
     const auto start = std::chrono::steady_clock::now();
     Draft result;
@@ -283,20 +443,7 @@ Draft Generate(ChunkKey key, unsigned seed, unsigned vegetation) {
     ground.vertices.reserve((Cells + 1) * (Cells + 1));
     ground.indices = TerrainIndices();
     ForTerrainVertex(origin, seed, [&](Vec2 p, Vec3 position) {
-        const double y = position.y;
-        const auto normal =
-            Vec3{AnalyticHeight(p - Vec2{.6, 0}, seed) - AnalyticHeight(p + Vec2{.6, 0}, seed), 1.2,
-                 AnalyticHeight(p - Vec2{0, .6}, seed) - AnalyticHeight(p + Vec2{0, .6}, seed)}
-                .Normalized();
-        const double moisture = .62 * Noise(p, 61, seed + 31) + .38 * Noise(p, 16, seed + 55);
-        const double slope = 1 - normal.y;
-        const double bank = Curve(.90, 1.16, LakeRadius(p));
-        const double vegetationWeight = bank * (1 - Curve(.08, .31, slope)) *
-                                        Curve(.20, .60, moisture) * (1 - Curve(70, 105, y)) *
-                                        Curve(5, 13, RoadDistance(p));
-        const float tone = float(.83 + .19 * moisture);
-        ground.vertices.push_back(
-            {position, normal, {p.x * .5, p.y * .5}, {tone, tone, tone, float(vegetationWeight)}});
+        ground.vertices.push_back(TerrainVertex(p, position, seed, 4));
     });
     for (const auto& [a, b] : Roads) {
         const Vec2 ray = b - a;
@@ -376,14 +523,31 @@ Draft Generate(ChunkKey key, unsigned seed, unsigned vegetation) {
         if (RoadDistance(point) < 8 || InLake(point) ||
             Distance(point, region.center) < settlementExclusion)
             continue;
-        const double moisture = Noise(point, 145, seed + 81);
+        const double canopy =
+            .65 * Noise(point, 105, seed + 81) + .35 * Noise(point, 38, seed + 63);
+        const double moisture = Curve(.24, .72, canopy);
         const double height = Height(point, seed);
-        if (a > (.24 + .72 * moisture) * (1 - Curve(67, 105, height)))
+        if (a > (.08 + .92 * moisture) * (1 - Curve(100, 167, height)))
             continue;
         if (std::ranges::any_of(shoreTrees,
                                 [&](Vec3 tree) { return Distance(Horizontal(tree), point) < 4; }))
             continue;
-        addTree(point, 5.2 + 11.8 * a, Unit(Hash(base, 3, seed)));
+        const double separation = 2.7 + .8 * moisture;
+        const auto local = point - origin;
+        bool crowded = false;
+        for (int z = std::max(0, int((local.y - separation) / FoliageCellSize));
+             z <= std::min(int(FoliageCells) - 1, int((local.y + separation) / FoliageCellSize));
+             ++z)
+            for (int x = std::max(0, int((local.x - separation) / FoliageCellSize));
+                 x <=
+                 std::min(int(FoliageCells) - 1, int((local.x + separation) / FoliageCellSize));
+                 ++x)
+                crowded |= std::ranges::any_of(
+                    result.foliage[z * FoliageCells + x].plants, [&](const Plant& plant) {
+                        return Distance(point, Horizontal(plant.ground)) < separation;
+                    });
+        if (!crowded)
+            addTree(point, 4.1 + 14.8 * Unit(Hash(base, 4, seed)), Unit(Hash(base, 3, seed)));
     }
     result.buildMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -510,6 +674,10 @@ struct World::State {
     int radius = 0;
     Stats stats;
     std::map<ChunkKey, Loaded> loaded;
+    Mesh3D horizon;
+    std::optional<ChunkKey> horizonAt;
+    ChunkKey preparingHorizon{};
+    std::future<MeshData> horizonTask;
     std::mutex mutex;
     std::condition_variable wake;
     std::deque<ChunkKey> requests;
@@ -593,8 +761,8 @@ struct World::State {
     }
 };
 
-std::array<std::vector<Plant>, 2> GroundCover(ChunkKey tile, unsigned seed) {
-    std::array<std::vector<Plant>, 2> instances;
+GroundPlants GroundCover(ChunkKey tile, unsigned seed) {
+    GroundPlants instances;
     constexpr int Steps = 9;
     constexpr double spacing = double(CoverTileSize) / Steps;
     for (int j = 0; j < Steps; ++j) {
@@ -618,11 +786,35 @@ std::array<std::vector<Plant>, 2> GroundCover(ChunkKey tile, unsigned seed) {
             const double density = .18 + .69 * Noise(p, 9, seed + 179);
             if (random(2) > density)
                 continue;
-            const size_t species = shore < 1.07 && random(3) > .30 ? 1 : 0;
-            const double size = (species ? .39 : .29) + .42 * random(4);
-            instances[species].push_back({{p.x, h - .035, p.y},
-                                          {size * 1.35, size, size * 1.28},
-                                          random(5) * 2 * std::numbers::pi});
+            const bool sedge = shore < 1.07 && random(3) > .30;
+            GroundSpecies species = sedge ? GroundSpecies::Sedge : GroundSpecies::Grass;
+            const double size = (sedge ? .39 : .29) + .42 * random(4);
+            Vec3 dimensions{size * 1.35, size, size * 1.28};
+            const double moisture = Noise(p, 38, seed + 137) + (shore < 1.20 ? .24 : 0);
+            const double variety = random(6), scale = .75 + .50 * random(7);
+            if (moisture > .55 && variety < .005) {
+                species = GroundSpecies::Deadwood;
+                dimensions = Vec3{3.05, .30, .28} * scale;
+            } else if (moisture > .48 && variety < .017) {
+                species = GroundSpecies::Sapling;
+                dimensions = Vec3{.54, 1.04, .73} * scale;
+            } else if (moisture > .54 && variety < .14) {
+                species = GroundSpecies::Fern;
+                dimensions = Vec3{.60, .32, .64} * scale;
+            } else if (!sedge && variety > .86 && Noise(p, 6, seed + 269) > .48) {
+                species = GroundSpecies::Dandelion;
+                dimensions = Vec3{.23, .17, .26} * scale;
+            }
+            double ground = h - (species == GroundSpecies::Dandelion ? .008 : .035);
+            const double yaw = random(5) * 2 * std::numbers::pi;
+            double tilt = 0;
+            if (species == GroundSpecies::Deadwood) {
+                Vec2 half{std::cos(yaw) * dimensions.x * .45, -std::sin(yaw) * dimensions.x * .45};
+                const double a = Height(p - half, seed), b = Height(p + half, seed);
+                tilt = std::atan2(b - a, dimensions.x * .90);
+                ground = std::min(ground, (a + b) * .5 - .035);
+            }
+            instances[size_t(species)].push_back({{p.x, ground, p.y}, dimensions, yaw, 0, tilt});
         }
     }
     return instances;
@@ -647,6 +839,19 @@ void World::Start(unsigned seed, unsigned vegetation, int radius, Vec2 initial, 
 void World::Stream(Vec2 at, Vec2 velocity, GpuDevice& device, bool allowUploads) {
     auto& s = *state_;
     const ChunkKey center = KeyFor(at);
+    if (s.horizonTask.valid() && allowUploads &&
+        s.horizonTask.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        auto mesh = s.horizonTask.get();
+        if (s.preparingHorizon == center) {
+            mesh.Upload(device, s.horizon);
+            s.horizonAt = center;
+            allowUploads = false;
+        }
+    }
+    if (s.horizonAt != center && !s.horizonTask.valid()) {
+        s.preparingHorizon = center;
+        s.horizonTask = std::async(std::launch::async, DistantTerrain, center, s.seed, s.radius);
+    }
     const Vec2 predicted = at + velocity * 2.5;
     const auto predictedChunk = KeyFor(predicted);
     std::vector<ChunkKey> desired;
@@ -688,7 +893,7 @@ void World::Stream(Vec2 at, Vec2 velocity, GpuDevice& device, bool allowUploads)
     s.wake.notify_one();
     s.stats.uploadedMeshes = allowUploads && s.uploading ? s.AdvanceUpload(device) : 0;
     s.stats.loaded = unsigned(s.loaded.size());
-    s.stats.pending = unsigned(desired.size()) - s.stats.loaded;
+    s.stats.pending = unsigned(desired.size()) - s.stats.loaded + unsigned(s.horizonAt != center);
     s.stats.trees = 0;
     for (const auto& [key, chunk] : s.loaded)
         s.stats.trees += chunk.trees;
@@ -697,6 +902,10 @@ void World::Stream(Vec2 at, Vec2 velocity, GpuDevice& device, bool allowUploads)
 void World::Draw(Renderer3D::Context& renderer, const Material3D& ground, const Material3D& scenery,
                  const Material3D& foliage, const Material3D& road, Vec3 eye,
                  std::vector<Plant>& nearTrees) const {
+    if (state_->horizonAt && state_->horizon.IsValid()) {
+        const auto origin = ChunkOrigin(*state_->horizonAt);
+        renderer.DrawMesh(state_->horizon, Mat4::Translate({origin.x, 0, origin.y}), ground);
+    }
     for (const auto& [key, chunk] : state_->loaded) {
         const auto origin = ChunkOrigin(key);
         const auto model = Mat4::Translate({origin.x, 0, origin.y});
@@ -713,10 +922,19 @@ void World::Draw(Renderer3D::Context& renderer, const Material3D& ground, const 
             const double z = key.z * ChunkSize + (i / FoliageCells + .5) * FoliageCellSize;
             const double dx = std::max(0., std::abs(eye.x - x) - FoliageCellSize * .5);
             const double dz = std::max(0., std::abs(eye.z - z) - FoliageCellSize * .5);
-            if (dx * dx + dz * dz < 26. * 26.)
-                nearTrees.insert(nearTrees.end(), cell.plants.begin(), cell.plants.end());
-            else
-                renderer.DrawMesh(*cell.cards, model, foliage);
+            const float t = float(std::clamp((std::hypot(dx, dz) - 24.) / 22., 0., 1.));
+            const float fade = t * t * (3.f - 2.f * t);
+            if (fade < 1.f) {
+                for (auto tree : cell.plants) {
+                    tree.lodTransition = fade;
+                    nearTrees.push_back(tree);
+                }
+            }
+            if (fade > 0.f) {
+                auto distant = foliage;
+                distant.lodTransition = fade < 1.f ? -fade : 0.f;
+                renderer.DrawMesh(*cell.cards, model, distant);
+            }
         }
     }
 }

@@ -37,7 +37,9 @@ uint RestirReceiverIndex(float2 pixel, float3 position, float3 normal) {
 }
 
 float3 RestirDirectLighting(float4 reservoir, float3 position, float3 base, float metallic,
-                            float roughness, float3 normal, float3 view) {
+                            float roughness, float3 normal, float3 view, float3 tangent,
+                            float3 coatNormal, float thickness, float3 geometric,
+                            float skinFraction) {
     if (reservoir.y <= 0.0f)
         return float3(0.0f, 0.0f, 0.0f);
     const uint light = uint(reservoir.x);
@@ -47,8 +49,14 @@ float3 RestirDirectLighting(float4 reservoir, float3 position, float3 base, floa
     const float distance = length(delta);
     if (distance > 0.008f && RayOccluded(origin, delta / distance, max(distance - 0.005f, 0.0011f)))
         return float3(0.0f, 0.0f, 0.0f);
-    return RestirPointContribution(light, position, base, metallic, roughness, normal, view) *
-           reservoir.y;
+    const float4 source = gLights.pointPositionRadius[light],
+                 radiance = gLights.pointColorIntensity[light];
+    const float3 sourceDelta = source.xyz - position;
+    const float attenuation = saturate(1.0f - length(sourceDelta) / max(source.w, .00001f));
+    return PrincipledLighting(base, metallic, roughness, normal, view,
+                              SafeDirection(sourceDelta, normal), tangent, coatNormal, thickness,
+                              geometric, skinFraction) *
+           radiance.rgb * (max(radiance.w, 0.0f) * attenuation * attenuation * reservoir.y);
 }
 
 float RayDirectionalShadow(float3 position, float3 normal) {
@@ -114,6 +122,8 @@ LuxRayHit TraceClosestSurface(float3 origin, float3 direction) {
 }
 
 float3 RayEnvironment(float3 direction, float roughness) {
+    if (gScene.skyLighting.x > .5f)
+        return SkySpecularLighting(direction, roughness) * gScene.environment.w;
     if (gScene.options.y > 0.5f) {
         return SampleLvlTexCube(gSpecularEnv, gSamplerTrilinearClamp, RotateEnvironment(direction),
                                 roughness * 7.0f)
@@ -124,6 +134,8 @@ float3 RayEnvironment(float3 direction, float roughness) {
 }
 
 float3 RayDiffuseEnvironment(float3 normal) {
+    if (gScene.skyLighting.x > .5f)
+        return SkyDiffuseLighting(normal) * gScene.environment.w;
     if (gScene.options.y > 0.5f) {
         return SampleLvlTexCube(gDiffuseEnv, gSamplerTrilinearClamp, RotateEnvironment(normal),
                                 0.0f)
@@ -222,16 +234,17 @@ float3 DiffuseRay(float3 normal, uint seed) {
 
 float3 RayEnvironmentLighting(float3 base, float metal, float roughness, float3 normal, float3 view,
                               float3 position, float2 pixel, float4 restirGI, float4 denoisedSpec,
-                              float4 screenHit) {
+                              float4 screenHit, float3 bent, float3 diffuseVisibility,
+                              float specularVisibility) {
     const float nv = saturate(dot(normal, view));
     const float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), base, metal);
     const float3 fresnel =
         f0 + (max(float3(1.0f - roughness, 1.0f - roughness, 1.0f - roughness), f0) - f0) *
                  pow(1.0f - nv, 5.0f);
-    const bool useIbl = gScene.options.y > 0.5f;
+    const bool useIbl = gScene.options.y > 0.5f || gScene.skyLighting.x > 0.5f;
     const float3 diffuseWeight =
         (useIbl ? 1.0f - fresnel : float3(1.0f, 1.0f, 1.0f)) * (1.0f - metal) * base;
-    float3 irradiance = RayDiffuseEnvironment(normal);
+    float3 irradiance = RayDiffuseEnvironment(bent) * diffuseVisibility;
     const bool useCascades = RayEffect(64u);
     const bool traceDiffuse = RayEffect(8u);
     if (useCascades)
@@ -252,7 +265,7 @@ float3 RayEnvironmentLighting(float3 base, float metal, float roughness, float3 
     float3 reflected = float3(0.0f, 0.0f, 0.0f);
     const float3 direction = reflect(-view, normal);
     if (useIbl)
-        reflected = RayEnvironment(direction, roughness);
+        reflected = RayEnvironment(direction, roughness) * specularVisibility;
     reflected = lerp(reflected, screenHit.rgb, screenHit.a);
     if (RayEffect(2u)) {
         const float weight = 1.0f - smoothstep(0.25f, 0.85f, roughness);

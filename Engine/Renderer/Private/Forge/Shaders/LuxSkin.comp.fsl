@@ -1,0 +1,43 @@
+#include "LuxSkin.srt.h"
+
+ROOT_SIGNATURE(ComputeRootSignature)
+NUM_THREADS(64, 1, 1)
+void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
+{
+    INIT_MAIN;
+    const uint vertex = threadId.x, vertices = uint(gSkinPalette[0].x);
+    if (vertex >= vertices) {
+        RETURN();
+    }
+    const float4 rest = gSkinSeed[3u*vertex], restNormal = gSkinSeed[3u*vertex+1u], uv = gSkinSeed[3u*vertex+2u];
+    const uint first = 3u*vertices + uint(rest.w), count = uint(restNormal.w);
+    float4 col0 = float4(0,0,0,0), col1 = col0, col2 = col0, col3 = col0;
+    float weight = 0.0f;
+    for (uint i=0u; i<count; ++i) {
+        const float4 influence = gSkinSeed[first + i/2u];
+        const float2 bw = (i & 1u) == 0u ? influence.xy : influence.zw;
+        const uint k = 1u+4u*uint(bw.x);
+        col0 += gSkinPalette[k]*bw.y;
+        col1 += gSkinPalette[k+1u]*bw.y;
+        col2 += gSkinPalette[k+2u]*bw.y;
+        col3 += gSkinPalette[k+3u]*bw.y;
+        weight += bw.y;
+    }
+    float3 position = rest.xyz, normal = restNormal.xyz;
+    if (weight > .000001f) {
+        position = (col0.xyz*rest.x + col1.xyz*rest.y + col2.xyz*rest.z + col3.xyz)/weight;
+        const float3 a = cross(col1.xyz,col2.xyz), b=cross(col2.xyz,col0.xyz), c=cross(col0.xyz,col1.xyz);
+        const float determinant = dot(col0.xyz,a);
+        const float3 transformed = abs(determinant) > 1e-12f
+            ? (a*normal.x+b*normal.y+c*normal.z) * (determinant < 0 ? -1.0f : 1.0f)
+            : col0.xyz*normal.x + col1.xyz*normal.y + col2.xyz*normal.z;
+        normal = dot(transformed,transformed)>1e-18f ? normalize(transformed) : normal;
+    }
+    const uint at = vertex*64u;
+    const float3 previous = gSkinPalette[0].y > .5f ? asfloat(LoadByte3(gSkinOutput,at)) : position;
+    StoreByte4(gSkinOutput,at,asuint(float4(position,1.0f)));
+    StoreByte4(gSkinOutput,at+16u,asuint(float4(1.0f,1.0f,1.0f,uv.x)));
+    StoreByte4(gSkinOutput,at+32u,asuint(float4(uv.y,normal)));
+    StoreByte4(gSkinOutput,at+48u,asuint(float4(0,previous)));
+    RETURN();
+}

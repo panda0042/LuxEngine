@@ -1,0 +1,148 @@
+#include "LuxStructs.h"
+#include "LuxSkyCache.srt.h"
+#include "LuxSkyAtlas.h"
+#define LUX_ATMOSPHERE_TABLE gSkySource
+#include "LuxAtmosphere.h"
+
+STRUCT(FullscreenOutput)
+{
+    DATA(float4, position, SV_Position);
+    DATA(float2, uv, TEXCOORD0);
+};
+
+ROOT_SIGNATURE(DefaultRootSignature)
+float4 PS_MAIN(FullscreenOutput In)
+{
+    INIT_MAIN;
+    const int2 pixel = int2(In.position.xy);
+    const float3 sun = normalize(-gSolar.direction.xyz);
+    const float3 source = gWeather.solarSource.w>.5f ? gWeather.solarSource.rgb : gSolar.colorIntensity.rgb * gSolar.colorIntensity.w;
+    const float3 eye = float3(gWeather.weatherOrigin.z, gWeather.atmosphere.w, gWeather.weatherOrigin.w);
+#if defined(LUX_TRANSMITTANCE) || defined(LUX_MULTIPLE_SCATTER)
+    const float2 ab = float2(float(pixel.x%128)/127.0f,float(pixel.y)/63.0f);
+    const float altitude = max(.002f,100.0f*ab.y*ab.y);
+    const float horizon = AirHorizon(altitude);
+    const float solarMu = lerp(horizon,1.0f,ab.x*ab.x);
+#ifdef LUX_TRANSMITTANCE
+    RETURN(float4(AirTransmittance(altitude,solarMu,gWeather.atmosphere.y),1));
+#else
+    if (pixel.x < 128) {
+        RETURN(LoadTex2D(gSkySource,NO_SAMPLER,pixel,0));
+    }
+    // Angular quadrature of a unit isotropic source. A geometric series
+    // sums successive scattering orders in the locally uniform closure.
+    const float3 solarDir=float3(sqrt(saturate(1.0f-solarMu*solarMu)),solarMu,0);
+    float3 incoming=float3(0,0,0), gain=float3(0,0,0);
+    for(int i=0;i<16;++i) {
+        const float mu=2.0f*(float(i)+.5f)/16.0f-1.0f;
+        const float phi=float(i)*2.39996323f;
+        const float r=sqrt(saturate(1.0f-mu*mu));
+        const float3 ray=float3(r*cos(phi),mu,r*sin(phi));
+        const float ds=AirDistance(altitude,mu)/20.0f;
+        float3 trans=float3(1,1,1);
+        for(int j=0;j<20;++j) {
+            const float t=(float(j)+.5f)*ds;
+            const float h=AirHeight(altitude,mu,t);
+            const float3 sigma=AirExtinction(h,gWeather.atmosphere.y);
+            const float3 scattering=float3(.005802f,.013558f,.0331f)*exp(-h/8.0f)+
+                                        .003996f*gWeather.atmosphere.y*exp(-h/1.2f);
+            const float3 tr=exp(-sigma*ds);
+            const float3 weight=trans*scattering*(1.0f-tr)/max(sigma,float3(1e-9f,1e-9f,1e-9f));
+            const float solarAngle=((6360.0f+altitude)*solarMu+t*dot(ray,solarDir))/(6360.0f+h);
+            if(solarAngle>AirHorizon(h))
+                incoming+=weight*SampleLvlTex2D(gSkySource,gSamplerTrilinearClamp,AirUV(h,solarAngle),0).rgb*.07957747f;
+            gain+=weight;
+            trans*=tr;
+        }
+        if (mu<horizon)
+            incoming+=trans*float3(.12f,.14f,.12f)*saturate(solarMu)*.31830989f*
+                      SampleLvlTex2D(gSkySource,gSamplerTrilinearClamp,AirUV(.002f,solarMu),0).rgb;
+    }
+    RETURN(float4(incoming/max(16.0f-gain,float3(.1f,.1f,.1f)),1));
+#endif
+#elif defined(LUX_AERIAL)
+    // A 32x16 angular slice per view-distance interval, parameterized by the
+    // angle to the sun on the horizontal plane (axial symmetry of the atmosphere).
+    const float mu = float(pixel.y)/15.0f*2.0f-1.0f;
+    const float azimuthCos=float(pixel.x%32)/31.0f*2.0f-1.0f;
+    const float sunCos=clamp(sun.y,-1.0f,1.0f);
+    const float phaseCos=mu*sunCos+sqrt(saturate((1.0f-mu*mu)*(1.0f-sunCos*sunCos)))*azimuthCos;
+    const float h0=clamp(eye.y*.001f,.002f,99.99f);
+    const float fraction=float(pixel.x/32)/23.0f;
+    const float ds=min(32.0f*fraction*fraction,AirDistance(h0,mu))/16.0f;
+    float3 tr=float3(1,1,1), radiance=float3(0,0,0);
+    for(int i=0;i<16;++i) {
+        const float t=(float(i)+.5f)*ds;
+        const float h=AirHeight(h0,mu,t);
+        const float angle=((6360.0f+h0)*sunCos+t*phaseCos)/(6360.0f+h);
+        const float2 lookup=AirUV(h,angle);
+        const float3 light=angle>=AirHorizon(h)?SampleLvlTex2D(gSkySource,gSamplerTrilinearClamp,float2(lookup.x*.5f,lookup.y),0).rgb:float3(0,0,0);
+        const float3 multi=SampleLvlTex2D(gSkySource,gSamplerTrilinearClamp,float2(.5f+lookup.x*.5f,lookup.y),0).rgb;
+        const float3 r=float3(.005802f,.013558f,.0331f)*exp(-h/8.0f);
+        const float m=.003996f*gWeather.atmosphere.y*exp(-h/1.2f);
+        const float3 stepTr=exp(-AirExtinction(h,gWeather.atmosphere.y)*ds);
+        radiance+=tr*sqrt(stepTr)*ds*((r*(.0596831f*(1.0f+phaseCos*phaseCos))+m*CloudPhase(phaseCos,.8f))*light+(r+m)*multi);
+        tr*=stepTr;
+    }
+    RETURN(float4(radiance*source,1));
+#elif defined(LUX_SKY_VIEW)
+    const float3 ray=SkyViewDirection(In.position.xy);
+    float3 sky=AtmosphereRadiance(ray,sun,eye.y,gWeather.atmosphere.y,source,false);
+    float visibleSky;
+    sky=CloudTransport(sky,ray,sun,gWeather.atmosphere.z,eye,source,visibleSky);
+    RETURN(float4(sky,visibleSky));
+#elif defined(LUX_SKY_SH)
+    // Project incident radiance onto the nine real orthonormal SH functions.
+    // Fold the cosine kernel divided by pi into each band for Lambert shading.
+    float3 c = float3(0,0,0);
+    for (int i = 0; i < 256; ++i) {
+        const float h = 1.0f - 2.0f * (float(i) + .5f) / 256.0f;
+        const float phi = float(i) * 2.39996323f;
+        const float r = sqrt(saturate(1.0f-h*h));
+        const float3 d = float3(r*cos(phi),h,r*sin(phi));
+        c += SampleLvlTex2D(gSkySource, gSamplerTrilinearClamp, SkyAtlasUV(d,0,1),0).rgb * SkyHarmonic(pixel.x,d);
+    }
+    const float band = pixel.x == 0 ? 1.0f : (pixel.x < 4 ? .66666667f : .25f);
+    RETURN(float4(c * (12.5663706f / 256.0f) * band,1));
+#elif defined(LUX_CLOUD_SHADOW)
+    const bool farLevel = pixel.x >= 128;
+    const float span = farLevel ? 16384.0f : 2048.0f;
+    const float2 plane = ((float2(pixel.x % 128, pixel.y) + .5f) / 128.0f - .5f) * span;
+    float optical = 0;
+    if (sun.y > .015f && gWeather.atmosphere.z > 0.0f) {
+        const float ds = 1150.0f / (20.0f * sun.y);
+        const float3 start = float3(eye.x+plane.x,0,eye.z+plane.y) + sun * (1250.0f / sun.y);
+        for (int i=0; i<20; ++i)
+            optical += CloudDensity(start + sun * ((float(i) + .5f) * ds),gWeather.atmosphere.z,ds) * ds;
+    }
+    RETURN(float4(exp(-.005f * optical),0,0,1));
+#else
+    const float2 uv = ((float2(pixel.x % 34,pixel.y % 34) + .5f) - 17.0f) / 16.0f;
+    const float3 d = SkyFaceDirection(pixel.x/34,uv);
+#ifdef LUX_SKY_GLOSS
+    const int level = pixel.y / 34;
+    if (level == 0)
+        RETURN(float4(SampleLvlTex2D(gSkySource,gSamplerTrilinearClamp,SkyAtlasUV(d,0,1),0).rgb,1));
+    const float rough = float(level) * .25f;
+    const float a2 = rough * rough * rough * rough;
+    const float3 t = normalize(cross(abs(d.y) < .99f ? float3(0,1,0) : float3(1,0,0),d));
+    const float3 b = cross(d,t);
+    float3 c = float3(0,0,0);
+    float w = 0.0f;
+    for (int i=0; i<48; ++i) {
+        const float u = (float(i)+.5f)/48.0f;
+        const float phi = float(i)*2.39996323f;
+        const float z = sqrt((1.0f-u)/(1.0f+(a2-1.0f)*u));
+        const float3 halfVector = d*z + (cos(phi)*t+sin(phi)*b)*sqrt(saturate(1.0f-z*z));
+        const float3 l = reflect(-d,halfVector);
+        const float nl = saturate(dot(l,d));
+        c += SampleLvlTex2D(gSkySource,gSamplerTrilinearClamp,SkyAtlasUV(l,0,1),0).rgb*nl;
+        w += nl;
+    }
+    RETURN(float4(c/max(w,.001f),1));
+#else
+    const float3 sky=SampleLvlTex2D(gSkySource,gSamplerTrilinearClamp,SkyViewUV(d),0).rgb;
+    RETURN(float4(sky,1));
+#endif
+#endif
+}

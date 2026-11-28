@@ -67,6 +67,15 @@ void Normals() {
     Check(std::abs(std::sqrt(x * x + y * y + z * z) - 1.f) < .015f,
           "Normal mip was not normalized");
     Check(normal[0] > 210 && normal[1] > 210, "Normal mip orientation is wrong");
+    Check(BuildTextureMipChain(2, 1, pixels, TextureColorSpace::Linear, true, levels, 0,
+                               TextureMipSemantic::NormalVariance) &&
+              std::abs(int(levels.back().pixels[3]) - 181) <= 1,
+          "mean normal length must retain subpixel variance");
+    const std::array<uint8, 8> roughness{0, 0, 0, 255, 255, 255, 255, 255};
+    Check(BuildTextureMipChain(2, 1, roughness, TextureColorSpace::Linear, false, levels, 0,
+                               TextureMipSemantic::PerceptualRoughness) &&
+              std::abs(int(levels.back().pixels[0]) - 214) <= 1,
+          "roughness mips must average GGX slope variance in linear space");
 }
 
 void AlphaMaskCoverage() {

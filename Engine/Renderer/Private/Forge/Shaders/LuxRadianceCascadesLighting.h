@@ -20,6 +20,7 @@ float3 SampleRadianceCascades(float3 position, float3 normal, float3 fallback) {
     const float3 fraction = coordinate - float3(lower);
     const float4 basis = float4(1.0f, normal);
     float3 result = float3(0.0f, 0.0f, 0.0f);
+    float weightSum = 0.0f;
     for (uint corner = 0u; corner < 8u; ++corner) {
         const uint3 offset = CascadeCorner(corner);
         const uint index = LUX_CASCADE_SH_HEADER +
@@ -27,9 +28,29 @@ float3 SampleRadianceCascades(float3 position, float3 normal, float3 fallback) {
         const float3 irradiance = float3(dot(gCascadeIrradiance[index], basis),
                                          dot(gCascadeIrradiance[index + 1u], basis),
                                          dot(gCascadeIrradiance[index + 2u], basis));
-        result += irradiance * CascadeCornerWeight(offset, fraction);
+        const float3 delta = (fraction - float3(offset)) * lattice.w;
+        const float distance = length(delta);
+        const float3 direction = delta / max(distance, .0001f);
+        float3 axial = direction * direction;
+        axial *= axial;
+        float2 moments = float2(0, 0);
+        UNROLL for (uint axis = 0u; axis < 3u; ++axis) {
+            const float4 m = gCascadeIrradiance[index + 3u + axis];
+            moments += axial[axis] * (direction[axis] > 0.0f ? m.xy : m.zw);
+        }
+        moments /= max(axial.x + axial.y + axial.z, .0001f);
+        const float variance =
+            max(moments.y - moments.x * moments.x, .0001f * lattice.w * lattice.w);
+        const float beyond = max(0.0f, distance - moments.x - .035f * lattice.w);
+        const float visibility = variance / (variance + beyond * beyond);
+        const float orient = .15f + .85f * saturate(.5f - .5f * dot(direction, normal));
+        const float w = CascadeCornerWeight(offset, fraction) * orient * visibility * visibility;
+        result += irradiance * w;
+        weightSum += w;
     }
-    return lerp(fallback, max(result, 0.0f), coverage * gCascadeIrradiance[1].x);
+    // The visibility floor avoids boosting a tiny contribution from the other side of a wall.
+    return lerp(fallback, max(result / max(weightSum, .015f), 0.0f),
+                coverage * gCascadeIrradiance[1].x);
 }
 
 #endif

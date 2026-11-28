@@ -88,5 +88,4 @@ The backend did not expose device-local residency for this run. GPU durations co
 
 [Machine-readable summary](../Benchmarks/linux-rtx2060-1080p-water.json) · [Frame samples](../Benchmarks/linux-rtx2060-1080p-water.csv)
 
-    ./out/bin/SampleFrontierCounty --benchmark --scenario water --preset high \
-      --resolution 1920x1080 --warmup 30 --frames 60 --output /tmp/frontier-water
+These measurements were collected using an earlier build of Frontier County.

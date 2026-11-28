@@ -3,7 +3,8 @@
 
 // Locally cylindrical diffusion approximation. Integrate incident diffuse light
 // along the curved surface with a two-sided exponential profile per wavelength.
-float3 SubsurfaceDiffuse(float3 base, float metal, float3 n, float3 l, float curvature) {
+float3 SubsurfaceDiffuse(float3 base, float metal, float3 n, float3 l, float curvature,
+                         float thickness) {
     const float3 radius = gDraw.foliage.yzw;
     const float cosine = clamp(dot(n, l), -1.0f, 1.0f);
     const float sine = sqrt(saturate(1.0f - cosine * cosine));
@@ -16,7 +17,7 @@ float3 SubsurfaceDiffuse(float3 base, float metal, float3 n, float3 l, float cur
         const float3 offset = sine * sin(arc);
         diffuse += .125f * (max(center + offset, 0.0f) + max(center - offset, 0.0f));
     }
-    const float thickness = gDraw.textureOptions.w;
+
     if (thickness > 0.0f)
         diffuse += max(-cosine, 0.0f) * exp(-thickness / max(radius * abs(cosine), .000001f));
     // Replace only the Lambert term already evaluated by the PBR material.

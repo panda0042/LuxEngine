@@ -6,6 +6,12 @@
 #include "LuxRadianceCascadesSampling.h"
 #if defined(VULKAN)
 #include "LuxRayVisibility.h"
+#include "LuxSkyAtlas.h"
+#define LUX_SKY_GLOSS gRaySkyGloss
+#define LUX_SKY_SH gRaySkySH
+#include "LuxSkyLighting.h"
+#undef LUX_SKY_GLOSS
+#undef LUX_SKY_SH
 
 float3 CascadeRayDirection(uint2 cell, uint angles) {
     // A uniform azimuth and uniform cosine of the polar angle give equal solid angles.
@@ -17,6 +23,7 @@ float3 CascadeRayDirection(uint2 cell, uint angles) {
 }
 
 float3 CascadeSky(float3 direction) {
+    if (gCascade.optics.y > 1.5f) return SkySpecularLighting(direction,0.0f) * gCascade.environment.w;
     if (gCascade.optics.y < 0.5f)
         return gCascade.environment.rgb * gCascade.environment.w;
     const float c = cos(gCascade.optics.x);
@@ -48,12 +55,13 @@ float3 CascadeSurfaceRadiance(float3 position, float3 normal, float3 base, float
             !RayOccluded(surfaceOrigin, travel, distance - 0.002f))
             irradiance += intensity.rgb * (intensity.w * facing * falloff * falloff);
     }
-    return base * (1.0f - metallic) *
-           (irradiance * 0.318309886184f + gCascade.environment.rgb * gCascade.environment.w);
+    const float3 sky = gCascade.optics.y > 1.5f ? SkyDiffuseLighting(normal) * gCascade.environment.w
+                                            : gCascade.environment.rgb * gCascade.environment.w;
+    return base * (1.0f - metallic) * (irradiance * 0.318309886184f + sky);
 }
 
 float4 TraceCascadeInterval(float3 position, float3 direction) {
-    float4 result = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    float4 result = float4(0.0f, 0.0f, 0.0f, -1.0f);
     RayDesc ray;
     ray.Origin = position;
     ray.Direction = direction;
@@ -81,7 +89,7 @@ float4 TraceCascadeInterval(float3 position, float3 direction) {
         const float3 hitPosition = position + direction * RayQueryRayT(hit);
         const float3 radiance = CascadeSurfaceRadiance(hitPosition, normal, material.rgb,
                                                        material.w);
-        result = float4(clamp(radiance, 0.0f, 65504.0f), 0.0f);
+        result = float4(clamp(radiance, 0.0f, 65504.0f), RayQueryRayT(hit));
     }
     return result;
 }
@@ -117,10 +125,25 @@ void ProjectCascadeProbe(uint probe) {
     float3 x = dc;
     float3 y = dc;
     float3 z = dc;
+    float4 moments[3];
+    float2 weights[3];
+    UNROLL for (uint axis=0u; axis<3u; ++axis) {
+        moments[axis] = float4(0,0,0,0);
+        weights[axis] = float2(0,0);
+    }
     for (uint directionIndex = 0u; directionIndex < samples; ++directionIndex) {
         const float3 direction = CascadeRayDirection(uint2(directionIndex % angles, directionIndex / angles),
                                                      angles);
-        const float3 radiance = gCascadePrevious[base + directionIndex].rgb;
+        const float4 ray = gCascadePrevious[base + directionIndex];
+        const float3 radiance = ray.rgb;
+        const float2 depth = float2(ray.w,ray.w*ray.w);
+        UNROLL for (uint axis=0u; axis<3u; ++axis) {
+            float2 w = max(float2(direction[axis],-direction[axis]),0.0f);
+            w *= w;
+            w *= w;
+            weights[axis] += w;
+            moments[axis] += float4(depth*w.x,depth*w.y);
+        }
         dc += radiance;
         x += radiance * direction.x;
         y += radiance * direction.y;
@@ -133,6 +156,8 @@ void ProjectCascadeProbe(uint probe) {
     gCascadeOutput[offset] = float4(dc.r, 2.0f * x.r, 2.0f * y.r, 2.0f * z.r) * scale;
     gCascadeOutput[offset + 1u] = float4(dc.g, 2.0f * x.g, 2.0f * y.g, 2.0f * z.g) * scale;
     gCascadeOutput[offset + 2u] = float4(dc.b, 2.0f * x.b, 2.0f * y.b, 2.0f * z.b) * scale;
+    UNROLL for (uint axis=0u; axis<3u; ++axis)
+        gCascadeOutput[offset + 3u + axis] = moments[axis] / max(weights[axis].xxyy, .0001f);
     if (probe == 0u) {
         gCascadeOutput[0] = gCascade.origin;
         gCascadeOutput[1] = float4(gCascade.optics.z, 0.0f, 0.0f, 0.0f);
@@ -163,10 +188,11 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
                                  (coordinate - (float(probes) - 1.0f) * 0.5f) *
                                  gCascade.interval.x;
         float4 interval = TraceCascadeInterval(position, direction);
-        if (interval.w > 0.0f) {
+        if (interval.w < 0.0f) {
             const float3 incoming = gCascade.shape.z > 0u ? MergeOuterCascade(position, cell)
                                                         : CascadeSky(direction);
-            interval.rgb += interval.w * incoming;
+            interval.rgb = incoming;
+            interval.w = gCascade.interval.z;
         }
         gCascadeOutput[index] = interval;
     }

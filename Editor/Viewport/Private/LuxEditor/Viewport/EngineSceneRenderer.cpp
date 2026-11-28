@@ -536,7 +536,7 @@ bool EngineSceneRenderer::RenderGame(LuxEngine::Scene& scene, int pixelWidth, in
         if (camera.perspective) {
             auto settings = scene.GetSettings().render3D;
             for (auto* path : {&settings.environmentPath, &settings.waterReflection.environmentPath,
-                               &settings.colorGradingLut})
+                               &settings.colorGradingLut, &settings.secondaryColorGradingLut})
                 if (!path->empty())
                     *path = scene.ResolveAssetPath(*path);
             LuxEngine::Renderer3D::BeginScene(camera.camera3D, settings,
@@ -620,7 +620,7 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
             renderSettings.shadows = false;
         for (auto* path :
              {&renderSettings.environmentPath, &renderSettings.waterReflection.environmentPath,
-              &renderSettings.colorGradingLut})
+              &renderSettings.colorGradingLut, &renderSettings.secondaryColorGradingLut})
             if (!path->empty())
                 *path = scene.ResolveAssetPath(*path);
         LuxEngine::Renderer3D::BeginScene(camera, renderSettings, scene.GetSettings().exposure);

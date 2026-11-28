@@ -11,6 +11,8 @@ DECL_RAYTRACING(Persistent, RaytracingAccelerationStructure, gRayScene)
 DECL_BUFFER(Persistent, Buffer(float4), gRayInstances)
 DECL_BUFFER(Persistent, Buffer(float4), gRayTriangles)
 DECL_TEXTURE(Persistent, TexCube(float4), gCascadeSky)
+DECL_TEXTURE(Persistent, Tex2D(float4), gRaySkyGloss)
+DECL_TEXTURE(Persistent, Tex2D(float4), gRaySkySH)
 #endif
 DECL_BUFFER(Persistent, Buffer(float4), gCascadePrevious)
 DECL_RWBUFFER(Persistent, RWBuffer(float4), gCascadeOutput)

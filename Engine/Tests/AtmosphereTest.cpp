@@ -1,5 +1,6 @@
 #include <LuxEngine/Environment/Atmosphere.hpp>
 #include <LuxEngine/Environment/EnvironmentMap.hpp>
+#include <LuxEngine/Environment/TerrainHeightfield.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -29,6 +30,23 @@ Vec3 PanoramaSample(const AtmospherePanorama& image, Vec3 direction) {
 
 double Brightness(Vec3 color) {
     return color.Dot({.2126, .7152, .0722});
+}
+
+void CheckTerrainWatershed() {
+    std::array<float, 25> grid{};
+    grid[12] = 12;
+    TerrainHeightfield hill(5, 5, 2, {-4, -4}, grid);
+    Check(hill.Height({0, 0}) == 12 && hill.Height({1, 0}) == 6,
+          "heightfield maps metre coordinates");
+    hill.Erode({12, .1, .2, .3, .6});
+    double mass = 0, flow = 0;
+    for (int z = -4; z <= 4; z += 2)
+        for (int x = -4; x <= 4; x += 2) {
+            mass += hill.Height({double(x), double(z)});
+            flow += hill.Drainage({double(x), double(z)});
+        }
+    Check(std::abs(mass - 12) < .0001 && hill.Height({0, 0}) < 12 && flow > 0,
+          "closed watershed transports sediment and conserves terrain volume");
 }
 
 void Check8KEnvironment() {
@@ -105,6 +123,7 @@ int main() {
                   cube.pixels[center + 2] > cube.pixels[center] &&
                   environment->diffuse.layers == 6 && environment->specular.levels == 8,
               "built-in cubemap and environment lighting use the baked atmosphere");
+        CheckTerrainWatershed();
         Check8KEnvironment();
         std::cout << "Atmosphere and built-in IBL passed. Zenith radiance " << zenith.x << ' '
                   << zenith.y << ' ' << zenith.z << ", IBL preparation "

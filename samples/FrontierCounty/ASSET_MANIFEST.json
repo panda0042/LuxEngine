@@ -124,7 +124,7 @@
           "format": "Radiance RGBE"
         }
       ],
-      "conversion": "Read linear RGB from EXR and average nonoverlapping 12\u00d712 blocks to 2048\u00d71024. Clamp averaged negatives to zero and scale RGB by 0.25 before Radiance RGBE encoding."
+      "conversion": "Read linear RGB from EXR and average nonoverlapping 12×12 blocks to 2048×1024. Clamp averaged negatives to zero and scale RGB by 0.25 before Radiance RGBE encoding."
     },
     {
       "name": "DungGeunMo",
@@ -170,7 +170,8 @@
             "dog-walker/model.fbx",
             "dog-walker/motion.fbx",
             "dog-walker/normal.png",
-            "dog-walker/roughness.png"
+            "dog-walker/roughness.png",
+            "dog-walker/tissue.png"
           ]
         },
         {
@@ -189,7 +190,8 @@
             "hiker/albedo.png",
             "hiker/model.fbx",
             "hiker/normal.png",
-            "hiker/roughness.png"
+            "hiker/roughness.png",
+            "hiker/tissue.png"
           ]
         },
         {
@@ -208,7 +210,8 @@
             "road-worker/albedo.png",
             "road-worker/model.fbx",
             "road-worker/normal.png",
-            "road-worker/roughness.png"
+            "road-worker/roughness.png",
+            "road-worker/tissue.png"
           ]
         }
       ],
@@ -350,6 +353,39 @@
           "colorSpace": "Linear",
           "runtimePath": "assets/FrontierPeople/road-worker/roughness.png",
           "processedPath": "samples/Assets/FrontierPeople/road-worker/roughness.png"
+        },
+        {
+          "path": "hiker/tissue.png",
+          "bytes": 21408,
+          "sha256": "08d99e579b17ee7dfd865776322ff1952580d55029888d623846a65440b1de20",
+          "format": "PNG",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierPeople/hiker/tissue.png",
+          "processedPath": "samples/Assets/FrontierPeople/hiker/tissue.png"
+        },
+        {
+          "path": "road-worker/tissue.png",
+          "bytes": 53564,
+          "sha256": "07b51f0717d67545beb57c848f4fce1c8bdf82b6f5b298e5d093b701966e4c20",
+          "format": "PNG",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierPeople/road-worker/tissue.png",
+          "processedPath": "samples/Assets/FrontierPeople/road-worker/tissue.png"
+        },
+        {
+          "path": "dog-walker/tissue.png",
+          "bytes": 17817,
+          "sha256": "7f69038b7d3fcc24c02700b0ad00f426c6247d7e262c8a1ce9ccac68bc777892",
+          "format": "PNG",
+          "width": 1024,
+          "height": 1024,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierPeople/dog-walker/tissue.png",
+          "processedPath": "samples/Assets/FrontierPeople/dog-walker/tissue.png"
         }
       ]
     },
@@ -1089,7 +1125,9 @@
             "norway-spruce/normal-1.png",
             "norway-spruce/albedo-2.png",
             "norway-spruce/normal-2.png",
-            "norway-spruce/materials.txt"
+            "norway-spruce/materials.txt",
+            "norway-spruce/spruce-views-color.png",
+            "norway-spruce/spruce-views-normal-depth.png"
           ]
         },
         {
@@ -1296,6 +1334,28 @@
           "format": "TXT",
           "runtimePath": "assets/FrontierVegetation/sedge-tuft/materials.txt",
           "processedPath": "samples/Assets/FrontierVegetation/sedge-tuft/materials.txt"
+        },
+        {
+          "path": "norway-spruce/spruce-views-color.png",
+          "bytes": 572270,
+          "sha256": "cf2b8a6dc2deead550a96be530935cacdf48ab896011045ad301e0c2bc5d39ca",
+          "format": "PNG",
+          "width": 1152,
+          "height": 640,
+          "colorSpace": "sRGB",
+          "runtimePath": "assets/FrontierVegetation/norway-spruce/spruce-views-color.png",
+          "processedPath": "samples/Assets/FrontierVegetation/norway-spruce/spruce-views-color.png"
+        },
+        {
+          "path": "norway-spruce/spruce-views-normal-depth.png",
+          "bytes": 834440,
+          "sha256": "8ff0c25149cfdef84d99459ed5126fe04f533c2f45d109b95920ec2768cd3e39",
+          "format": "PNG",
+          "width": 1152,
+          "height": 640,
+          "colorSpace": "Linear",
+          "runtimePath": "assets/FrontierVegetation/norway-spruce/spruce-views-normal-depth.png",
+          "processedPath": "samples/Assets/FrontierVegetation/norway-spruce/spruce-views-normal-depth.png"
         }
       ]
     },
@@ -1392,6 +1452,867 @@
           "processedPath": "samples/Assets/FrontierMeadow/height.png"
         }
       ]
+    },
+    {
+      "name": "Silverlake terrain palette",
+      "license": "CC0-1.0",
+      "manifest": "samples/Assets/FrontierTerrain/source-manifest.json",
+      "layers": [
+        {
+          "asset": "marble_cliff_01",
+          "name": "Marble Cliff 01",
+          "authors": {
+            "Amal Kumar": "All"
+          },
+          "license": "CC0-1.0",
+          "source": "https://polyhaven.com/a/marble_cliff_01",
+          "files": [
+            {
+              "channel": "Diffuse",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 27136333,
+              "sha256": "4b269119e733a26004e11b162fa1c2c031d667d6d43e5038843d512e7ffde768",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/marble_cliff_01/marble_cliff_01_diff_8k.jpg"
+            },
+            {
+              "channel": "nor_gl",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 21058835,
+              "sha256": "c05efb12fb3aa69d9676f98d6ddff04091f5ecfdab042f9aa7624b7b2634e232",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/marble_cliff_01/marble_cliff_01_nor_gl_8k.jpg"
+            },
+            {
+              "channel": "Rough",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 24487951,
+              "sha256": "5970a4a7625667786177bffc5a71d1cc4cd625c192fa10b332b584df5b90bead",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/marble_cliff_01/marble_cliff_01_rough_8k.jpg"
+            },
+            {
+              "channel": "Displacement",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 5573072,
+              "sha256": "e254c127a1557905dbe34f3730a8fdb5ebd79dcb28a6258ae5175dfe57e4dd54",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/marble_cliff_01/marble_cliff_01_disp_8k.jpg"
+            }
+          ]
+        },
+        {
+          "asset": "lichen_rock",
+          "name": "Lichen Rock",
+          "authors": {
+            "Rico Cilliers": "All"
+          },
+          "license": "CC0-1.0",
+          "source": "https://polyhaven.com/a/lichen_rock",
+          "files": [
+            {
+              "channel": "Diffuse",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 47148000,
+              "sha256": "33aafe698f365628b4cb466a62cf37663067cc454c7c0dbcd31bfd0c50599e74",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/lichen_rock/lichen_rock_diff_8k.jpg"
+            },
+            {
+              "channel": "nor_gl",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 64673090,
+              "sha256": "e6be48df8364e604086f3009d7cd0f81feba9745dcecaedf310b29400dc5d43c",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/lichen_rock/lichen_rock_nor_gl_8k.jpg"
+            },
+            {
+              "channel": "Rough",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 22646171,
+              "sha256": "de1be337e5cc35c4d24b8a363da1605356e6883195e7f6ebf9f53790e5b0a834",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/lichen_rock/lichen_rock_rough_8k.jpg"
+            },
+            {
+              "channel": "Displacement",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 8220748,
+              "sha256": "e706928cb948e6f1a288705c471f98204a9116ec45e78864f713018000707390",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/lichen_rock/lichen_rock_disp_8k.jpg"
+            }
+          ]
+        },
+        {
+          "asset": "withered_grass",
+          "name": "Withered Grass",
+          "authors": {
+            "Charlotte Baglioni": "All"
+          },
+          "license": "CC0-1.0",
+          "source": "https://polyhaven.com/a/withered_grass",
+          "files": [
+            {
+              "channel": "Diffuse",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 61976489,
+              "sha256": "f12d01e04854b102ba3d123dc8769c8dbf91f0831ac8eda2ea50b39b9261f66a",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/withered_grass/withered_grass_diff_8k.jpg"
+            },
+            {
+              "channel": "nor_gl",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 84158411,
+              "sha256": "efe3de7d58816c601ccdd32ebcee4f460317ad79b26f484db144b52f1e88b8f2",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/withered_grass/withered_grass_nor_gl_8k.jpg"
+            },
+            {
+              "channel": "Rough",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 48121030,
+              "sha256": "0ab62c0c5d505b8e30f6ae081c5b418cf43a5bc95fd6040e1788d01965fd16ec",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/withered_grass/withered_grass_rough_8k.jpg"
+            },
+            {
+              "channel": "Displacement",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 22904736,
+              "sha256": "47c6098bfda36173470f75c667808f2181d5cfaba92e8dc53c2731e409add10b",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/withered_grass/withered_grass_disp_8k.jpg"
+            }
+          ]
+        },
+        {
+          "asset": "leafy_grass",
+          "name": "Leafy Grass",
+          "authors": {
+            "Charlotte Baglioni": "All"
+          },
+          "license": "CC0-1.0",
+          "source": "https://polyhaven.com/a/leafy_grass",
+          "files": [
+            {
+              "channel": "Diffuse",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 66821411,
+              "sha256": "1a4da4c1f7f616aa4053934211561c1d40dc1844391a9d71e2086a365131e9c9",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/leafy_grass/leafy_grass_diff_8k.jpg"
+            },
+            {
+              "channel": "nor_gl",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 79700327,
+              "sha256": "adfea2171d653e62171c06dbc1eb86264eae72bcc1d508bd08523ca4ee71dd0f",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/leafy_grass/leafy_grass_nor_gl_8k.jpg"
+            },
+            {
+              "channel": "Rough",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 31805627,
+              "sha256": "3516079c5ea9402389a793ec2f241919e515851b12f2d5121ac8ea5b008f57b0",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/leafy_grass/leafy_grass_rough_8k.jpg"
+            },
+            {
+              "channel": "Displacement",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 22612266,
+              "sha256": "3fdaff7dab2f2facba1eb1c3cb71be2c60d6a26768fcc34f431ad72e71038ae5",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/leafy_grass/leafy_grass_disp_8k.jpg"
+            }
+          ]
+        },
+        {
+          "asset": "coast_sand_01",
+          "name": "Coast Sand 01",
+          "authors": {
+            "Rob Tuytel": "All"
+          },
+          "license": "CC0-1.0",
+          "source": "https://polyhaven.com/a/coast_sand_01",
+          "files": [
+            {
+              "channel": "Diffuse",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 36611218,
+              "sha256": "4c752b664b563a567a116c791f5f2c775e1894cd99f8e992ff899b897c067aee",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/coast_sand_01/coast_sand_01_diff_8k.jpg"
+            },
+            {
+              "channel": "nor_gl",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 59232473,
+              "sha256": "2eb70c16d3bad486adc5611114cf328160b80e2e6f102020e17d635e0f719b56",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/coast_sand_01/coast_sand_01_nor_gl_8k.jpg"
+            },
+            {
+              "channel": "Rough",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 14262095,
+              "sha256": "0e85808a140b7f9760bb12d3a4be4b4c336dbbca8f5fbec92e86587c81803e82",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/coast_sand_01/coast_sand_01_rough_8k.jpg"
+            },
+            {
+              "channel": "Displacement",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 10776515,
+              "sha256": "020dc260431e07303c721f5b6f4216a616834a5ab953d3493a299ebb20cc1f42",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/coast_sand_01/coast_sand_01_disp_8k.jpg"
+            }
+          ]
+        },
+        {
+          "asset": "rocky_gravel",
+          "name": "Rocky Gravel",
+          "authors": {
+            "Dario Barresi": "Processing",
+            "Dimitrios Savva": "Photography"
+          },
+          "license": "CC0-1.0",
+          "source": "https://polyhaven.com/a/rocky_gravel",
+          "files": [
+            {
+              "channel": "Diffuse",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 66004903,
+              "sha256": "e471b7eaeca1c1f8dd7bc3aa31f96cb382c948bb8f5950cb3f29cadeb8885a55",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/rocky_gravel/rocky_gravel_diff_8k.jpg"
+            },
+            {
+              "channel": "nor_gl",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 75734584,
+              "sha256": "cdd698e8e1132260f5709ba90d062f23a2a9fa22e5399e3cbd71ca68766da453",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/rocky_gravel/rocky_gravel_nor_gl_8k.jpg"
+            },
+            {
+              "channel": "Rough",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 25977154,
+              "sha256": "470a7b4000ecefac8d4a26b9028424d8ad935168d645ad7234d4f4750b693ee1",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/rocky_gravel/rocky_gravel_rough_8k.jpg"
+            },
+            {
+              "channel": "Displacement",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 18756761,
+              "sha256": "00f35d16ac5f48d778e9e813bffa9ac8332662d4e2cf57cc887c92a61ddba062",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/rocky_gravel/rocky_gravel_disp_8k.jpg"
+            }
+          ]
+        },
+        {
+          "asset": "forest_floor",
+          "name": "Forest Floor",
+          "authors": {
+            "eye-candy.xyz": "All"
+          },
+          "license": "CC0-1.0",
+          "source": "https://polyhaven.com/a/forest_floor",
+          "files": [
+            {
+              "channel": "Diffuse",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 86950550,
+              "sha256": "fe558f292c8c4f4d40887064c777e09c25a6d564d84777a725f0e18f8b34cc10",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/forest_floor/forest_floor_diff_8k.jpg"
+            },
+            {
+              "channel": "nor_gl",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 57111275,
+              "sha256": "d9e04c67c955b5ea1caa75beb69a5d23b521e23b0e438a8d106b338a874a020d",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/forest_floor/forest_floor_nor_gl_8k.jpg"
+            },
+            {
+              "channel": "Rough",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 47348395,
+              "sha256": "a3ada31944874396eebf7bc5842c4d8d8c83cf9fc1c02a96123963755247cec5",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/forest_floor/forest_floor_rough_8k.jpg"
+            },
+            {
+              "channel": "Displacement",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 15566447,
+              "sha256": "e449cd2ed3ff05ef1d6e30034cbb4a8b742b2b276144b9eac439d710a949664d",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/forest_floor/forest_floor_disp_8k.jpg"
+            }
+          ]
+        },
+        {
+          "asset": "brown_mud",
+          "name": "Brown Mud",
+          "authors": {
+            "Rob Tuytel": "All"
+          },
+          "license": "CC0-1.0",
+          "source": "https://polyhaven.com/a/brown_mud",
+          "files": [
+            {
+              "channel": "Diffuse",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 26743773,
+              "sha256": "b9f9974e2edf7d05c244ddd6aa951addccfb67c446ee1ec5d12757eaa8080534",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/brown_mud/brown_mud_diff_8k.jpg"
+            },
+            {
+              "channel": "nor_gl",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 36650432,
+              "sha256": "f4011c8701739cc1c12387012f8a1b3ac8f682ce78e0cdbe9f87016246289334",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/brown_mud/brown_mud_nor_gl_8k.jpg"
+            },
+            {
+              "channel": "Rough",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 26075628,
+              "sha256": "3c6010d5172048ba54eda52d27fb696a637c0e4954019352079ee4edcf2a9e2b",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/brown_mud/brown_mud_rough_8k.jpg"
+            },
+            {
+              "channel": "Displacement",
+              "width": 8192,
+              "height": 8192,
+              "format": "JPEG",
+              "bytes": 6481583,
+              "sha256": "54bf83c729a64067e6392cc0751fc74720d64bc1c613d86954076690a35ca9b6",
+              "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/8k/brown_mud/brown_mud_disp_8k.jpg"
+            }
+          ]
+        }
+      ],
+      "runtimeFiles": [
+        {
+          "path": "albedo.jpg",
+          "sha256": "0ae840d9563a8808a623ceb5580be3d9f63d0d8f63be6753144df4faefb79a1a",
+          "bytes": 13894432,
+          "width": 6528,
+          "height": 3264,
+          "runtimePath": "assets/FrontierTerrain/albedo.jpg"
+        },
+        {
+          "path": "surface.png",
+          "sha256": "7a06427b644d71d27047a2b77c62684342630aafc85a09fb09c9ff46f4279848",
+          "bytes": 57159988,
+          "width": 6528,
+          "height": 3264,
+          "runtimePath": "assets/FrontierTerrain/surface.png"
+        }
+      ]
+    },
+    {
+      "name": "Frontier projected surface marks",
+      "source": "samples/FrontierCounty/Tools/BakeSurfaceMarks.py",
+      "license": "Repository license (original artwork)",
+      "authors": [
+        "LuxEngine contributors"
+      ],
+      "files": [
+        {
+          "map": "albedo",
+          "processed": {
+            "path": "samples/Assets/FrontierMarks/albedo.png",
+            "width": 1536,
+            "height": 768,
+            "format": "PNG",
+            "bytes": 1248808,
+            "sha256": "7c330b573a93e2d83d504046f4bca3f2f07a3638201d0dc5cf308bbf5afe2fb7",
+            "colorSpace": "sRGB"
+          },
+          "runtimePath": "assets/FrontierMarks/albedo.png"
+        },
+        {
+          "map": "normal",
+          "processed": {
+            "path": "samples/Assets/FrontierMarks/normal.png",
+            "width": 1536,
+            "height": 768,
+            "format": "PNG",
+            "bytes": 376027,
+            "sha256": "b6d5b7c662cef3df64ad487a0a8dc427d588e7677e59a1c654d605a019b46c66",
+            "colorSpace": "Linear"
+          },
+          "runtimePath": "assets/FrontierMarks/normal.png"
+        },
+        {
+          "map": "roughness",
+          "processed": {
+            "path": "samples/Assets/FrontierMarks/roughness.png",
+            "width": 1536,
+            "height": 768,
+            "format": "PNG",
+            "bytes": 418063,
+            "sha256": "545fe8ec5a7fd3d147eebf9b11ece817230cc6b93a1b65caf95b719a866d51e9",
+            "colorSpace": "Linear"
+          },
+          "runtimePath": "assets/FrontierMarks/roughness.png"
+        },
+        {
+          "map": "occlusion",
+          "processed": {
+            "path": "samples/Assets/FrontierMarks/occlusion.png",
+            "width": 1536,
+            "height": 768,
+            "format": "PNG",
+            "bytes": 94288,
+            "sha256": "5866af4b8588a9fddd765f47069029405a6c3cfe059f5f151f4257ca6964c60a",
+            "colorSpace": "Linear"
+          },
+          "runtimePath": "assets/FrontierMarks/occlusion.png"
+        }
+      ]
+    },
+    {
+      "name": "Rock Moss Set 01",
+      "url": "https://polyhaven.com/a/rock_moss_set_01",
+      "license": "CC0-1.0",
+      "authors": [
+        "Kless Gyzen"
+      ],
+      "sourceFormat": "glTF 2.0 and JPEG",
+      "sourceTextureSize": [
+        2048,
+        2048
+      ],
+      "sourceFiles": [
+        {
+          "path": "rock/rock.gltf",
+          "bytes": 9987,
+          "sha256": "794beaf2f4dc0ab155114f286049dc912a8f3287520965ca8bf6bb0d821ae3e2",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/2k/rock_moss_set_01/rock_moss_set_01_2k.gltf"
+        },
+        {
+          "path": "rock/rock_moss_set_01.bin",
+          "bytes": 1466380,
+          "sha256": "de8360e6175879aaf02c171911069cf5f1852547f9ca7f10e440085dbcc3315e",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/rock_moss_set_01/rock_moss_set_01.bin"
+        },
+        {
+          "path": "rock/textures/rock_moss_set_01_diff_2k.jpg",
+          "bytes": 649415,
+          "sha256": "bdee6da8baba67bd7e85e414e669cd46aab9afaf755114fb5163f0e68775c3d6",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/rock_moss_set_01/rock_moss_set_01_diff_2k.jpg"
+        }
+      ],
+      "files": [
+        {
+          "path": "Models/rock_a.obj",
+          "bytes": 789928,
+          "sha256": "ddb0b9c42f8044cdf64247368104f252db3c66a344477daf172aab68082e84af",
+          "processedPath": "samples/RainyCreek/Assets/Models/rock_a.obj",
+          "runtimePath": "assets/rainy-creek/Models/rock_a.obj"
+        },
+        {
+          "path": "Models/rock_b.obj",
+          "bytes": 429471,
+          "sha256": "d4a0856d55e2bf5c15ca999f59e78731dccdd3418af0f63ea3d7d0a8a8ae73fc",
+          "processedPath": "samples/RainyCreek/Assets/Models/rock_b.obj",
+          "runtimePath": "assets/rainy-creek/Models/rock_b.obj"
+        },
+        {
+          "path": "Models/rock_c.obj",
+          "bytes": 786150,
+          "sha256": "a876fe65ff1136eb5c5eeafffe1cec8c760196b8478d82962cd5e3e6ed08b9fe",
+          "processedPath": "samples/RainyCreek/Assets/Models/rock_c.obj",
+          "runtimePath": "assets/rainy-creek/Models/rock_c.obj"
+        },
+        {
+          "path": "Textures/rock.png",
+          "bytes": 4413420,
+          "sha256": "bbe9bec18c5e1295d025f47e1a8f8112324e9194ce78fa4a9456e780a36cdc1d",
+          "processedPath": "samples/RainyCreek/Assets/Textures/rock.png",
+          "runtimePath": "assets/rainy-creek/Textures/rock.png"
+        }
+      ],
+      "recipe": "tools/PrepareRainyCreekAssets.py"
+    },
+    {
+      "name": "Fern 02",
+      "url": "https://polyhaven.com/a/fern_02",
+      "license": "CC0-1.0",
+      "authors": [
+        "Rico Cilliers",
+        "Rob Tuytel"
+      ],
+      "sourceFormat": "glTF 2.0 and JPEG",
+      "sourceFiles": [
+        {
+          "path": "fern_02/alpha.jpg",
+          "bytes": 578755,
+          "sha256": "9882f62a38def23a8707584e413a9ef210bb5819d9c60179a003a250b3d06279",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/fern_02/fern_02_alpha_2k.jpg"
+        },
+        {
+          "path": "fern_02/fern_02.bin",
+          "bytes": 176176,
+          "sha256": "fe1abb762bcbbc7ad9e86925c8080437a62add257d9280e9142fdc85c226e64c",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/fern_02/fern_02.bin"
+        },
+        {
+          "path": "fern_02/fern_02.gltf",
+          "bytes": 6899,
+          "sha256": "50540d37531f93fd693d5340d5b3095c9d6d2834fa05c74bea797d54f290cb6a",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/2k/fern_02/fern_02_2k.gltf"
+        },
+        {
+          "path": "fern_02/textures/fern_02_arm_2k.jpg",
+          "bytes": 850856,
+          "sha256": "1eaf9bd29e2d83a77ca5d89bdddebcd9216b8b4ba244644580fe5b89bbe713f1",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/fern_02/fern_02_arm_2k.jpg"
+        },
+        {
+          "path": "fern_02/textures/fern_02_diff_2k.jpg",
+          "bytes": 993703,
+          "sha256": "9ee18172170728050871772e2cd6d8d37b52f9138e61b49b04486623f9caf84b",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/fern_02/fern_02_diff_2k.jpg"
+        },
+        {
+          "path": "fern_02/textures/fern_02_nor_gl_2k.jpg",
+          "bytes": 1365615,
+          "sha256": "dfe1ac4a428d21f7c134411500177d66b8dd800c8fec6f0040c50f44414a777b",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/fern_02/fern_02_nor_gl_2k.jpg"
+        }
+      ],
+      "files": [
+        {
+          "path": "Models/fern_b.obj",
+          "bytes": 66738,
+          "sha256": "7d875a93f946ef7e302b436556bf0a54cd3316c7f746bd31f8856392e0075208",
+          "processedPath": "samples/RainyCreek/Assets/Models/fern_b.obj",
+          "runtimePath": "assets/rainy-creek/Models/fern_b.obj"
+        },
+        {
+          "path": "Textures/fern.png",
+          "bytes": 2618388,
+          "sha256": "c1d06dd8b9724aa950aabcbc2a920f6b82aa238030f2670b863c37270752e179",
+          "processedPath": "samples/RainyCreek/Assets/Textures/fern.png",
+          "runtimePath": "assets/rainy-creek/Textures/fern.png",
+          "dimensions": [
+            2048,
+            2048
+          ]
+        }
+      ],
+      "recipe": "tools/PrepareRainyCreekAssets.py"
+    },
+    {
+      "name": "Dead Tree Trunk",
+      "url": "https://polyhaven.com/a/dead_tree_trunk",
+      "license": "CC0-1.0",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "sourceFormat": "glTF 2.0 and JPEG",
+      "sourceFiles": [
+        {
+          "path": "dead_tree_trunk/dead_tree_trunk.bin",
+          "bytes": 2293788,
+          "sha256": "c1ac6b3195246e8647a28eee2fbfdd4712a045c7cf2dcb4f5abcc2d40a446ca6",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/dead_tree_trunk/dead_tree_trunk.bin"
+        },
+        {
+          "path": "dead_tree_trunk/dead_tree_trunk.gltf",
+          "bytes": 2812,
+          "sha256": "63133e2cd4c8c9d08114ef158284403ba4fad802b7f1162f73a8323b509a1b53",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/2k/dead_tree_trunk/dead_tree_trunk_2k.gltf"
+        },
+        {
+          "path": "dead_tree_trunk/textures/dead_tree_trunk_arm_2k.jpg",
+          "bytes": 2608763,
+          "sha256": "f244cfbfab760d877980065593710f74947bb70eac9d47d9a189537d23ba1f6b",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/dead_tree_trunk/dead_tree_trunk_arm_2k.jpg"
+        },
+        {
+          "path": "dead_tree_trunk/textures/dead_tree_trunk_diff_2k.jpg",
+          "bytes": 2580084,
+          "sha256": "57b3f04a2b9b1017abfefbbca1b5d4f5421960fefd964a0b9dd4036be4d58d0c",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/dead_tree_trunk/dead_tree_trunk_diff_2k.jpg"
+        },
+        {
+          "path": "dead_tree_trunk/textures/dead_tree_trunk_nor_gl_2k.jpg",
+          "bytes": 3804907,
+          "sha256": "9447959386aa3ee0e3552bd095c3dbbcb13c58cc6a87cb4b51cc4517b695040c",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/dead_tree_trunk/dead_tree_trunk_nor_gl_2k.jpg"
+        }
+      ],
+      "files": [
+        {
+          "path": "Models/trunk_far.obj",
+          "bytes": 676551,
+          "sha256": "d2fd5072acff28c292f8bb86368c082b21ad0c05d4dc863cdc2dadee680fb9e4",
+          "processedPath": "samples/RainyCreek/Assets/Models/trunk_far.obj",
+          "runtimePath": "assets/rainy-creek/Models/trunk_far.obj"
+        },
+        {
+          "path": "Textures/trunk.png",
+          "bytes": 6164857,
+          "sha256": "fcb6c38c56da09e380551ca7f397eb8224e114148b23a16a1a34268c98e62d37",
+          "processedPath": "samples/RainyCreek/Assets/Textures/trunk.png",
+          "runtimePath": "assets/rainy-creek/Textures/trunk.png",
+          "dimensions": [
+            2048,
+            2048
+          ]
+        }
+      ],
+      "recipe": "tools/PrepareRainyCreekAssets.py"
+    },
+    {
+      "name": "Pine Sapling Small",
+      "url": "https://polyhaven.com/a/pine_sapling_small",
+      "license": "CC0-1.0",
+      "authors": [
+        "Rico Cilliers",
+        "Rob Tuytel"
+      ],
+      "sourceFormat": "glTF 2.0 and JPEG",
+      "sourceFiles": [
+        {
+          "path": "pine_sapling_small/alpha.jpg",
+          "bytes": 309956,
+          "sha256": "0c0580515bc044fd53e82b5dda1bd79520c1aa1a8c2ed3323e0498f962a50ada",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/pine_sapling_small/pine_sapling_small_twig_alpha_2k.jpg"
+        },
+        {
+          "path": "pine_sapling_small/pine_sapling_small.bin",
+          "bytes": 17771796,
+          "sha256": "b4d2fc73d53f1d8717eb5ef9a2c66957d2a53152787e543aace88fcd6fca94ef",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/pine_sapling_small/pine_sapling_small.bin"
+        },
+        {
+          "path": "pine_sapling_small/pine_sapling_small.gltf",
+          "bytes": 11442,
+          "sha256": "1869e078ec82aaa9cad002ad5be76538dac77bf5efd9ad98b2a0e6c11cca7c18",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/2k/pine_sapling_small/pine_sapling_small_2k.gltf"
+        },
+        {
+          "path": "pine_sapling_small/textures/pine_sapling_small_bark_arm_2k.jpg",
+          "bytes": 2941366,
+          "sha256": "7afccadf4d239dfbcb99338067bf1b4d0c3316b42021ac2d7cdf17f8dddb7346",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/pine_sapling_small/pine_sapling_small_bark_arm_2k.jpg"
+        },
+        {
+          "path": "pine_sapling_small/textures/pine_sapling_small_bark_diff_2k.jpg",
+          "bytes": 2700448,
+          "sha256": "359bb1be7aab30f5b79d391af9ef088503d6d135d529c9fc06bce60adf28ef60",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/pine_sapling_small/pine_sapling_small_bark_diff_2k.jpg"
+        },
+        {
+          "path": "pine_sapling_small/textures/pine_sapling_small_bark_nor_gl_2k.jpg",
+          "bytes": 3373886,
+          "sha256": "5b0cc5c45f8f42c2bb7f20518f6a06485d4eaa5444380907916e278517cc5b1e",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/pine_sapling_small/pine_sapling_small_bark_nor_gl_2k.jpg"
+        },
+        {
+          "path": "pine_sapling_small/textures/pine_sapling_small_twig_arm_2k.jpg",
+          "bytes": 1251644,
+          "sha256": "f7907164f65ac089d997a6759db63c3504d25a97ad6c26c9ef5a7f58b985d11d",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/pine_sapling_small/pine_sapling_small_twig_arm_2k.jpg"
+        },
+        {
+          "path": "pine_sapling_small/textures/pine_sapling_small_twig_diff_2k.jpg",
+          "bytes": 1542464,
+          "sha256": "216afcc5da6dca9e6286c516520e221cd1babf8a9cddf141cd4b98c2b10f4df0",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/pine_sapling_small/pine_sapling_small_twig_diff_2k.jpg"
+        },
+        {
+          "path": "pine_sapling_small/textures/pine_sapling_small_twig_nor_gl_2k.jpg",
+          "bytes": 2557993,
+          "sha256": "b28ea2a70a480b1931f328315fbe65a57e3db723c506839f670ced2626482a26",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/pine_sapling_small/pine_sapling_small_twig_nor_gl_2k.jpg"
+        }
+      ],
+      "files": [
+        {
+          "path": "Models/pine_bark_far.obj",
+          "bytes": 20445,
+          "sha256": "fb4e5a56201e34bab1bb55d2153458dbd0336697565107571011ce8f14125e4b",
+          "processedPath": "samples/RainyCreek/Assets/Models/pine_bark_far.obj",
+          "runtimePath": "assets/rainy-creek/Models/pine_bark_far.obj"
+        },
+        {
+          "path": "Models/pine_needles_far.obj",
+          "bytes": 1619760,
+          "sha256": "3c27c38ba4a9c23d26702726d722e91dff4f595c55b16cd183ef1c3e0c7394c7",
+          "processedPath": "samples/RainyCreek/Assets/Models/pine_needles_far.obj",
+          "runtimePath": "assets/rainy-creek/Models/pine_needles_far.obj"
+        },
+        {
+          "path": "Textures/pine_bark.png",
+          "bytes": 6038445,
+          "sha256": "cf0e39fc8d4f124c8e1a21872cf4a57b68be81416542282f78173ed428cbf626",
+          "processedPath": "samples/RainyCreek/Assets/Textures/pine_bark.png",
+          "runtimePath": "assets/rainy-creek/Textures/pine_bark.png",
+          "dimensions": [
+            2048,
+            2048
+          ]
+        },
+        {
+          "path": "Textures/pine_needles.png",
+          "bytes": 3672823,
+          "sha256": "85aa1cdbc931f4306266ce1d35a8a9a4eef5d6c428a4645d8a7f80b4c4319089",
+          "processedPath": "samples/RainyCreek/Assets/Textures/pine_needles.png",
+          "runtimePath": "assets/rainy-creek/Textures/pine_needles.png",
+          "dimensions": [
+            2048,
+            2048
+          ]
+        }
+      ],
+      "recipe": "tools/PrepareRainyCreekAssets.py"
+    },
+    {
+      "name": "Dandelion 01",
+      "url": "https://polyhaven.com/a/dandelion_01",
+      "license": "CC0-1.0",
+      "authors": {
+        "Rico Cilliers": "modeling",
+        "Rob Tuytel": "photography"
+      },
+      "sourceFormat": "glTF 2.0 and 8192 × 8192 JPEG/PNG",
+      "sourceManifest": "samples/FrontierCounty/Tools/DandelionSources.json",
+      "sourceFiles": {
+        "diff.jpg": {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/dandelion_01/dandelion_01_diff_8k.jpg",
+          "sha256": "3848711731ea4d39e7b1125bea316cbb3742a74a1e0ff39b130b59e20918b3d1",
+          "bytes": 13053252,
+          "dimensions": [
+            8192,
+            8192
+          ]
+        },
+        "alpha.png": {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/8k/dandelion_01/dandelion_01_alpha_8k.png",
+          "sha256": "7f334ace86540c4415689a014c86de2766be97bddbf6924f22826024bcca80f2",
+          "bytes": 1354424,
+          "dimensions": [
+            8192,
+            8192
+          ]
+        },
+        "normal.jpg": {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/dandelion_01/dandelion_01_nor_gl_8k.jpg",
+          "sha256": "8f9f0a72c85ee95e180fce3066620dd823ebb6bc1100e9a30a61fe46be04d917",
+          "bytes": 17977571,
+          "dimensions": [
+            8192,
+            8192
+          ]
+        },
+        "rough.jpg": {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/dandelion_01/dandelion_01_rough_8k.jpg",
+          "sha256": "6872b2bad6ff4ad06f8b6c67343827f265aeef3a6d99ce5455f64dfa96932a72",
+          "bytes": 11015823,
+          "dimensions": [
+            8192,
+            8192
+          ]
+        },
+        "dandelion.gltf": {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/dandelion_01/dandelion_01_8k.gltf",
+          "sha256": "a8753bafa5693d0aca6ddd48e0b845e9a16cce9587e04fa53db32ff961989c48",
+          "bytes": 8915
+        },
+        "dandelion_01.bin": {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/dandelion_01/dandelion_01.bin",
+          "sha256": "ccff5a564f56a69374c09c25ae86c3684c46329309b4eef4569255b1ad54bdd0",
+          "bytes": 1676648
+        }
+      },
+      "sourceNode": "dandelion_01_a_LOD0",
+      "sourceTriangles": 23542,
+      "runtimeTriangles": 1249,
+      "runtimeTextureSize": [
+        1024,
+        1024
+      ],
+      "files": [
+        {
+          "path": "flower.obj",
+          "bytes": 107313,
+          "sha256": "d8765957e7cb110a5356a3b0862a7adfba70a9ce7d5e9b7f4ef05e8eae52fe3a",
+          "processedPath": "samples/Assets/FrontierFlowers/flower.obj",
+          "runtimePath": "assets/FrontierFlowers/flower.obj"
+        },
+        {
+          "path": "albedo.png",
+          "bytes": 916500,
+          "sha256": "32725d4661e80b271c839915bc442e3785f08d47c38e3c3e0f438c3d37f88073",
+          "processedPath": "samples/Assets/FrontierFlowers/albedo.png",
+          "runtimePath": "assets/FrontierFlowers/albedo.png"
+        },
+        {
+          "path": "normal.png",
+          "bytes": 927753,
+          "sha256": "af9acc665902d667fae3ab3a0d8841385cb1b66aab1e37f5c2381d312ae8e92e",
+          "processedPath": "samples/Assets/FrontierFlowers/normal.png",
+          "runtimePath": "assets/FrontierFlowers/normal.png"
+        },
+        {
+          "path": "roughness.png",
+          "bytes": 316258,
+          "sha256": "9e839ac508bbf8e60d57f4a78e85806f06010b24d16f6e5883eee3a24406fe17",
+          "processedPath": "samples/Assets/FrontierFlowers/roughness.png",
+          "runtimePath": "assets/FrontierFlowers/roughness.png"
+        }
+      ],
+      "recipe": "samples/FrontierCounty/Tools/prepare_dandelion.py"
     }
   ]
 }

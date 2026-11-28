@@ -1,0 +1,71 @@
+#include "LuxRayWavelet.srt.h"
+#include "LuxRestirGrid.h"
+
+float WaveletWeight(float3 sampleColor, float3 center, float2 moments) {
+    const float sigma = sqrt(max(0.0f, moments.y - moments.x * moments.x));
+    const float difference = abs(log2(1.0f + RestirLuminance(sampleColor)) - log2(1.0f + RestirLuminance(center)));
+    return exp(-difference / max(0.06f, 2.0f * sigma));
+}
+
+ROOT_SIGNATURE(ComputeRootSignature)
+NUM_THREADS(8, 8, 1)
+void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
+{
+    INIT_MAIN;
+    const uint2 size = uint2(gScene.frameSize.xy);
+    const uint2 grid = RestirGrid(size, RestirSpacing(size));
+    if (threadId.x >= grid.x || threadId.y >= grid.y)
+        RETURN();
+    const uint cell = threadId.y * grid.x + threadId.x;
+    const uint start = cell * LUX_RESTIR_HISTORY_FLOATS4;
+#ifdef LUX_WAVELET_WIDE
+    const int stride = 2;
+    const uint readStride = LUX_RESTIR_CANDIDATE_FLOATS4, giOffset = 0u;
+    const uint dest = cell * LUX_RESTIR_OUTPUT_FLOATS4 + 3u;
+#else
+    const int stride = 1;
+    const uint readStride = LUX_RESTIR_HISTORY_FLOATS4, giOffset = 9u;
+    const uint dest = cell * LUX_RESTIR_CANDIDATE_FLOATS4;
+#endif
+    const uint specOffset = stride == 1 ? 8u : 1u;
+    const float4 gi = gSignal[cell * readStride + giOffset];
+    const float4 spec = gSignal[cell * readStride + specOffset];
+    const float4 position = gFeatures[start];
+    const float4 normal = gFeatures[start + 1u];
+    const float4 features = gFeatures[start + 3u]; // roughness and hit distances
+    const float4 moments = gFeatures[start + 10u];
+    float3 diffuseSum = gi.rgb, specSum = spec.rgb;
+    float diffuseWeight = 1.0f, specWeight = 1.0f;
+    if (position.w > 0.0f && (gi.w > 0.0f || spec.w > 0.0f)) {
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                if (x == 0 && y == 0) continue;
+                const int2 at = int2(threadId.xy) + int2(x, y) * stride;
+                if (at.x < 0 || at.y < 0 || at.x >= int(grid.x) || at.y >= int(grid.y)) continue;
+                const uint neighbor = uint(at.y) * grid.x + uint(at.x);
+                const uint j = neighbor * LUX_RESTIR_HISTORY_FLOATS4;
+                const float4 p = gFeatures[j], n = gFeatures[j + 1u];
+                if (p.w <= 0.0f || n.w != normal.w) continue;
+                const float plane = abs(dot(p.xyz - position.xyz, normal.xyz));
+                const float base = exp(-plane / max(0.007f, position.w * 0.0015f)) *
+                               pow(saturate(dot(n.xyz, normal.xyz)), 48.0f) * ((x * y == 0) ? 0.5f : 0.25f);
+                const float4 other = gFeatures[j + 3u];
+                const float4 diffuse = gSignal[neighbor * readStride + giOffset];
+                const float4 gloss = gSignal[neighbor * readStride + specOffset];
+                if (gi.w > 0.0f && diffuse.w > 0.0f) {
+                    const float weight = base * WaveletWeight(diffuse.rgb, gi.rgb, moments.xy);
+                    diffuseSum += diffuse.rgb * weight; diffuseWeight += weight;
+                }
+                if (spec.w > 0.0f && gloss.w > 0.0f && (features.z < 0.0f) == (other.z < 0.0f)) {
+                    const float hitWeight = exp(-abs(features.z - other.z) / max(0.04f, abs(features.z) * 0.12f));
+                    const float weight = base * hitWeight * exp(-32.0f * abs(features.x - other.x)) *
+                                         WaveletWeight(gloss.rgb, spec.rgb, moments.zw);
+                    specSum += gloss.rgb * weight; specWeight += weight;
+                }
+            }
+        }
+    }
+    gFiltered[dest] = float4(diffuseSum / diffuseWeight, gi.w);
+    gFiltered[dest + 1u] = float4(specSum / specWeight, spec.w);
+    RETURN();
+}

@@ -9,7 +9,7 @@ namespace LuxEngine::Rhi {
 
 inline uint32 VirtualShadowPageMask(const Mat4& shadowProjection, const Mat4& relativeModel,
                                     Vec3 minimum, Vec3 maximum, uint32 resolution,
-                                    double normalBias) {
+                                    double normalBias, double filterTexels = 2.0) {
     // The directional projection is orthographic. Bound the projected local box using the
     // affine interval transform; unusual projective models request all pages.
     const Mat4 clip = shadowProjection * relativeModel;
@@ -33,7 +33,7 @@ inline uint32 VirtualShadowPageMask(const Mat4& shadowProjection, const Mat4& re
     const auto radius = [&](int row) {
         const auto& s = shadowProjection.elements;
         const double bias = normalBias * std::hypot(s[row], s[row + 4], s[row + 8]);
-        return .5 * (projectExtent(row) + bias) / w + 2.0 / resolution;
+        return .5 * (projectExtent(row) + bias) / w + filterTexels / resolution;
     };
     const double radiusX = radius(0), radiusY = radius(1);
     if (!std::isfinite(centerX + radiusX) || !std::isfinite(centerY + radiusY))

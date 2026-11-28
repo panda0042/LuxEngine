@@ -19,11 +19,16 @@ enum class TextureColorSpace { Linear, Srgb };
 
 enum class TextureAddressMode { Clamp, Repeat };
 
+// PerceptualRoughness averages the GGX slope-variance parameter r⁴. NormalVariance
+// stores the length of the mean normal in alpha. Use Default for packed normal/foam maps.
+enum class TextureMipSemantic { Default, NormalVariance, PerceptualRoughness };
+
 struct TextureSampling {
     bool mipmaps = false;
     TextureAddressMode addressMode = TextureAddressMode::Clamp;
     bool anisotropic = false;
     bool normalMap = false;
+    TextureMipSemantic mipSemantic = TextureMipSemantic::Default;
 };
 
 struct TextureMipLevel {
@@ -35,7 +40,8 @@ struct TextureMipLevel {
 // A positive mask cutoff stores the covered area in alpha from mip level 1 onward.
 LUX_API bool BuildTextureMipChain(uint32 width, uint32 height, std::span<const uint8> pixels,
                                   TextureColorSpace colorSpace, bool normalMap,
-                                  std::vector<TextureMipLevel>& output, float alphaMaskCutoff = 0);
+                                  std::vector<TextureMipLevel>& output, float alphaMaskCutoff = 0,
+                                  TextureMipSemantic semantic = TextureMipSemantic::Default);
 
 class LUX_API GpuTexture {
 public:
@@ -80,6 +86,7 @@ private:
     uint32 height_ = 0;
     uint32 mipCount_ = 0;
     size_t storageBytes_ = 0;
+    bool normalVariance_ = false;
     float alphaMaskCutoff_ = 0;
     TextureColorSpace colorSpace_ = TextureColorSpace::Linear;
 };

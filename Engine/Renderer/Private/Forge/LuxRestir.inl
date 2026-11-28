@@ -3,7 +3,7 @@
 constexpr uint32_t kRestirMaxAxis = 640;
 constexpr uint32_t kRestirCandidateVectors = 9;
 constexpr uint32_t kRestirOutputVectors = 5;
-constexpr uint32_t kRestirHistoryVectors = 10;
+constexpr uint32_t kRestirHistoryVectors = 11;
 constexpr uint32_t kRestirVectorSize = sizeof(float) * 4;
 constexpr uint32_t kRestirEffects = 16u | 32u;
 
@@ -11,7 +11,7 @@ void ShutdownRestir(LuxForgeDevice* device) {
     if (!device->restir)
         return;
     auto& restir = *device->restir;
-    for (uint32_t i = 0; i < 2; ++i) {
+    for (uint32_t i = 0; i < 4; ++i) {
         if (restir.sets[i])
             removeDescriptorSet(device->renderer, restir.sets[i]);
         if (restir.pipelines[i])
@@ -99,6 +99,33 @@ bool InitRestir(LuxForgeDevice* device, LuxForgeRestir& restir) {
     resolve.mComputeDesc.pShaderProgram = restir.shaders[1];
     addPipeline(device->renderer, &resolve, &restir.pipelines[1]);
     return restir.pipelines[0] && restir.pipelines[1] && restir.sets[0] && restir.sets[1];
+}
+
+bool InitRayWavelet(LuxForgeDevice* device, LuxForgeRestir& restir) {
+    if (restir.pipelines[3])
+        return true;
+    const uint32_t entries = device->framesInFlight * LuxForgeDevice::kMaxScenePasses;
+    const DescriptorSetDesc set = SRT_SET_DESC(LuxRayWaveletSrt, Persistent, entries, 0);
+    for (unsigned i = 2; i < 4; ++i) {
+        if (!restir.sets[i])
+            addDescriptorSet(device->renderer, &set, &restir.sets[i]);
+        ShaderLoadDesc load = {};
+        load.mComp.pFileName = i == 2 ? "luxraywavelet.comp" : "luxraywaveletwide.comp";
+        if (!restir.shaders[i])
+            addShader(device->renderer, &load, &restir.shaders[i]);
+        if (!restir.sets[i] || !restir.shaders[i])
+            return false;
+        PipelineDesc pipeline = {};
+        pipeline.mType = PIPELINE_TYPE_COMPUTE;
+        PIPELINE_LAYOUT_DESC(pipeline, SRT_LAYOUT_DESC(LuxRayWaveletSrt, Persistent), NULL, NULL,
+                             NULL);
+        pipeline.mComputeDesc.pShaderProgram = restir.shaders[i];
+        if (!restir.pipelines[i])
+            addPipeline(device->renderer, &pipeline, &restir.pipelines[i]);
+        if (!restir.pipelines[i])
+            return false;
+    }
+    return true;
 }
 
 Buffer* CreateRestirBuffer(uint32_t elements, ResourceState sampleState, const char* name) {
@@ -192,11 +219,30 @@ Buffer* DispatchRestir(LuxForgeDevice* device, const LuxForgeScene& scene, uint3
         distanceSquared += displacement * displacement;
         alignment += scene.forward[i] * restir.forward[i];
     }
-    const bool history = restir.fullHistory && restir.frame && restir.frame + 1 == frame &&
-                         pass == 0 && restir.view == scene.temporalView &&
-                         restir.environment == scene.environmentMap &&
-                         device->width == restir.width && device->height == restir.height &&
-                         restir.effects == signature && distanceSquared < 576 && alignment > .75;
+    if (denoise && !InitRayWavelet(device, restir))
+        return nullptr;
+    const auto* light = reinterpret_cast<const float*>(
+        static_cast<const uint8_t*>(device->lightBuffers[device->frameSlot]->pCpuMappedAddress) +
+        device->currentLight * LuxForgeDevice::kLightStride);
+    std::array<float, 12> illumination{};
+    for (unsigned i = 0; i < 3; ++i) {
+        illumination[i] = light[i];
+        illumination[3 + i] = std::log2(1.f + std::max(0.f, light[4 + i] * light[7]));
+        illumination[6 + i] =
+            std::log2(1.f + std::max(0.f, scene.environment[i] * scene.environment[3]));
+    }
+    illumination[9] = scene.skyLighting[0];
+    illumination[10] = scene.atmosphere[2];
+    illumination[11] = scene.rayOptions[2];
+    bool relit = false;
+    for (unsigned i = 0; i < illumination.size(); ++i)
+        relit |= std::abs(illumination[i] - restir.illumination[i]) > .18f;
+    restir.illumination = illumination;
+    const bool history =
+        !relit && restir.fullHistory && restir.frame && restir.frame + 1 == frame && pass == 0 &&
+        restir.view == scene.temporalView && restir.environment == scene.environmentMap &&
+        device->width == restir.width && device->height == restir.height &&
+        restir.effects == signature && distanceSquared < 576 && alignment > .75;
     std::copy(restir.matrix.begin(), restir.matrix.end(), parameters.begin());
     parameters[19] = history ? 1.f : 0.f;
     parameters[20] = (scene.temporalRestir || denoise) ? float(frame % 65536) : 0.f;
@@ -210,7 +256,15 @@ Buffer* DispatchRestir(LuxForgeDevice* device, const LuxForgeScene& scene, uint3
     auto* acceleration = rays.scene;
     auto* instanceData = rays.instances;
     auto* triangleData = rays.triangles;
-    DescriptorData init[7] = {};
+    auto* fallback = device->textures[device->whiteTexture].texture;
+    const bool dynamicSky = scene.skyLighting[0] > .5f;
+    auto* gloss = dynamicSky ? device->skyCache.stages[2].output.target->pTexture : fallback;
+    auto* harmonics = dynamicSky ? device->skyCache.stages[1].output.target->pTexture : fallback;
+    DescriptorData init[9] = {};
+    init[7].mIndex = SRT_RES_IDX(LuxRestirInitSrt, Persistent, gRaySkyGloss);
+    init[7].ppTextures = &gloss;
+    init[8].mIndex = SRT_RES_IDX(LuxRestirInitSrt, Persistent, gRaySkySH);
+    init[8].ppTextures = &harmonics;
     init[0].mIndex = SRT_RES_IDX(LuxRestirInitSrt, Persistent, gScene);
     init[0].ppBuffers = &device->sceneUniforms[device->frameSlot];
     init[0].pRanges = &range;
@@ -275,11 +329,44 @@ Buffer* DispatchRestir(LuxForgeDevice* device, const LuxForgeScene& scene, uint3
     BindDescriptors(device, cmd, lighting, device->lightSet);
     cmdDispatch(cmd, (width + 7) / 8, (height + 7) / 8, 1);
 
-    BufferBarrier readOutput[] = {
-        {restir.output, RESOURCE_STATE_UNORDERED_ACCESS, RESOURCE_STATE_PIXEL_SHADER_RESOURCE},
-        {restir.history[next], RESOURCE_STATE_UNORDERED_ACCESS,
-         RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
-    cmdResourceBarrier(cmd, 2, readOutput, 0, nullptr, 0, nullptr);
+    BufferBarrier readHistory = {restir.history[next], RESOURCE_STATE_UNORDERED_ACCESS,
+                                 RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+    cmdResourceBarrier(cmd, 1, &readHistory, 0, nullptr, 0, nullptr);
+    if (denoise) {
+        // The candidates are consumed by resampling. Reuse their allocation as the
+        // first wavelet pass' scratch image, preserving independent diffuse/specular histories.
+        BufferBarrier toScratch{restir.candidates, RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                RESOURCE_STATE_UNORDERED_ACCESS};
+        cmdResourceBarrier(cmd, 1, &toScratch, 0, nullptr, 0, nullptr);
+        for (unsigned step = 0; step < 2; ++step) {
+            Buffer* source = step ? restir.candidates : restir.history[next];
+            Buffer* target = step ? restir.output : restir.candidates;
+            DescriptorData filter[4] = {};
+            filter[0].mIndex = SRT_RES_IDX(LuxRayWaveletSrt, Persistent, gScene);
+            filter[0].ppBuffers = &device->sceneUniforms[device->frameSlot];
+            filter[0].pRanges = &range;
+            filter[1].mIndex = SRT_RES_IDX(LuxRayWaveletSrt, Persistent, gFeatures);
+            filter[1].ppBuffers = &restir.history[next];
+            filter[2].mIndex = SRT_RES_IDX(LuxRayWaveletSrt, Persistent, gSignal);
+            filter[2].ppBuffers = &source;
+            filter[3].mIndex = SRT_RES_IDX(LuxRayWaveletSrt, Persistent, gFiltered);
+            filter[3].ppBuffers = &target;
+            updateDescriptorSet(device->renderer, entry, restir.sets[2 + step], 4, filter);
+            BindPipeline(device, cmd, restir.pipelines[2 + step]);
+            BindDescriptors(device, cmd, entry, restir.sets[2 + step]);
+            cmdDispatch(cmd, (width + 7) / 8, (height + 7) / 8, 1);
+            if (step == 0) {
+                BufferBarrier nextStep[] = {readCandidates,
+                                            {restir.output, RESOURCE_STATE_UNORDERED_ACCESS,
+                                             RESOURCE_STATE_UNORDERED_ACCESS}};
+                cmdResourceBarrier(cmd, 2, nextStep, 0, nullptr, 0, nullptr);
+            }
+        }
+        device->frameStats.computeDispatches += 2;
+    }
+    BufferBarrier readOutput{restir.output, RESOURCE_STATE_UNORDERED_ACCESS,
+                             RESOURCE_STATE_PIXEL_SHADER_RESOURCE};
+    cmdResourceBarrier(cmd, 1, &readOutput, 0, nullptr, 0, nullptr);
     device->frameStats.computeDispatches += 2;
     device->frameStats.uniformBinds += 2; // The two persistent sets each bind the scene cbuffer.
     device->frameStats.restirPasses += (effects & kRestirEffects) != 0;

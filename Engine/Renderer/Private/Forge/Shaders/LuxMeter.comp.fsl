@@ -1,0 +1,31 @@
+#include "LuxMeter.srt.h"
+GroupShared(uint, counts[64]);
+GroupShared(uint, fractions[64]);
+
+ROOT_SIGNATURE(ComputeRootSignature)
+NUM_THREADS(8, 8, 1)
+void CS_MAIN(SV_GroupID(uint3) group, SV_GroupThreadID(uint3) tid)
+{
+    INIT_MAIN;
+    const uint lane = 8u*tid.y + tid.x;
+    counts[lane] = 0u;
+    fractions[lane] = 0u;
+    GroupMemoryBarrier();
+    // A fixed 128² stratified grid keeps work independent of the render resolution.
+    for (uint y = 0u; y != 4u; ++y) {
+        for (uint x = 0u; x != 4u; ++x) {
+            const float2 uv = (float2(32u*group.xy + 4u*tid.xy + uint2(x,y)) + .5f)/128.0f;
+            const float4 sampleValue = SampleLvlTex2D(gMeterSource, gSamplerPointClamp, uv, 0.0f);
+            const uint weight = uint(round(255.0f*saturate(sampleValue.a)));
+            const float luma = dot(sampleValue.rgb, float3(.2126f,.7152f,.0722f))/max(sampleValue.a,1e-6f);
+            const float coordinate = clamp((log2(max(luma,1.5258789e-5f))+16.0f)*2.0f,0.0f,63.999f);
+            const uint bin = uint(coordinate);
+            uint unusedValue;
+            AtomicAdd(counts[bin], weight, unusedValue);
+            AtomicAdd(fractions[bin], uint(round(frac(coordinate)*255.0f))*weight, unusedValue);
+        }
+    }
+    GroupMemoryBarrier();
+    gMeterBins[(group.y*4u+group.x)*64u+lane] = uint2(counts[lane],fractions[lane]);
+    RETURN();
+}

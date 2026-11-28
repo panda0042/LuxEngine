@@ -44,6 +44,10 @@ struct SceneDrawDesc {
     uint64 emissiveTexture = 0;
     uint64 heightTexture = 0, terrainHeight = 0;
     float parallaxDepth = 0, heightBlend = 0;
+    uint64 previousVertexBuffer = 0;
+    Vec4 lobes{}, optics{}, specular{};
+    std::array<uint64, 5> surfaceMaps{};
+    float lodTransition = 0;
 };
 
 // HDR scene path (PBR, shadows, image-based lighting) owned by a backend.
@@ -107,6 +111,9 @@ public:
     virtual bool CreateOceanBuffer(uint32 resolution, std::span<const float> modes,
                                    float patchLength, float foamThreshold, float foamSoftness,
                                    uint64& handle) = 0;
+    virtual bool CreateSkinBuffer(uint32 vertices, uint32 bones, std::span<const float> seed,
+                                  uint64& handle) = 0;
+    virtual bool UpdateSkinBuffer(uint64 handle, std::span<const float> palette) = 0;
     virtual bool UpdateOceanBuffer(uint64 handle, float timeSeconds) = 0;
     virtual bool UpdateBuffer(uint64 handle, const void* data, uint32 sizeBytes,
                               uint32 offsetBytes) = 0;
