@@ -1,7 +1,7 @@
 // Compiled inside LuxForge.cpp alongside the scene and device resource helpers.
 
-constexpr uint32_t kFogUniformStride = 256;
-constexpr ResourceState kFogVolumeSample = RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+constexpr uint32_t kFogUniformStride = 1024;
+constexpr ResourceState kFogVolumeSample = RESOURCE_STATE_SHADER_RESOURCE;
 constexpr ResourceState kFogVolumeWrite = RESOURCE_STATE_UNORDERED_ACCESS;
 
 struct FogConstants {
@@ -17,9 +17,12 @@ struct FogConstants {
     float shadowOptions[4];
     float composite[4];
     uint32_t virtualShadowPages[4];
+    float media[4], local[4][4], localDensity[4], noiseOrigin[4];
+    float cloud[4], previousViewProjection[16], displacement[4];
+    float pointPosition[16][4], pointRadiance[16][4];
 };
 
-static_assert(sizeof(FogConstants) == 240);
+static_assert(sizeof(FogConstants) == 960 && sizeof(FogConstants) <= kFogUniformStride);
 
 void ShutdownFog(LuxForgeDevice* device) {
     auto* fog = device->fog;
@@ -42,7 +45,7 @@ void ShutdownFog(LuxForgeDevice* device) {
     for (auto* shader : {fog->computeShader, fog->compositeShader, fog->hdrShader})
         if (shader)
             removeShader(device->renderer, shader);
-    for (auto* buffer : {fog->constants, fog->volume})
+    for (auto* buffer : {fog->constants, fog->volume, fog->history})
         if (buffer)
             removeResource(buffer);
     delete fog;
@@ -88,7 +91,10 @@ bool InitFog(LuxForgeDevice* device) {
     volume.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
     volume.mDesc.pName = "LuxForge integrated froxels";
     addResource(&volume, nullptr);
-    if (!fog.computeSet || !fog.compositeSet || !fog.constants ||
+    volume.ppBuffer = &fog.history;
+    volume.mDesc.pName = "LuxForge previous integrated froxels";
+    addResource(&volume, nullptr);
+    if (!fog.history || !fog.computeSet || !fog.compositeSet || !fog.constants ||
         !fog.constants->pCpuMappedAddress || !fog.volume)
         return false;
 
@@ -169,9 +175,21 @@ void FillFogConstants(LuxForgeDevice* device, const LuxForgeScene& scene, bool s
     std::memcpy(fog.forward, scene.forward, sizeof(fog.forward));
     std::memcpy(fog.colorDensity, scene.fogColorDensity, sizeof(fog.colorDensity));
     std::memcpy(fog.options, scene.fogOptions, sizeof(fog.options));
+    std::memcpy(fog.media, scene.fogMedia, sizeof(fog.media));
+    std::memcpy(fog.local, scene.fogLocal, sizeof(fog.local));
+    std::memcpy(fog.localDensity, scene.fogLocalDensity, sizeof(fog.localDensity));
+    for (uint32_t axis = 0; axis < 3; ++axis)
+        fog.noiseOrigin[axis] =
+            static_cast<float>(std::remainder(scene.temporalOrigin[axis], 512.));
+    fog.cloud[0] = scene.skyLighting[1];
+    fog.cloud[1] = scene.atmosphere[2];
+    fog.cloud[2] = scene.atmosphere[3];
+    fog.cloud[3] = scene.postDebugView == 28u ? 1.f : 0.f;
     std::memcpy(fog.shadowMatrix, scene.shadowMatrix, sizeof(fog.shadowMatrix));
     if (shadows)
         std::memcpy(fog.shadowOptions, scene.shadowOptions, sizeof(fog.shadowOptions));
+    if (fog.shadowOptions[0] > 0 && scene.shadowCascades[3][3] > 0)
+        fog.shadowOptions[0] = 2.f;
     fog.composite[0] = 1.f / device->width;
     fog.composite[1] = 1.f / device->height;
     fog.composite[2] = scene.camera[3];
@@ -180,6 +198,12 @@ void FillFogConstants(LuxForgeDevice* device, const LuxForgeScene& scene, bool s
     const auto* lights = reinterpret_cast<const float*>(
         static_cast<const uint8_t*>(device->lightBuffers[device->frameSlot]->pCpuMappedAddress) +
         static_cast<size_t>(device->currentLight) * LuxForgeDevice::kLightStride);
+    uint32_t pointCount = 0;
+    std::memcpy(&pointCount, lights + 8, sizeof(pointCount));
+    pointCount = std::min(pointCount, 16u);
+    fog.noiseOrigin[3] = static_cast<float>(pointCount);
+    std::memcpy(fog.pointPosition, lights + 16, pointCount * sizeof(float[4]));
+    std::memcpy(fog.pointRadiance, lights + 80, pointCount * sizeof(float[4]));
     for (uint32_t axis = 0; axis < 3; ++axis) {
         fog.lightDirection[axis] = -lights[axis];
         fog.lightRadiance[axis] = std::max(lights[axis + 4], 0.f) * std::max(lights[7], 0.f);
@@ -191,7 +215,8 @@ bool RenderFog(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass
                bool shadows, [[maybe_unused]] AccelerationStructure* rayScene = nullptr,
                const uint32_t* virtualShadowPages = nullptr, Texture* resolved = nullptr,
                LuxForgeDevice::SceneTarget* hdrOutput = nullptr) {
-    if (!(scene.fogColorDensity[3] > 0) || !(scene.fogOptions[0] > 0) || !InitFog(device))
+    if (!(scene.fogColorDensity[3] > 0 || scene.fogMedia[3] > 0) || !(scene.fogOptions[0] > 0) ||
+        !InitFog(device))
         return false;
     auto& fog = *device->fog;
     if (hdrOutput && !fog.hdrPipeline)
@@ -200,6 +225,29 @@ bool RenderFog(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass
     const uint32_t offset = entry * kFogUniformStride;
     FogConstants constants = {};
     FillFogConstants(device, scene, shadows, constants);
+    const uint64_t frame = device->frameNumber + 1;
+    bool canReproject = pass == 0 && scene.temporalView != 0 &&
+                        fog.lastView == scene.temporalView && frame == fog.lastFrame + 1 &&
+                        fog.maxDistance == scene.fogOptions[0];
+    double travelSquared = 0;
+    float facing = 0;
+    for (uint32_t axis = 0; axis < 3; ++axis) {
+        const double delta = scene.temporalOrigin[axis] - fog.origin[axis];
+        constants.displacement[axis] = static_cast<float>(delta);
+        travelSquared += delta * delta;
+        facing += scene.forward[axis] * fog.forward[axis];
+    }
+    canReproject &= facing > .88f && travelSquared < .04 * fog.maxDistance * fog.maxDistance;
+    if (!canReproject)
+        constants.media[2] = 0;
+    std::memcpy(constants.previousViewProjection, fog.projection, sizeof(fog.projection));
+    std::memcpy(fog.projection, scene.viewProjection, sizeof(fog.projection));
+    std::memcpy(fog.origin, scene.temporalOrigin, sizeof(fog.origin));
+    std::memcpy(fog.forward, scene.forward, sizeof(fog.forward));
+    fog.maxDistance = scene.fogOptions[0];
+    fog.lastFrame = frame;
+    fog.lastView = pass == 0 ? scene.temporalView : 0;
+    std::swap(fog.history, fog.volume);
     if (virtualShadowPages)
         std::memcpy(constants.virtualShadowPages, virtualShadowPages,
                     sizeof(constants.virtualShadowPages));
@@ -214,7 +262,11 @@ bool RenderFog(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass
     auto& color = water ? device->waterHdr : device->hdr;
     auto& depth = water ? device->waterDepth : device->sceneDepth;
     DescriptorDataRange range = {offset, sizeof(FogConstants), 0};
-    DescriptorData compute[3] = {};
+    Texture* cloud = scene.skyLighting[1] > 0 ? device->skyCache.stages[3].output.target->pTexture
+                                              : device->textures[device->whiteTexture].texture;
+    DescriptorData compute[5] = {};
+    compute[3].ppBuffers = &fog.history;
+    compute[4].ppTextures = &cloud;
     compute[0].ppBuffers = &fog.constants;
     compute[0].pRanges = &range;
     compute[2].ppBuffers = &fog.volume;
@@ -228,7 +280,9 @@ bool RenderFog(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass
         compute[1].mIndex = SRT_RES_IDX(LuxFogRayComputeSrt, Persistent, gRayScene);
         compute[1].ppAccelerationStructures = &rayScene;
         compute[2].mIndex = SRT_RES_IDX(LuxFogRayComputeSrt, Persistent, gFogVolume);
-        updateDescriptorSet(device->renderer, entry, computeSet, 3, compute);
+        compute[3].mIndex = SRT_RES_IDX(LuxFogRayComputeSrt, Persistent, gFogHistory);
+        compute[4].mIndex = SRT_RES_IDX(LuxFogRayComputeSrt, Persistent, gFogCloud);
+        updateDescriptorSet(device->renderer, entry, computeSet, 5, compute);
     } else
 #endif
     {
@@ -238,7 +292,9 @@ bool RenderFog(LuxForgeDevice* device, const LuxForgeScene& scene, uint32_t pass
         compute[1].mIndex = SRT_RES_IDX(LuxFogComputeSrt, Persistent, gFogShadow);
         compute[1].ppTextures = &shadow;
         compute[2].mIndex = SRT_RES_IDX(LuxFogComputeSrt, Persistent, gFogVolume);
-        updateDescriptorSet(device->renderer, entry, computeSet, 3, compute);
+        compute[3].mIndex = SRT_RES_IDX(LuxFogComputeSrt, Persistent, gFogHistory);
+        compute[4].mIndex = SRT_RES_IDX(LuxFogComputeSrt, Persistent, gFogCloud);
+        updateDescriptorSet(device->renderer, entry, computeSet, 5, compute);
     }
 
     DescriptorData composite[4] = {};

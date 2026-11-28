@@ -49,8 +49,11 @@ bool AppendProjectedDecal(const DecalProjector& p, std::span<const Vertex3D> rec
     if (!Finite(p.center) || !Finite(p.normal) || !Finite(p.tangent) || !Finite(p.halfSize) ||
         std::min({p.halfSize.x, p.halfSize.y, p.halfSize.z}) <= 0 ||
         !std::isfinite(p.normalOffset) || p.normalOffset < 0 || !std::isfinite(p.minimumFacing) ||
-        std::abs(p.minimumFacing) > 1 || !std::isfinite(p.tint.x) || !std::isfinite(p.tint.y) ||
-        !std::isfinite(p.tint.z) || !std::isfinite(p.tint.w) || triangles.size() % 3 != 0)
+        std::abs(p.minimumFacing) > 1 || !std::isfinite(p.uvOrigin.x) ||
+        !std::isfinite(p.uvOrigin.y) || !std::isfinite(p.uvSize.x) || !std::isfinite(p.uvSize.y) ||
+        p.uvSize.x <= 0 || p.uvSize.y <= 0 || !std::isfinite(p.tint.x) ||
+        !std::isfinite(p.tint.y) || !std::isfinite(p.tint.z) || !std::isfinite(p.tint.w) ||
+        triangles.size() % 3 != 0)
         return false;
     const auto normal = p.normal.Normalized();
     const auto u = (p.tangent - normal * p.tangent.Dot(normal)).Normalized();
@@ -99,11 +102,34 @@ bool AppendProjectedDecal(const DecalProjector& p, std::span<const Vertex3D> rec
             vertices.push_back(
                 {point.position + n * p.normalOffset,
                  n,
-                 {.5 + .5 * point.coordinate[0] / half[0], .5 - .5 * point.coordinate[1] / half[1]},
+                 {p.uvOrigin.x + p.uvSize.x * (.5 + .5 * point.coordinate[0] / half[0]),
+                  p.uvOrigin.y + p.uvSize.y * (.5 - .5 * point.coordinate[1] / half[1])},
                  p.tint});
         }
         for (uint32 j = 1; j + 1 < count; ++j)
             indices.insert(indices.end(), {base, base + j, base + j + 1});
+    }
+    return true;
+}
+
+bool AppendProjectedDecals(std::span<const DecalProjector> projectors,
+                           std::span<const Vertex3D> receiver, std::span<const uint32> triangles,
+                           std::vector<Vertex3D>& vertices, std::vector<uint32>& indices) {
+    if (projectors.size() == 1)
+        return AppendProjectedDecal(projectors.front(), receiver, triangles, vertices, indices);
+    std::vector<const DecalProjector*> sorted;
+    sorted.reserve(projectors.size());
+    for (const auto& p : projectors)
+        sorted.push_back(&p);
+    std::stable_sort(sorted.begin(), sorted.end(),
+                     [](const auto* a, const auto* b) { return a->layer < b->layer; });
+    const auto startVertices = vertices.size(), startIndices = indices.size();
+    for (const auto* p : sorted) {
+        if (!AppendProjectedDecal(*p, receiver, triangles, vertices, indices)) {
+            vertices.resize(startVertices);
+            indices.resize(startIndices);
+            return false;
+        }
     }
     return true;
 }

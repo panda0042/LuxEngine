@@ -12,6 +12,8 @@ struct DecalProjector {
     double normalOffset = .002;
     double minimumFacing = .2;
     Vec4 tint{1, 1, 1, 1};
+    Vec2 uvOrigin{}, uvSize{1, 1}; // Region of a shared decal atlas.
+    int32 layer = 0;               // Ascending painter order within a projected batch.
 };
 
 // Clips receiver triangles to the projector, preserving their surface normals.
@@ -21,4 +23,8 @@ LUX_API bool AppendProjectedDecal(const DecalProjector& projector,
                                   std::span<const Vertex3D> receiver,
                                   std::span<const uint32> triangles,
                                   std::vector<Vertex3D>& vertices, std::vector<uint32>& indices);
+LUX_API bool AppendProjectedDecals(std::span<const DecalProjector> projectors,
+                                   std::span<const Vertex3D> receiver,
+                                   std::span<const uint32> triangles,
+                                   std::vector<Vertex3D>& vertices, std::vector<uint32>& indices);
 } // namespace LuxEngine

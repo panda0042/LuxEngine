@@ -21,7 +21,15 @@ STRUCT(LuxDraw) {
     DATA(float4, emissive, None); // linear HDR radiance and textured flag
     // POM depth in metres, layer height contrast, base and layer height flags.
     DATA(float4, relief, None);
-    DATA(float4, previousWind, None); // x: previous time
+    DATA(float4, previousWind, None); // time, surface ID, FFT history flag, stable coverage seed
+    DATA(float4, previousPhaseX, None);
+    DATA(float4, previousPhaseZ, None);
+    DATA(float4, previousDeformation, None); // old wind.xy, amplitude, breaker height
+    DATA(float4, lobes, None);
+    DATA(float4, optics, None);
+    DATA(float4, specular, None);
+    DATA(float4, lod, None);
+    DATA(float4, previousCoast, None); // old unwrapped-minus-wrapped origin, breaker time
 };
 
 STRUCT(LuxScreenLightingData) {
@@ -62,6 +70,12 @@ STRUCT(LuxSceneData) {
     DATA(float4, atmosphere, None);
     DATA(float4, wind, None);
     DATA(float4, weatherOrigin, None);
+    DATA(float4, foliageContacts[2], None);
+    DATA(float4, previousContacts[2], None);
+    DATA(float4, skyLighting, None);
+    DATA(float4, solarSource, None);
+    DATA(float4, shadowCascades[4], None);
+    DATA(float4, shadowMetrics, None);
 };
 
 #endif

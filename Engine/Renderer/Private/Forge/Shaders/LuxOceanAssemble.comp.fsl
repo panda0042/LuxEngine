@@ -44,7 +44,10 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
     const uint4 positionAndRed = asuint(float4(position, 1.0f));
     const uint4 colorAndU = asuint(float4(1.0f, 1.0f, 1.0f - foam, uv.x));
     const uint4 vAndNormal = asuint(float4(uv.y, upward));
-    const uint4 bounds = asuint(float4(0.0f, 0.0f, 1.0f, 1.0f));
+    // Ocean vertices do not sample atlas UV bounds. Reuse those lanes to retain
+    // the immediately preceding GPU-displaced position, without a CPU readback.
+    const float3 lastPosition = gOcean.params2.z > 0.5f ? asfloat(LoadByte3(gOutput, address)) : position;
+    const uint4 bounds = asuint(float4(0.0f, lastPosition));
     StoreByte4(gOutput, address, positionAndRed);
     StoreByte4(gOutput, address + 16u, colorAndU);
     StoreByte4(gOutput, address + 32u, vAndNormal);

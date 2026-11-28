@@ -143,6 +143,22 @@ void Test() {
     settings.render3D.physicallyBasedBloom = true;
     settings.render3D.apertureBlades = 7;
     settings.render3D.physicalCamera = {true, true, 400, .02f, 2.8f, 18, 320};
+    settings.render3D.metering = {.2f, .8f, -2, 7, 1, 4, .25f};
+    settings.render3D.physicalCamera.autofocusSpeed = 3;
+    settings.render3D.colorGrade.temperatureK = 5800;
+    settings.render3D.colorGrade.shadows = {.01f, 0, -.02f};
+    settings.render3D.secondaryColorGradingLut = "Assets/dusk.cube";
+    settings.render3D.colorGradingMix = .75f;
+    settings.render3D.bloomRadius = 1.5f;
+    PostProcessVolume global;
+    global.global = true;
+    global.compensationEV = 1.f;
+    PostProcessVolume indoor;
+    indoor.compensationEV = 3.f;
+    indoor.halfExtent = {2, 2, 2};
+    indoor.blendDistance = 2.f;
+    indoor.priority = 1;
+    settings.render3D.postVolumes = {indoor, global};
     settings.render3D.localExposure = .4f;
     settings.render3D.autoExposure = true;
     settings.render3D.colorGradingLut = "Assets/noon.cube";
@@ -154,6 +170,10 @@ void Test() {
     settings.render3D.fog.density = .0625f;
     settings.render3D.fog.baseHeight = 1000000000.25;
     settings.render3D.fog.rayTracedShadows = true;
+    settings.render3D.fog.historyWeight = .75f;
+    settings.render3D.fog.multipleScattering = .25f;
+    settings.render3D.fog.densityVariation = .5f;
+    settings.render3D.fog.volumes.push_back({{1000000000.125, 5, -7}, 9.f, .0625f});
     settings.render3D.virtualShadows = true;
     settings.render3D.waterReflection = {"Assets/lakeside.hdr", -112, 4, 256};
     settings.render3D.radianceCascades = {.5f, 4};
@@ -205,6 +225,19 @@ void Test() {
     Scene restored;
     Check(restored.DeserializeFromString(text), "all component types load");
     const auto& render = restored.GetSettings().render3D;
+    Check(render.colorGrade == settings.render3D.colorGrade &&
+              render.metering == settings.render3D.metering &&
+              render.secondaryColorGradingLut == "Assets/dusk.cube" &&
+              render.colorGradingMix == .75f &&
+              render.postVolumes == settings.render3D.postVolumes && render.bloomRadius == 1.5f,
+          "two grading LUTs, histogram, color controls and local volumes survive a round trip");
+    auto nearVolume = render, edgeVolume = render, distantVolume = render;
+    ApplyPostProcessVolumes(nearVolume, {0, 0, 0});
+    ApplyPostProcessVolumes(edgeVolume, {3, 0, 0});
+    ApplyPostProcessVolumes(distantVolume, {8, 0, 0});
+    Check(nearVolume.metering.compensationEV == 3.f && edgeVolume.metering.compensationEV == 2.f &&
+              distantVolume.metering.compensationEV == 1.f,
+          "indoor photographic overrides blend into global camera settings in priority order");
     Check(render.vignette == .15f && render.filmGrain == .125f && render.chromaticAberration == 2 &&
               render.lensDistortion == -.1f && render.lensFlareStrength == .2f,
           "optical settings survive scene serialization");
@@ -224,7 +257,9 @@ void Test() {
           "antialiasing and water reflection options survive a save and reload");
     Check(render.rayTracing.shadows && render.rayTracing.maxBounces == 3 &&
               render.fog.density == .0625f && render.fog.baseHeight == 1000000000.25 &&
-              render.fog.rayTracedShadows && render.virtualShadows &&
+              render.fog.rayTracedShadows && render.fog.historyWeight == .75f &&
+              render.fog.multipleScattering == .25f && render.fog.densityVariation == .5f &&
+              render.fog.volumes == settings.render3D.fog.volumes && render.virtualShadows &&
               render.rayTracing.restirIndirect && render.waterReflection.rotation == -112 &&
               render.waterReflection.environmentPath == "Assets/lakeside.hdr" &&
               render.waterReflection.faceSize == 256 && render.radianceCascades.strength == .5f,

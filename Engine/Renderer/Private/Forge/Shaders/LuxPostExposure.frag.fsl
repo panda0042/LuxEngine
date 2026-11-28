@@ -1,15 +1,64 @@
 #include "LuxPostResources.h"
+
+float3 MeterEV() {
+    uint counts[64];
+    float logMeans[64];
+    uint total = 0u;
+    for (uint b=0u;b<64u;++b) {
+        uint2 bin = uint2(0u,0u);
+        for (uint tile=0u;tile<16u;++tile)
+            bin += gHistogram[tile*64u+b];
+        counts[b] = bin.x;
+        total += bin.x;
+        logMeans[b] = (float(b) + float(bin.y)/(255.0f*max(1.0f,float(bin.x))))*.5f-16.0f;
+    }
+    if (total==0u) return float3(0.0f,0.0f,63.0f);
+    const float2 bounds = float(total)*gPost.meterRange.xy;
+    float sum=0.0f, weight=0.0f, cumulative=0.0f;
+    float lo=63.0f, hi=0.0f;
+    for (uint b=0u;b<64u;++b) {
+        const float next = cumulative+float(counts[b]);
+        const float accepted = max(0.0f,min(next,bounds.y)-max(cumulative,bounds.x));
+        if (accepted>0.0f) {lo=min(float(b),lo); hi=max(float(b),hi);}
+        sum += logMeans[b]*accepted;
+        weight += accepted;
+        cumulative = next;
+    }
+    return float3(clamp(log2(.18f)-sum/max(weight,1e-5f)-gPost.adaptation.z,
+                 gPost.meterRange.z,gPost.meterRange.w),lo,hi);
+}
+
+float FocusDiopters() {
+    const float2 invSize = gPost.dimensions.xy;
+    float diopters[5];
+    for (int i=0;i<5;++i) {
+        const float2 offset = i==1 ? float2(.035f,0) : i==2 ? float2(-.035f,0)
+                            : i==3 ? float2(0,.035f) : i==4 ? float2(0,-.035f) : float2(0,0);
+        const int2 p = int2((.5f + offset)/invSize);
+        const float depth = LoadTex2D(gPostDepth, NO_SAMPLER, p, 0).r;
+        diopters[i] = max(-gPost.camera.x-depth,1e-7f)/max(-gPost.camera.y,1e-7f);
+    }
+    for (int i=0;i<3;++i)
+        for (int j=i+1;j<5;++j)
+            if (diopters[j]<diopters[i]) {
+                const float temp=diopters[i]; diopters[i]=diopters[j]; diopters[j]=temp;
+            }
+    return max(diopters[2],1e-5f);
+}
+
 ROOT_SIGNATURE(DefaultRootSignature)
 float4 PS_MAIN(FullscreenOutput In)
 {
     INIT_MAIN;
-    const float logLuma = LoadTex2D(gPostSource, NO_SAMPLER, int2(0, 0), 0).a;
-    const float target = clamp(log2(0.18f) - logLuma - gPost.adaptation.z, -4.0f, 4.0f);
-    float ev = target;
-    if (gPost.adaptation.y > 0.5f) {
-        const float previous = LoadTex2D(gAdaptation, NO_SAMPLER, int2(0, 0), 0).r;
-        const float speed = target < previous ? 3.0f : 1.3f;
-        ev = lerp(previous, target, 1.0f - exp(-speed * gPost.adaptation.x));
+    const float3 meter=gPost.grading.z>.5f || gPost.diagnostics.x==1.0f ? MeterEV() : float3(0,0,0);
+    float ev=gPost.grading.z>.5f ? meter.x : 0.0f;
+    float focus = gPost.meterResponse.w > 0.0f ? FocusDiopters() : 1.0f/gPost.lens.w;
+    if (gPost.adaptation.y > .5f) {
+        const float2 previous = LoadTex2D(gAdaptation, NO_SAMPLER, int2(0,0),0).rg;
+        const float speed = ev < previous.x ? gPost.meterResponse.y : gPost.meterResponse.x;
+        const float delta = ev-previous.x;
+        ev = abs(delta) < .04f ? previous.x : previous.x+delta*(1.0f-exp(-speed*gPost.adaptation.x));
+        focus = lerp(previous.y,focus,1.0f-exp(-gPost.meterResponse.w*gPost.adaptation.x));
     }
-    RETURN(float4(ev, 0.0f, 0.0f, 1.0f));
+    RETURN(float4(ev,focus,meter.y,meter.z));
 }

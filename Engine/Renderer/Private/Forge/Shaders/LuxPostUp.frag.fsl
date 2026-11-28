@@ -1,0 +1,16 @@
+#include "LuxPostResources.h"
+ROOT_SIGNATURE(DefaultRootSignature)
+float4 PS_MAIN(FullscreenOutput In)
+{
+    INIT_MAIN;
+    const float2 uv = In.position.xy*gPost.dimensions.xy;
+    const float2 stepUv = gPost.bloomFocus.x*gPost.dimensions.zw;
+    float3 tent = float3(0.0f,0.0f,0.0f);
+    // Separable [1,2,1] tent at progressively finer octaves. Both filters have unit DC gain.
+    for (int y=-1;y<=1;++y)
+        for (int x=-1;x<=1;++x)
+            tent += float((2-abs(x))*(2-abs(y))) * SampleLvlTex2D(gPostSource,
+                gSamplerTrilinearClamp, uv+float2(x,y)*stepUv, 0.0f).rgb;
+    const float3 high = SampleLvlTex2D(gBloomNear,gSamplerTrilinearClamp,uv,0.0f).rgb;
+    RETURN(float4(lerp(high,tent*(1.0f/16.0f),gPost.bloomFocus.y),1.0f));
+}

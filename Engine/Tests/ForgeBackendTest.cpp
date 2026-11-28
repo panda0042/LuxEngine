@@ -1,3 +1,4 @@
+#include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/Renderer/Renderer3D/Decal.hpp>
 // GpuDevice running on The Forge backend (LUX_RENDER_BACKEND=forge): frame loop, clear,
 // capture, resize and vsync. Exit code 77 = skipped (no display), 0 = pass.
@@ -2434,6 +2435,33 @@ void PostProcessing() {
         return;
     Check(At(transition, .75f, .5f)[0] > At(remetered, .75f, .5f)[0] + 3,
           "exposure adapts over time across an abrupt lighting transition");
+    // Both cameras meter from cold history so interpolation cannot hide a leaking highlight.
+    lampWidth = .10f;
+    bright.emissive = {4000, 4000, 4000};
+    settings.autoExposure = false;
+    capture();
+    settings.autoExposure = true;
+    const auto tinySun = capture();
+    settings.autoExposure = false;
+    capture();
+    bright.emissive = {};
+    settings.autoExposure = true;
+    const auto noSun = capture();
+    if (tinySun.rgba.empty() || noSun.rgba.empty())
+        return;
+    Check(std::abs(At(tinySun, .75f, .5f)[0] - At(noSun, .75f, .5f)[0]) <= 1,
+          "upper histogram percentile rejects an isolated HDR light");
+    settings.environmentIntensity = 4;
+    const auto enteringShade = capture();
+    settings.autoExposure = false;
+    capture();
+    settings.autoExposure = true;
+    const auto indoorSettled = capture();
+    if (enteringShade.rgba.empty() || indoorSettled.rgba.empty())
+        return;
+    Check(At(indoorSettled, .75f, .5f)[0] > At(enteringShade, .75f, .5f)[0] + 3,
+          "eye adaptation brightens a dark interior gradually after leaving daylight");
+    lampWidth = 1;
     settings.environmentIntensity = 4;
     settings.autoExposure = false;
     // Disable the filmic curve so the one-stop ratio is observable after decoding SDR.
@@ -2455,6 +2483,26 @@ void PostProcessing() {
     Check(std::abs(linearCentre(iso200) / linearCentre(iso100) - 2.) < .06 &&
               At(iso200, .5f, .5f) == At(longerShutter, .5f, .5f),
           "doubling ISO or shutter duration gives one stop of linear scene exposure");
+    physical = {true, false, 100, 1.f / 125, 16, 24, 25000};
+    const auto originalSun = settings.sun;
+    settings.sun = {{0, 0, -1}, {1, 1, 1}, 4};
+    settings.environmentIntensity = 0;
+    bright.albedoColor = {.18f, .18f, .18f, 1};
+    bright.roughness = 1;
+    const auto grayCard = capture();
+    if (grayCard.rgba.empty())
+        return;
+    // At normal incidence the unit-rough dielectric has F0=.04 and D=1/pi, V=1/4.
+    const double expectedCd = 100000. * (.96 * .18 + .04 * .25) / std::numbers::pi;
+    const double measuredCd = linearCentre(grayCard) * 1.2 * 125. * 16. * 16.;
+    std::printf("  18%% reference: %.0f cd/m2 from GPU pixel; %.0f cd/m2 predicted\n", measuredCd,
+                expectedCd);
+    Check(std::abs(measuredCd / expectedCd - 1.) < .025,
+          "100 klx noon irradiance and the EV100 camera agree on a neutral reference surface");
+    settings.sun = originalSun;
+    bright.albedoColor = {1, 1, 1, 1};
+    bright.roughness = .5f;
+    settings.environmentIntensity = 4;
     physical = {};
     settings.toneMapping = true;
     settings.localExposure = 1;
@@ -2519,6 +2567,33 @@ void PostProcessing() {
     Check(openDifference > footprintError(planeFocus) + 50 &&
               openDifference > footprintError(stoppedDown) + 50,
           "thin-lens point spread grows off the focus plane and shrinks as the iris stops down");
+    lampWidth = 1;
+    physical.fNumber = .8f;
+    settings.focusDistance = 20;
+    settings.physicalCamera.autofocusSpeed = 4;
+    const auto automatic = capture();
+    settings.physicalCamera.autofocusSpeed = 0;
+    settings.focusDistance = 2.95f;
+    const auto manualFocus = capture();
+    settings.focusDistance = 20;
+    const auto manualMiss = capture();
+    if (automatic.rgba.empty() || manualFocus.rgba.empty() || manualMiss.rgba.empty())
+        return;
+    uint64 focusError = 0, missError = 0;
+    for (size_t i = 0; i < automatic.rgba.size(); i += 4) {
+        focusError += std::abs(int(automatic.rgba[i]) - int(manualFocus.rgba[i]));
+        missError += std::abs(int(automatic.rgba[i]) - int(manualMiss.rgba[i]));
+    }
+    Check(focusError + 50 < missError,
+          "median depth autofocus places the foreground object on the focal plane");
+    settings.colorGrade.saturation = 0;
+    const auto grayGrade = capture();
+    if (grayGrade.rgba.empty())
+        return;
+    const auto gray = At(grayGrade, .5f, .5f);
+    Check(std::abs(gray[0] - gray[2]) < 2,
+          "scene-linear saturation at zero preserves a neutral highlight");
+    settings.colorGrade = {};
     physical = {};
     lampWidth = 1;
     bright.emissive = {};
@@ -2569,6 +2644,17 @@ void PostProcessing() {
     const auto coldUploads = s.gpu.GetFrameStats().uploadBytes;
     const bool second = threeViews(views);
     const auto warmUploads = s.gpu.GetFrameStats().uploadBytes;
+    settings.secondaryColorGradingLut = otherFile.string();
+    settings.colorGradingMix = .5f;
+    const auto blendedLut = capture();
+    if (blendedLut.rgba.empty())
+        return;
+    const auto mixedColor = At(blendedLut, .5f, .5f);
+    Check(mixedColor[0] < 3 && std::abs(mixedColor[1] - 128) < 3 &&
+              std::abs(mixedColor[2] - 128) < 3,
+          "two display-referred 3D LUTs crossfade at the authored weight");
+    settings.colorGradingMix = 0;
+    settings.secondaryColorGradingLut.clear();
     std::filesystem::remove(otherFile, ignored);
     std::filesystem::remove(file, ignored);
     Check(first && second && coldUploads >= warmUploads + 32,
@@ -3219,6 +3305,37 @@ void MaterialTextures() {
     const auto top = render(terrain);
     Check(inset[0] > flat[0] + 12 && inset[1] + 12 < flat[1] && difference(flat, top) <= 2,
           "oblique POM offsets a recessed texel while white relief stays on the mesh surface");
+    settings.environmentColor = {};
+    settings.sun.intensity = 2.f;
+    settings.sun.direction = {0, 0, 1};
+    Material3D leaf;
+    leaf.alphaMode = MaterialAlphaMode::Opaque;
+    leaf.albedoColor = {.12f, .48f, .07f, 1};
+    const auto backlitSolid = render(leaf);
+    auto& foliage = leaf.surface.emplace();
+    foliage.model = SurfaceModel::Foliage;
+    foliage.transmission = .8f;
+    leaf.subsurfaceRadius = {.0003, .0009, .0002};
+    leaf.subsurfaceThickness = .00028f;
+    const auto thinLeaf = render(leaf);
+    leaf.subsurfaceThickness = .008f;
+    const auto thickLeaf = render(leaf);
+    std::printf("  backlit green solid/thin/thick = %d/%d/%d\n", backlitSolid[1], thinLeaf[1],
+                thickLeaf[1]);
+    Check(thinLeaf[1] > backlitSolid[1] + 20 && thinLeaf[1] > thickLeaf[1] + 20,
+          "foliage transmission responds to measured leaf thickness under backlighting");
+
+    settings.temporalDebugView = TemporalDebugView::Transparency;
+    Material3D glass;
+    glass.alphaMode = MaterialAlphaMode::Blend;
+    glass.albedoColor = {.7f, .3f, .2f, .5f};
+    const auto coverage = render(glass);
+    Check(session.gpu.GetFrameStats().temporalResolvePasses == 1 && coverage[0] > 80 &&
+              coverage[0] < 230 && std::abs(coverage[0] - coverage[1]) < 2 &&
+              std::abs(coverage[0] - coverage[2]) < 2,
+          "ordinary blended geometry composites its measured alpha in the transparency diagnostic");
+    settings.temporalDebugView = TemporalDebugView::Off;
+
     Check(context.GetLastAssetError().empty(), "material texture loading has no hidden errors");
 }
 
@@ -3649,12 +3766,12 @@ void FroxelFog() {
     wall.albedoColor = {.8f, .8f, .8f, 1};
     wall.alphaMode = MaterialAlphaMode::Opaque;
     const auto render = [&](const Render3DSettings& options, double depth, bool water, bool blocker,
-                            std::array<int, 4>& center) {
+                            std::array<int, 4>& center, std::span<const PointLight> sources = {}) {
         GpuFrameCapture frame;
         if (!CaptureFrame(session, frame, [&] {
                 if (!session.gpu.Clear(0, 0, 0, 1))
                     return false;
-                context.BeginScene(camera, options, 1);
+                context.BeginScene(camera, options, 1, sources);
                 context.DrawMesh(plane, Mat4::Translate({0, 0, -depth}) * Mat4::Scale({24, 24, 1}),
                                  wall);
                 if (water) {
@@ -3706,6 +3823,27 @@ void FroxelFog() {
     const auto counters = session.gpu.GetFrameStats();
     Check(counters.volumetricFogPasses == 1 && counters.computeDispatches == 1,
           "the scene dispatches one froxel integration pass");
+
+    auto local = settings;
+    local.fog.volumes.push_back({{0, 0, -6}, 3.f, .8f});
+    local.fog.historyWeight = .76f;
+    local.fog.densityVariation = .15f;
+    std::array<int, 4> inside, outside, redFog;
+    if (!render(local, 12, false, false, inside))
+        return Check(false, "local fog volume captures");
+    local.fog.volumes.front().center[0] = 9;
+    if (!render(local, 12, false, false, outside))
+        return Check(false, "moved local volume captures");
+    Check(inside[0] + 30 < outside[0] && outside[0] >= baseline[0] - 3,
+          "a local medium attenuates inside its volume and rejects obsolete history");
+    local.fog.volumes.front().center[0] = 0;
+    local.environmentColor = {};
+    local.fog.color = {1, 1, 1};
+    const std::array<PointLight, 1> localSources{{{{0, 0, -6}, {1, 0, 0}, 10.f, 3.f}}};
+    if (!render(local, 12, false, false, redFog, localSources))
+        return Check(false, "local light scattering captures");
+    Check(redFog[0] > redFog[1] + 30,
+          "point lights scatter in the local medium before the unlit wall");
 
     auto sun = fog;
     sun.fog.color = {1, 1, 1};
@@ -3873,6 +4011,16 @@ void OceanFft() {
         return Check(false, "water after aborting the coastal scene captures");
     Check(differentPixels(plainWater, afterAbort) == 0,
           "aborting a coastal scene preserves plain water on the next draw");
+    settings.motionBlurShutter = 1;
+    GpuFrameCapture movingWaves, stillWaves;
+    if (!capture(movingWaves, gpuMesh, 2, true) || !capture(movingWaves, gpuMesh, 7, true) ||
+        !capture(stillWaves, gpuMesh, 7, true))
+        return Check(false, "moving and still GPU wave frames capture");
+    const size_t waveMotion = differentPixels(movingWaves, stillWaves);
+    std::printf("  FFT velocity changes %zu pixels at identical final wave time\n", waveMotion);
+    Check(waveMotion > 20 && session.gpu.GetFrameStats().waterMotionDraws == 1,
+          "FFT motion blur consumes previous GPU wave positions and a paused simulation stops "
+          "blurring");
     Check(session.gpu.GetCounters().validationErrors == 0, "GPU ocean barriers validate");
 }
 
@@ -4075,6 +4223,16 @@ void VirtualShadowMap() {
         return Check(false, "virtual shadow pages render");
     const auto pages = session.gpu.GetFrameStats().virtualShadowPages;
     const auto pagedBytes = session.gpu.GetMemoryStats().allocationBytes - baselineBytes;
+    GpuFrameCapture reused;
+    Check(capture(reused) && paged.rgba == reused.rgba &&
+              session.gpu.GetFrameStats().reusedShadowPages == pages,
+          "unchanged virtual pages reuse identical depth without caster redraws");
+    const auto originalSun = settings.sun.direction;
+    settings.sun.direction = {-.8, -1, .45};
+    Check(capture(reused) && session.gpu.GetFrameStats().reusedShadowPages == 0 &&
+              paged.rgba != reused.rgba,
+          "sun rotation invalidates cached virtual shadow pages");
+    settings.sun.direction = originalSun;
     Check(pages > 1 && pages <= 9 && pagedBytes == 768ull * 768 * 4,
           "receiver coverage maps multiple pages into the smaller physical atlas");
     int darkened = 0;
@@ -4266,7 +4424,7 @@ void TemporalDetails() {
 }
 
 void ObjectMotion() {
-    Session session(128, 128);
+    Session session(128, 128, {}, true);
     if (!session.ok)
         return Check(false, "session for object motion");
     Renderer3D::Context context(&session.gpu);
@@ -4312,19 +4470,130 @@ void ObjectMotion() {
     settings.motionBlurShutter = 1.f;
     if (!draw(0) || !draw(.48))
         return Check(false, "independent shutter frames capture");
+    if (capture.width != sharp.width || capture.height != sharp.height ||
+        capture.rgba.size() != sharp.rgba.size())
+        return Check(false, "rigid shutter reference dimensions match");
     unsigned mixed = 0;
     for (size_t i = 0; i < capture.rgba.size(); i += 4) {
         if (capture.rgba[i] > 25 && capture.rgba[i + 2] > 25 &&
             std::abs(int(capture.rgba[i]) - int(sharp.rgba[i])) > 15)
             ++mixed;
     }
+    const auto fixed = At(capture, .2f, .2f), fixedReference = At(sharp, .2f, .2f);
+    std::printf("  rigid blur mixed=%u, motion draws=%u, resolves=%u, fixed pixel %d/%d vs %d/%d\n",
+                mixed, session.gpu.GetFrameStats().objectMotionDraws,
+                session.gpu.GetFrameStats().temporalResolvePasses, fixed[0], fixed[2],
+                fixedReference[0], fixedReference[2]);
     Check(
         session.gpu.GetFrameStats().temporalResolvePasses == 0 &&
             session.gpu.GetFrameStats().objectMotionDraws == 1 && mixed > 20 &&
             At(capture, .2f, .2f) == At(sharp, .2f, .2f),
         "standalone motion blur smears the moving silhouette while retaining the static backdrop");
-    Check(draw(.48) && capture.rgba == sharp.rgba,
-          "stationary shutter frame returns to the sharp reference");
+    if (!draw(.48))
+        return Check(false, "stationary shutter capture");
+    if (capture.rgba.size() != sharp.rgba.size())
+        return Check(false, "stationary reference dimensions match");
+    unsigned changed = 0, maximumError = 0;
+    for (size_t i = 0; i < capture.rgba.size(); ++i) {
+        const unsigned error = unsigned(std::abs(int(capture.rgba[i]) - int(sharp.rgba[i])));
+        maximumError = std::max(maximumError, error);
+        changed += error != 0;
+    }
+    std::printf("  stationary reference error %u in %u channels\n", maximumError, changed);
+    Check(capture.rgba == sharp.rgba, "stationary shutter frame returns to the sharp reference");
+    // Keep the transform fixed while the upper vertices of a jointed strip move.
+    // The first vertex moves too, rebasing the local stream, just as CPU skinning does.
+    const std::array<Vertex3D, 6> bindPose{{{{-.24, .8, 0}, {0, 0, 1}, {}},
+                                            {{.24, .8, 0}, {0, 0, 1}, {}},
+                                            {{-.24, 0, 0}, {0, 0, 1}, {}},
+                                            {{.24, 0, 0}, {0, 0, 1}, {}},
+                                            {{-.24, -.8, 0}, {0, 0, 1}, {}},
+                                            {{.24, -.8, 0}, {0, 0, 1}, {}}}};
+    const std::array<uint32, 12> faces{0, 2, 1, 1, 2, 3, 2, 4, 3, 3, 4, 5};
+    Mesh3D skin;
+    if (!skin.Upload(&session.gpu, bindPose, faces))
+        return Check(false, "pose stream fixture uploads");
+    material.doubleSided = true;
+    const auto pose = [&](double x) {
+        auto v = bindPose;
+        v[0].position.x += x;
+        v[1].position.x += x;
+        return skin.UpdateVertices(v);
+    };
+    const auto drawPose = [&] {
+        return CaptureFrame(session, capture, [&] {
+            if (!session.gpu.Clear(0, 0, 0, 1))
+                return false;
+            context.BeginScene(camera, settings, 1);
+            context.DrawCube({0, 0, -1}, {10, 10, .1}, backdrop);
+            context.DrawMesh(skin, Mat4::Identity(), material);
+            context.EndScene();
+            return context.GetLastAssetError().empty();
+        });
+    };
+    if (!drawPose() || !pose(-.45) || !pose(.48) || !drawPose())
+        return Check(false, "deformed mesh captures");
+    const auto moving = capture;
+    const auto deformedDraws = session.gpu.GetFrameStats().deformedMotionDraws;
+    if (!drawPose())
+        return Check(false, "paused mesh captures");
+    unsigned bentPixels = 0, staticPixels = 0;
+    for (uint32 y = 16; y < capture.height - 16; ++y)
+        for (uint32 x = 10; x < capture.width - 10; ++x) {
+            const auto i = (size_t(y) * capture.width + x) * 4;
+            if (std::abs(int(moving.rgba[i]) - int(capture.rgba[i])) > 8) {
+                if (y < capture.height / 2 - 3)
+                    ++bentPixels;
+                if (y > capture.height / 2 + 3)
+                    ++staticPixels;
+            }
+        }
+    std::printf("  pose motion changes %u upper pixels and %u fixed lower pixels\n", bentPixels,
+                staticPixels);
+    Check(deformedDraws == 1 && bentPixels > 24 && staticPixels < 4,
+          "previous submitted vertices blur the bent end and preserve the stationary end after two "
+          "pose updates");
+    ModelSubmesh rig;
+    rig.skinned = true;
+    rig.bones.resize(2);
+    rig.indices.assign(faces.begin(), faces.end());
+    rig.boundsMin = {-.24, -.8, 0};
+    rig.boundsMax = {.24, .8, 0};
+    for (size_t i = 0; i < bindPose.size(); ++i) {
+        ModelVertex v;
+        v.position = bindPose[i].position;
+        v.normal = bindPose[i].normal;
+        v.weights = {{i < 2 ? 1u : 0u, 1.f}};
+        rig.vertices.push_back(v);
+    }
+    Mesh3D computed;
+    if (!computed.UploadSkinned(&session.gpu, rig))
+        return Check(false, "GPU two-bone fixture uploads");
+    const auto drawBones = [&](double tip) {
+        return CaptureFrame(session, capture, [&] {
+            const std::array palette{Mat4{}, Mat4::Translate({tip, 0, 0})};
+            if (!computed.UpdateSkin(palette, {-.24, -.8, 0}, {.24 + tip, .8, 0}) ||
+                !session.gpu.Clear(0, 0, 0, 1))
+                return false;
+            context.BeginScene(camera, settings, 1);
+            context.DrawCube({0, 0, -1}, {10, 10, .1}, backdrop);
+            context.DrawMesh(computed, Mat4::Identity(), material);
+            context.EndScene();
+            return context.GetLastAssetError().empty();
+        });
+    };
+    if (!drawBones(0) || !drawBones(.48))
+        return Check(false, "GPU two-bone shutter frames capture");
+    unsigned skinErrors = 0;
+    if (capture.rgba.size() != moving.rgba.size())
+        return Check(false, "GPU and CPU pose sizes match");
+    for (size_t i = 0; i < capture.rgba.size(); ++i)
+        skinErrors += std::abs(int(capture.rgba[i]) - int(moving.rgba[i])) > 3;
+    std::printf("  GPU vs CPU moving pose: %u differing channels, %u skin dispatches\n", skinErrors,
+                session.gpu.GetFrameStats().skinningDispatches);
+    Check(session.gpu.GetFrameStats().skinningDispatches == 1 &&
+              session.gpu.GetFrameStats().deformedMotionDraws == 1 && skinErrors < 64,
+          "GPU skinning and previous bone motion match the independently submitted CPU pose");
     Check(session.gpu.GetCounters().validationErrors == 0,
           "motion target and depth transitions validate");
 }
@@ -4432,8 +4701,8 @@ void RestirLighting() {
         return Check(false, "temporal denoised indirect frames capture");
     stats = session.gpu.GetFrameStats();
     const auto denoised = At(filtered, .5f, .5f);
-    Check(stats.rayDenoiserPasses == 1 && stats.temporalRestirPasses == 1 &&
-              denoised[0] > denoised[1] + 45,
+    Check(stats.rayDenoiserPasses == 1 && stats.computeDispatches >= 4 &&
+              stats.temporalRestirPasses == 1 && denoised[0] > denoised[1] + 45,
           "reprojected reservoirs and denoised GI retain offscreen color without TAA");
     camera.SetPosition({30, 0, 3});
     camera.SetTarget({30, 0, 0});
@@ -4505,6 +4774,16 @@ void ScreenLighting() {
     settings.shadowLightAngularRadius = .13f;
     compare("PCSS produces variable penumbrae",
             [](const uint8* a, const uint8* b) { return std::abs(int(a[0]) - int(b[0])) > 3; });
+    settings.shadowLightAngularRadius = .00465f;
+    settings.shadowRange = 30.f;
+    settings.shadows = false;
+    if (!capture(baseline))
+        return Check(false, "unshadowed cascade reference captures");
+    settings.shadows = settings.cascadedShadows = true;
+    compare("four practical splits shadow the post and ground", darker);
+    settings.virtualShadows = true;
+    compare("virtual far cascade and near tiles shadow the same scene", darker);
+    settings.virtualShadows = settings.cascadedShadows = false;
     settings.shadows = false;
     settings.shadowLightAngularRadius = 0;
     floor.metallic = 1.f;
@@ -4513,6 +4792,25 @@ void ScreenLighting() {
     settings.hierarchicalReflections = true;
     compare("Hi-Z SSR reflects the red post onto metal",
             [](const uint8* a, const uint8* b) { return b[0] > a[0] + 6 && b[0] > b[1] + 6; });
+    settings.postDebugView = PostDebugView::BaseColor;
+    GpuFrameCapture baseColor, faceNormals, confidence;
+    if (!capture(baseColor))
+        return Check(false, "material color diagnostic captures");
+    settings.postDebugView = PostDebugView::GeometricNormal;
+    if (!capture(faceNormals))
+        return Check(false, "triangle normal diagnostic captures");
+    settings.postDebugView = PostDebugView::SsrConfidence;
+    if (!capture(confidence))
+        return Check(false, "SSR hit confidence captures");
+    size_t redPost = 0, upwardFaces = 0, validHits = 0;
+    for (size_t i = 0; i < baseColor.rgba.size(); i += 4) {
+        redPost += baseColor.rgba[i] > baseColor.rgba[i + 1] + 65;
+        upwardFaces += faceNormals.rgba[i + 1] > faceNormals.rgba[i] + 45;
+        validHits += confidence.rgba[i] > 12 &&
+                     std::abs(int(confidence.rgba[i]) - int(confidence.rgba[i + 1])) < 3;
+    }
+    Check(redPost > 100 && upwardFaces > 100 && validHits > 12,
+          "diagnostics expose authored color, upward triangles and accepted SSR hits");
     Check(session.gpu.GetCounters().validationErrors == 0,
           "screen-lighting image transitions validate");
 }

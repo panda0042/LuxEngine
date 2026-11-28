@@ -28,10 +28,17 @@ uint8 Byte(float value) {
 
 bool Rhi::BuildTextureMipTail(uint32 width, uint32 height, std::span<const uint8> pixels,
                               TextureColorSpace colorSpace, bool normalMap,
-                              std::vector<TextureMipLevel>& output, float alphaMaskCutoff) {
+                              std::vector<TextureMipLevel>& output, float alphaMaskCutoff,
+                              TextureMipSemantic semantic) {
+    const bool variance = semantic == TextureMipSemantic::NormalVariance;
+    const bool roughness = semantic == TextureMipSemantic::PerceptualRoughness;
     const auto layout = GetTextureLayout(width, height, true);
     if (!layout.mipCount || (!pixels.empty() && pixels.size() != size_t(width) * height * 4) ||
         (colorSpace != TextureColorSpace::Linear && colorSpace != TextureColorSpace::Srgb) ||
+        (semantic != TextureMipSemantic::Default && !variance && !roughness) ||
+        (variance && !normalMap) || (roughness && normalMap) ||
+        ((variance || roughness) &&
+         (colorSpace != TextureColorSpace::Linear || alphaMaskCutoff != 0)) ||
         (normalMap && (colorSpace == TextureColorSpace::Srgb || alphaMaskCutoff != 0)) ||
         !std::isfinite(alphaMaskCutoff) || alphaMaskCutoff < 0 || alphaMaskCutoff > 1)
         return false;
@@ -41,6 +48,7 @@ bool Rhi::BuildTextureMipTail(uint32 width, uint32 height, std::span<const uint8
         constexpr std::array<uint8, 4> blank{};
         const bool alphaWeighted = colorSpace == TextureColorSpace::Srgb || alphaMaskCutoff > 0;
         while (width > 1 || height > 1) {
+            const bool sourceIsBase = levels.empty();
             const bool fromMask = levels.empty() && alphaMaskCutoff > 0;
             TextureMipLevel target{std::max(1u, width / 2), std::max(1u, height / 2), {}};
             target.pixels.resize(static_cast<size_t>(target.width) * target.height * 4);
@@ -67,9 +75,15 @@ bool Rhi::BuildTextureMipTail(uint32 width, uint32 height, std::span<const uint8
                                 fromMask ? float(sourceAlpha >= alphaMaskCutoff) : sourceAlpha;
                             for (unsigned channel = 0; channel < 3; ++channel) {
                                 float value = pixel[channel] / 255.f;
-                                if (normalMap)
+                                if (normalMap) {
                                     value = value * 2.f - 1.f;
-                                else if (colorSpace == TextureColorSpace::Srgb)
+                                    if (variance && !sourceIsBase)
+                                        value *= sourceAlpha; // Restore length before the next area
+                                                              // average.
+                                } else if (roughness) {
+                                    value *= value;
+                                    value *= value;
+                                } else if (colorSpace == TextureColorSpace::Srgb)
                                     value = SrgbToLinear[pixel[channel]] * alpha;
                                 else if (alphaWeighted)
                                     value *= alpha;
@@ -89,6 +103,8 @@ bool Rhi::BuildTextureMipTail(uint32 width, uint32 height, std::span<const uint8
                         if (normalMap)
                             value = length > 1e-8f ? sum[channel] / length * .5f + .5f
                                                    : (channel == 2 ? 1.f : .5f);
+                        else if (roughness)
+                            value = std::sqrt(std::sqrt(std::max(0.f, value)));
                         else if (alphaWeighted) {
                             value = alphaWeight > 1e-8f ? sum[channel] / alphaWeight : 0.f;
                             if (colorSpace == TextureColorSpace::Srgb)
@@ -96,7 +112,7 @@ bool Rhi::BuildTextureMipTail(uint32 width, uint32 height, std::span<const uint8
                         }
                         pixel[channel] = Byte(value);
                     }
-                    pixel[3] = Byte(sum[3] / weight);
+                    pixel[3] = Byte(variance ? length / weight : sum[3] / weight);
                 }
             }
             levels.push_back(std::move(target));
@@ -113,13 +129,17 @@ bool Rhi::BuildTextureMipTail(uint32 width, uint32 height, std::span<const uint8
 
 bool BuildTextureMipChain(uint32 width, uint32 height, std::span<const uint8> pixels,
                           TextureColorSpace colorSpace, bool normalMap,
-                          std::vector<TextureMipLevel>& output, float alphaMaskCutoff) {
+                          std::vector<TextureMipLevel>& output, float alphaMaskCutoff,
+                          TextureMipSemantic semantic) {
     std::vector<TextureMipLevel> levels;
     if (pixels.empty() || !Rhi::BuildTextureMipTail(width, height, pixels, colorSpace, normalMap,
-                                                    levels, alphaMaskCutoff))
+                                                    levels, alphaMaskCutoff, semantic))
         return false;
     try {
         levels.insert(levels.begin(), {width, height, {pixels.begin(), pixels.end()}});
+        if (semantic == TextureMipSemantic::NormalVariance)
+            for (size_t i = 3; i < levels.front().pixels.size(); i += 4)
+                levels.front().pixels[i] = 255;
         output = std::move(levels);
         return true;
     } catch (const std::exception&) {

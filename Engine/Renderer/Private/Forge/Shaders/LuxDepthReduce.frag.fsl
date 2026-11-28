@@ -8,16 +8,21 @@ STRUCT(FullscreenOutput)
 };
 
 ROOT_SIGNATURE(DefaultRootSignature)
-float PS_MAIN(FullscreenOutput In)
+float2 PS_MAIN(FullscreenOutput In)
 {
     INIT_MAIN;
     const int2 base = int2(In.position.xy) * 4;
     const int2 last = int2(gReduce.options.xy) - 1;
-    float closest = 1.0f;
+    float closest = 1.0f, farthest = 0.0f;
     UNROLL for (int y = 0; y < 4; ++y) {
-        UNROLL for (int x = 0; x < 4; ++x)
-            closest = min(closest, LoadTex2D(gReduceSource, NO_SAMPLER,
-                                             min(base + int2(x, y), last), 0).r);
+        UNROLL for (int x = 0; x < 4; ++x) {
+            const float2 bounds = LoadTex2D(gReduceSource, NO_SAMPLER, min(base + int2(x, y), last), 0).rg;
+            closest = min(closest, bounds.x);
+            // Sky contributes no finite surface. The next level reads these same reversed empty bounds.
+            const float back = gReduce.options.z > 0.5f ? bounds.y : bounds.x;
+            if (back < 1.0f)
+                farthest = max(farthest, back);
+        }
     }
-    RETURN(closest);
+    RETURN(float2(closest, farthest));
 }

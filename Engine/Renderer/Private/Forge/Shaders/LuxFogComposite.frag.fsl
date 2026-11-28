@@ -8,13 +8,23 @@ STRUCT(FullscreenOutput)
     DATA(float2, uv, TEXCOORD0);
 };
 
-float4 SampleFogSlice(uint2 a, uint2 b, float2 weight, uint slice) {
+float4 SampleFogSlice(uint2 a, uint2 b, float4 weight, uint slice) {
     const float4 topLeft = gFogVolume[FogIndex(a, slice)];
     const float4 topRight = gFogVolume[FogIndex(uint2(b.x, a.y), slice)];
     const float4 bottomLeft = gFogVolume[FogIndex(uint2(a.x, b.y), slice)];
     const float4 bottomRight = gFogVolume[FogIndex(b, slice)];
-    return lerp(lerp(topLeft, topRight, weight.x), lerp(bottomLeft, bottomRight, weight.x),
-                weight.y);
+    return topLeft*weight.x + topRight*weight.y + bottomLeft*weight.z + bottomRight*weight.w;
+}
+
+float EyeFogDepth(float depth) {
+    return -gFog.up.w / max(-gFog.right.w - depth, -gFog.up.w / gFog.options.x);
+}
+
+float FogDepthWeight(uint2 cell, float eyeDepth) {
+    const float2 uv = (float2(cell) + .5f) / float2(LUX_FOG_COLUMNS, LUX_FOG_ROWS);
+    const int2 pixel = int2(uv / gFog.composite.xy);
+    const float other = EyeFogDepth(LoadTex2D(gFogDepth, NO_SAMPLER, pixel, 0).r);
+    return exp(-abs(eyeDepth - other) / max(.25f, .08f*eyeDepth));
 }
 
 float4 SampleFog(float2 uv, float depth) {
@@ -22,11 +32,16 @@ float4 SampleFog(float2 uv, float depth) {
     const float2 coord = clamp(uv * (lastCell + 1.0f) - 0.5f, float2(0.0f, 0.0f), lastCell);
     const uint2 a = uint2(coord);
     const uint2 b = min(a + 1u, uint2(lastCell));
-    const float2 weight = coord - float2(a);
+    const float2 t = coord - float2(a);
 
     const float maxDistance = gFog.options.x;
     // Recover positive eye depth from hardware Z without amplifying sky/far plane error.
-    const float eyeDepth = -gFog.up.w / max(-gFog.right.w - depth, -gFog.up.w / maxDistance);
+    const float eyeDepth = EyeFogDepth(depth);
+    const float4 spatial = float4((1.0f-t.x)*(1.0f-t.y),t.x*(1.0f-t.y),(1.0f-t.x)*t.y,t.x*t.y);
+    const float4 bilateral = spatial * float4(FogDepthWeight(a,eyeDepth),FogDepthWeight(uint2(b.x,a.y),eyeDepth),
+                                               FogDepthWeight(uint2(a.x,b.y),eyeDepth),FogDepthWeight(b,eyeDepth));
+    const float total = dot(bilateral,float4(1,1,1,1));
+    const float4 weight = total > .0001f ? bilateral / total : spatial;
     const float zScale = FogDepthScale(maxDistance);
     const float slicePosition = float(LUX_FOG_SLICES) * saturate(
         log2(1.0f + eyeDepth / zScale) / log2(1.0f + maxDistance / zScale));
@@ -50,6 +65,10 @@ float4 PS_MAIN(FullscreenOutput In)
     const float depth = LoadTex2D(gFogDepth, NO_SAMPLER, pixel, 0).r;
     const float2 uv = In.position.xy * gFog.composite.xy;
     const float4 fog = SampleFog(uv, depth);
+    if (gFog.cloud.w > .5f) {
+        const float opacity = 1.0f - fog.a;
+        RETURN(float4(opacity, opacity, opacity, 1));
+    }
     const float3 scene = color.rgb / max(color.a, 1e-6f);
 #ifdef LUX_FOG_HDR
     color.rgb = (scene * fog.a + fog.rgb) * color.a;

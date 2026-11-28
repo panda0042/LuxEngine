@@ -12,9 +12,10 @@ class PropModels {
 public:
     void Load(LuxEngine::GpuDevice& gpu, const std::filesystem::path& assets);
     void Draw(LuxEngine::Renderer3D::Context& renderer, std::string_view key, Vec3 ground,
-              Vec3 dimensions, double yaw) const;
+              Vec3 dimensions, double yaw, float lodTransition = 0) const;
     void Draw(LuxEngine::Renderer3D::Context& renderer, std::string_view key,
-              const LuxEngine::Mat4& placement, Vec3 dimensions, uint64_t motionInstance = 0) const;
+              const LuxEngine::Mat4& placement, Vec3 dimensions, uint64_t motionInstance = 0,
+              float lodTransition = 0) const;
 
     struct Part {
         std::unique_ptr<LuxEngine::Mesh3D> mesh;
@@ -35,6 +36,8 @@ private:
         std::vector<Part> parts;
         std::vector<Geometry> batchGeometry;
     };
+
+    void LoadGroundScans(const std::filesystem::path& assets);
 
     void BuildBatches(std::string_view key, std::span<const Plant> plants, Vec3 origin,
                       std::deque<Geometry>& batches) const;

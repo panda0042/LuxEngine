@@ -118,8 +118,17 @@ RestirGIReservoir ReusePreviousGI(RestirGIReservoir receiver, RestirSurface surf
     RestirSample proposal;
     proposal.kind = position.w;
     proposal.positionOrDirection = position.xyz;
-    if (proposal.kind == 1.0f)
+    if (proposal.kind == 1.0f) {
         proposal.positionOrDirection -= gRayHistoryParams.displacement.xyz;
+        // A visible receiver may still reference a moving or removed secondary donor.
+        // Check a short segment around its stored world-space endpoint before reusing its light.
+        const float3 direction = SafeDirection(proposal.positionOrDirection - surface.position,surface.normal);
+        const float window = clamp(.002f*length(proposal.positionOrDirection-surface.position), .012f,.16f);
+        const RestirSurface endpoint = RestirTrace(proposal.positionOrDirection-direction*window,
+                                                   direction,2.0f*window);
+        if (endpoint.distance <= 0.0f || dot(endpoint.normal,normal.xyz) < .92f)
+            return receiver;
+    }
     proposal.normal = normal.xyz;
     proposal.radiance = radiance.rgb;
     const float count = min(previousCount, 16.0f);
@@ -152,6 +161,7 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
     RestirGIReservoir indirect = RestirLoadGI(start);
     const uint previous = ReprojectReservoir(surface, grid, RestirSpacing(size));
     const bool denoise = gRayHistoryParams.controls.z > 0.5f;
+    const float hitDistance = gRestirCandidates[start + 3u].z;
     const float4 glossy = gRestirCandidates[start + 8u];
     float3 specSum = glossy.rgb, specMin = glossy.rgb, specMax = glossy.rgb;
     float specWeight = glossy.w;
@@ -229,7 +239,9 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
         if (filteredGI.w > 0.0f)
             filteredGI = FilterRaySignal(filteredGI.rgb, gPreviousReservoirs[previous + 9u],
                                           filteredGI.rgb * 0.35f, filteredGI.rgb * 2.5f + 0.15f);
-        if (filteredSpec.w > 0.0f)
+        const float previousHit = gPreviousReservoirs[previous + 3u].z;
+        if (filteredSpec.w > 0.0f && (previousHit < 0.0f) == (hitDistance < 0.0f) &&
+            abs(previousHit - hitDistance) < max(0.08f, abs(hitDistance) * (0.12f + surface.roughness)))
             filteredSpec = FilterRaySignal(filteredSpec.rgb, gPreviousReservoirs[previous + 8u], specMin, specMax);
     }
     gRestirResult[outputIndex + 3u] = float4(filteredGI.rgb, indirect.count);
@@ -242,12 +254,23 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
     gNextReservoirs[next] = float4(surface.position, surface.distance);
     gNextReservoirs[next + 1u] = float4(surface.normal, float(surface.instance));
     gNextReservoirs[next + 2u] = float4(surface.base, surface.metallic);
-    gNextReservoirs[next + 3u] = float4(surface.roughness, indirect.count, 0.0f, 0.0f);
+    gNextReservoirs[next + 3u] = float4(surface.roughness, indirect.count, hitDistance, 0.0f);
     gNextReservoirs[next + 4u] = float4(float(direct.light), direct.target, direct.weightSum, direct.count);
     gNextReservoirs[next + 5u] = float4(indirect.proposal.positionOrDirection, indirect.proposal.kind);
     gNextReservoirs[next + 6u] = float4(indirect.proposal.normal, indirect.target);
     gNextReservoirs[next + 7u] = float4(indirect.proposal.radiance, indirect.weightSum);
     gNextReservoirs[next + 8u] = filteredSpec;
     gNextReservoirs[next + 9u] = filteredGI;
+    const float giLum = log2(1.0f + RestirLuminance(indirectLighting));
+    const float specLum = log2(1.0f + RestirLuminance(glossy.rgb));
+    float4 moments = float4(giLum, giLum * giLum, specLum, specLum * specLum);
+    if (previous != 0xffffffffu && denoise) {
+        const float4 prior = gPreviousReservoirs[previous + 10u];
+        moments.xy = lerp(prior.xy, moments.xy, rcp(max(1.0f, filteredGI.w)));
+        moments.zw = lerp(prior.zw, moments.zw, rcp(max(1.0f, filteredSpec.w)));
+    }
+    gNextReservoirs[next + 10u] = moments;
+    const float2 variance = max(moments.yw - moments.xz*moments.xz, 0.0f);
+    gRestirResult[outputIndex + 1u] = float4(surface.normal, sqrt(max(variance.x,variance.y)));
     RETURN();
 }

@@ -12,19 +12,39 @@ STRUCT(MeshOutput)
 
 #include "LuxBrdf.h"
 #include "LuxSubsurface.h"
+#include "LuxSurfaceBrdf.h"
 #include "LuxSurfaceWeather.h"
+#include "LuxAirOptics.h"
+float3 AerialPerspective(float3 radiance,float3 pos) {
+    const float distance=length(pos-gScene.camera.xyz);
+    if(gScene.atmosphere.x<.5f || distance<1.0f) return radiance;
+    const float3 ray=(pos-gScene.camera.xyz)/distance;
+    const float3 sun=-gLights.direction.xyz;
+    const float az=clamp(dot(ray.xz,sun.xz)*rsqrt(max(1e-8f,dot(ray.xz,ray.xz)*dot(sun.xz,sun.xz))),-1.0f,1.0f);
+    const float level=sqrt(saturate(distance/32000.0f))*23.0f;
+    const float lo=floor(level), hi=min(23.0f,lo+1.0f);
+    const float2 uv=float2((.5f+.5f*az)*31.0f+.5f,(.5f+.5f*ray.y)*15.0f+.5f);
+    const float3 a=SampleLvlTex2D(gAerial,gSamplerTrilinearClamp,(uv+float2(lo*32.0f,0))/float2(768,16),0).rgb;
+    const float3 b=SampleLvlTex2D(gAerial,gSamplerTrilinearClamp,(uv+float2(hi*32.0f,0))/float2(768,16),0).rgb;
+    const float h0=clamp(gScene.atmosphere.w*.001f,.002f,99.99f);
+    const float km=min(32.0f,distance*.001f);
+    const float3 ext=AirExtinction(AirHeight(h0,ray.y,.5f*km),gScene.atmosphere.y);
+    return radiance*exp(-ext*km)+lerp(a,b,level-lo);
+}
 #include "LuxScreenLighting.h"
 
 #ifdef LUX_RAY_QUERY
 #include "LuxRayLighting.h"
 #endif
 
+#include "LuxSurfaceDiagnostics.h"
+
 float SurfaceDirectionalShadow(float3 position, float3 normal)
 {
 #ifdef LUX_RAY_QUERY
-    return RayDirectionalShadow(position, normal) * (RayEffect(1u) ? 1.0f : ScreenContactShadow(position, normal));
+    return CloudVisibility(position) * RayDirectionalShadow(position, normal) * (RayEffect(1u) ? 1.0f : ScreenContactShadow(position, normal));
 #else
-    return DirectionalShadow(position, normal) * ScreenContactShadow(position, normal);
+    return CloudVisibility(position) * DirectionalShadow(position, normal) * ScreenContactShadow(position, normal);
 #endif
 }
 
@@ -165,7 +185,7 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 waveNormal, float3 tint
     const float3 n = dot(normal, v) >= 0.0f ? normal : -normal;
     const bool coastalWater = gScene.waterReflection.w >= 1.0f;
     const bool coast = coastalWater && frontFacing;
-    const float3 environment = gScene.environment.rgb * gScene.environment.w;
+    const float3 environment = (gScene.skyLighting.x>.5f ? SkyDiffuseLighting(float3(0,1,0)) : gScene.environment.rgb) * gScene.environment.w;
     const float4 deepWater = float4(tint * environment, 1.0f);
     const float2 uv = In.position.xy * gScene.frameSize.zw;
     const float pointDepth = WaterDepth(In.position.z);
@@ -173,6 +193,8 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 waveNormal, float3 tint
     const float rayScale = rcp(max(dot(-v, gScene.forward.xyz), 0.1f));
     const float sceneDepth = OpaqueDepthAt(uv);
     const float thickness = clamp((WaterDepth(sceneDepth) - pointDepth) * rayScale, 0.0f, 32.0f);
+    const uint debug = uint(gScene.shadowMetrics.w);
+    if (debug == LUX_DEBUG_WATER_DEPTH) return float3(1,1,1)*(log2(1.0f+thickness)/log2(33.0f));
     const float ior = gDraw.water.w;
     const float eta = frontFacing ? rcp(ior) : ior;
     const float3 faceWave = dot(waveNormal, v) >= 0.0f ? waveNormal : -waveNormal;
@@ -255,6 +277,8 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 waveNormal, float3 tint
                                       c * envDirection.z - s * envDirection.x);
         reflected = SampleLvlTexCube(gWaterSpecularEnv, gSamplerTrilinearClamp, rotated,
                                      roughness * 7.0f).rgb * gScene.waterReflection.z;
+    } else if (gScene.skyLighting.x > .5f) {
+        reflected = SkySpecularLighting(envDirection,roughness) * gScene.environment.w;
     } else if (gScene.options.y > 0.5f) {
         reflected = SampleLvlTexCube(gSpecularEnv, gSamplerTrilinearClamp,
                                      RotateEnvironment(envDirection), roughness * 7.0f).rgb *
@@ -265,6 +289,7 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 waveNormal, float3 tint
 #endif
     {
         const float4 hit = HierarchicalReflection(In.world, n, reflection, roughness);
+        if (debug == LUX_DEBUG_SSR_CONFIDENCE) return float3(1,1,1)*hit.a;
         reflected = lerp(reflected, hit.rgb, hit.a);
     }
     float3 behind = opaque.rgb + (1.0f - opaque.a) * environment;
@@ -304,6 +329,8 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 waveNormal, float3 tint
         }
     }
 #endif
+    if (debug == LUX_DEBUG_WATER_REFLECTION) return reflected / (1.0f+reflected);
+    if (debug >= LUX_DEBUG_BASE_COLOR) return float3(0,0,0);
     const float waterOpacity = saturate(gDraw.albedo.a);
     const float3 transmittance = lerp(float3(1, 1, 1),
         exp(-gDraw.water.xyz * (frontFacing ? refractedDepth : 0.0f)), waterOpacity);
@@ -315,7 +342,14 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 waveNormal, float3 tint
     const float scattering = backlight * (exp(-0.5f * refractedDepth) + crest) * 0.12f;
     float3 inscatter = tint * (environment + sun * scattering * sunVisibility);
     float shore = sceneDepth < 0.999999f ? 1.0f - smoothstep(0.02f, 0.18f, thickness) : 0.0f;
-    float foam = saturate((shore * 0.75f + crest) * lerp(0.35f, 1.0f, foamDetail));
+    const float2 bank = (In.world.xz+gScene.weatherOrigin.xy)*(6.2831853f/256.0f);
+    const float shoreEnergy = .5f+.5f*sin(21.0f*bank.x+14.0f*bank.y-
+                                          gScene.wind.z*(6.2831853f/4.0f)+sin(27.0f*bank.y));
+    // On a sheltered lake only a crest reaching the bank forms foam; coverage vanishes
+    // at the geometric intersection instead of outlining it with a constant white line.
+    const float shorePacket = coast ? shore : shore * (.42f+.58f*smoothstep(.40f,.89f,shoreEnergy)) *
+                                    smoothstep(0.0f,max(.045f,fwidth(thickness)),thickness);
+    float foam = saturate((shorePacket * 0.75f + crest) * lerp(0.35f, 1.0f, foamDetail));
     float turbulence = foam;
     if (coastalWater)
     {
@@ -372,6 +406,7 @@ float3 WaterSurface(MeshOutput In, float3 normal, float3 waveNormal, float3 tint
 }
 
 #include "LuxMaterialRelief.h"
+#include "LuxTerrainPalette.h"
 
 // Port of Shaders/Modern.frag.hlsl (Basic.frag.hlsl with lit = true and MODERN_3D): writes linear
 // HDR colour; LuxTone.frag.fsl applies exposure, tone mapping and sRGB encoding.
@@ -379,17 +414,34 @@ ROOT_SIGNATURE(DefaultRootSignature)
 float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
 {
     INIT_MAIN;
+    if (BelowLodCoverage(In.position.xy)) discard;
     const uint maps = uint(round(gDraw.options.w));
     float weight = (maps & 16u) != 0u ? saturate(In.color.a) : 0.0f;
     float2 materialUV = In.uv;
-    if (gDraw.relief.z > 0.5f || gDraw.relief.w > 0.5f) {
+    const bool palette = (maps & 256u) != 0u;
+    if (!palette && (gDraw.relief.z > 0.5f || gDraw.relief.w > 0.5f)) {
         const float2 dx = ddx(In.uv), dy = ddy(In.uv);
         materialUV = ParallaxUV(In.uv, In.world, weight, dx, dy);
         if (gDraw.relief.y > 0.0f)
             weight = HeightBlendWeight(weight, MaterialHeights(materialUV, dx, dy));
     }
+    // A corneal shell refracts the incoming view ray onto the pigmented iris plane.
+    // Convert the physical displacement to authored UVs using the local raster footprint.
+    if (int(gDraw.lobes.x) == 6 && gDraw.textureOptions.w > 0.0f) {
+        const float3 normal = SafeDirection(In.normal,float3(0,0,1));
+        const float3 incoming = SafeDirection(In.world-gLights.camera.xyz,-normal);
+        const float3 transmitted = refract(incoming,normal,1.0f/gDraw.optics.y);
+        const float3 shift = transmitted * (gDraw.textureOptions.w / max(.12f,-dot(transmitted,normal)));
+        const float3 px = ddx(In.world), py = ddy(In.world);
+        const float xx = dot(px,px), xy = dot(px,py), yy = dot(py,py);
+        const float det = xx*yy - xy*xy;
+        if (det > 1e-20f) {
+            const float sx = dot(shift,px), sy = dot(shift,py);
+            materialUV += (ddx(In.uv)*(sx*yy-sy*xy) + ddy(In.uv)*(sy*xx-sx*xy)) / det;
+        }
+    }
     float4 texel = SampleMaterial(gTexture, materialUV);
-    if ((maps & 16u) != 0u)
+    if (!palette && (maps & 16u) != 0u)
         texel.rgb = lerp(texel.rgb, SampleMaterial(gTerrainColor, materialUV).rgb, weight);
     float4 color = In.color * texel;
     if (gDraw.options.y > 0.5f && gDraw.options.y < 1.5f &&
@@ -397,6 +449,20 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
         discard;
     if (gDraw.options.y < 1.5f)
         color.a = 1.0f;
+    if (gDraw.previousCoast.w>1.5f) {
+        const float residentLevels=gDraw.previousCoast.w-2.0f;
+        const float2 size = gDraw.textureOptions.xy;
+        const float2 dx=ddx(materialUV)*size,dy=ddy(materialUV)*size;
+        const float major=max(dot(dx,dx),dot(dy,dy)),minor=min(dot(dx,dx),dot(dy,dy));
+        const bool anisotropic=gDraw.materialOptions.z>1.5f;
+        const float footprint=anisotropic ? max(minor,major/max(1.0f,gScene.skyLighting.w*gScene.skyLighting.w)) : major;
+        const float level=clamp(.5f*log2(max(1.0f,footprint*gScene.skyLighting.z*gScene.skyLighting.z)),0.0f,max(0.0f,residentLevels-1.0f));
+        const float hue=frac(level*.1375f);
+        const float3 band=saturate(abs(frac(hue+float3(0.0f,.666667f,.333333f))*6.0f-3.0f)-1.0f);
+        RETURN(float4(residentLevels>1.0f ? .2f+.8f*band : float3(.32f,.32f,.32f),color.a));
+    }
+    if (gDraw.previousCoast.w > .5f)
+        RETURN(float4(1.0f, 1.0f, 1.0f, color.a));
     if (gScreenLighting.options.z < 0.0f)
         RETURN(float4(0, 0, 0, 1));
     if ((maps & 128u) != 0u)
@@ -409,11 +475,24 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
     const float lenSq = dot(faceNormal, faceNormal);
     float3 normal = lenSq > 1e-10f ? faceNormal * rsqrt(lenSq) : float3(0.0f, 1.0f, 0.0f);
     const float3 waveNormal = normal;
+    float paletteRoughness = 1.0f;
+    float normalLength=1.0f;
     float foamDetail = 1.0f;
+    const uint extraMaps = uint(gDraw.specular.w);
+    float3 surfaceTangent = abs(normal.y) < .9f ? normalize(cross(float3(0,1,0), normal)) : normalize(cross(float3(1,0,0), normal));
+    float3 coatNormal = normal;
+    const float2 detailUV = materialUV * gDraw.optics.w;
     const bool coastalWater = gDraw.water.w > 1.0f && gScene.waterReflection.w >= 1.0f;
-    if (coastalWater && (maps & 1u) != 0u)
+    if (palette)
+    {
+        float3 terrainColor, terrainNormal;
+        TerrainPalette(In.color,In.world,In.uv,normal,terrainColor,terrainNormal,paletteRoughness);
+        color.rgb = terrainColor;
+        normal = terrainNormal;
+    }
+    else if (coastalWater && (maps & 1u) != 0u)
         normal = CoastalDetailNormal(In, waveNormal, foamDetail);
-    else if ((maps & (1u | 32u)) != 0u)
+    else if ((maps & (1u | 32u)) != 0u || gDraw.lobes.x > .5f)
     {
         const float2 uvx = ddx(In.uv), uvy = ddy(In.uv);
         const float3 worldx = ddx(In.world), worldy = ddy(In.world);
@@ -434,21 +513,41 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
                     : float4(0.5f, 0.5f, 1.0f, 1.0f);
                 float3 mapped = normalSample.xyz * 2.0f - 1.0f;
                 foamDetail = normalSample.a;
+                if ((maps&512u)!=0u) normalLength=normalSample.a;
                 if ((maps & 16u) != 0u) {
-                    const float3 layerNormal = (maps & 32u) != 0u
-                        ? SampleMaterial(gTerrainNormal, materialUV).xyz * 2.0f - 1.0f
-                        : float3(0, 0, 1);
-                    mapped = lerp(mapped, layerNormal, weight);
+                    const float4 layerSample=(maps&32u)!=0u ? SampleMaterial(gTerrainNormal,materialUV) : float4(.5f,.5f,1.0f,1.0f);
+                    mapped=lerp(mapped,layerSample.xyz*2.0f-1.0f,weight);
+                    normalLength=lerp(normalLength,(maps&1024u)!=0u ? layerSample.a : 1.0f,weight);
                 }
                 mapped.xy *= gDraw.materialOptions.x;
+                surfaceTangent = tangent;
+                if ((extraMaps & 8u) != 0u) {
+                    const float3 detail = SampleMaterial(gDetailNormal, detailUV).xyz * 2.0f - 1.0f;
+                    const float3 a = mapped + float3(0,0,1), b = detail * float3(-1,-1,1);
+                    mapped = a * (dot(a,b)/max(.001f,a.z)) - b;
+                }
+                if ((extraMaps & 2u) != 0u) {
+                    const float3 coat = SampleMaterial(gCoatNormal, materialUV).xyz * 2.0f - 1.0f;
+                    coatNormal = SafeDirection(tangent * coat.x + bitangent * coat.y + normal * coat.z, normal);
+                }
                 normal = SafeDirection(tangent * mapped.x + bitangent * mapped.y + normal * mapped.z, normal);
             }
         }
     }
     // Derivative fallback normals already face the viewer. Authored/normal-mapped normals
     // retain the mesh's outward orientation and must be reversed for a double-sided back face.
-    if (authoredNormal && gDraw.materialOptions.w > 0.5f && !frontFacing)
+    if (authoredNormal && gDraw.materialOptions.w > 0.5f && !frontFacing) {
         normal = -normal;
+        coatNormal = -coatNormal;
+    }
+    const uint debug = uint(gScene.shadowMetrics.w);
+    const float3 geometricFace = SafeDirection(cross(ddy(In.world),ddx(In.world)),waveNormal);
+    const float3 shadowNormal = geometricFace * (dot(geometricFace,waveNormal)<0.0f ? -1.0f : 1.0f);
+    if (debug >= LUX_DEBUG_BASE_COLOR) {
+        const float4 diagnostic = GeometryDiagnostic(debug,In,shadowNormal,palette,extraMaps);
+        if (diagnostic.a >= 0.0f)
+            RETURN(diagnostic);
+    }
     const uint pointCount = min(gLights.count.x, 16u);
     if (gDraw.water.w > 1.0f)
     {
@@ -460,9 +559,15 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
         const float roughness = clamp(In.options.z, 0.045f, 1.0f);
         const float alpha = roughness * roughness;
         const float filteredRoughness = sqrt(sqrt(saturate(alpha * alpha + variance + unresolvedVariance)));
+        if (debug == LUX_DEBUG_BASE_COLOR)
+            RETURN(float4(color.rgb,1));
+        if (debug == LUX_DEBUG_WORLD_NORMAL)
+            RETURN(float4(normal*.5f+.5f,1));
+        if (debug == LUX_DEBUG_ROUGHNESS)
+            RETURN(float4(float3(1,1,1)*filteredRoughness,1));
         const float3 surface = WaterSurface(In, normal, waveNormal, color.rgb, filteredRoughness,
                                              foamDetail, frontFacing);
-        RETURN(float4(clamp(surface, 0.0f, 65504.0f), 1.0f));
+        RETURN(float4(clamp(AerialPerspective(surface,In.world), 0.0f, 65504.0f), 1.0f));
     }
     const float3 v = SafeDirection(gLights.camera.xyz - In.world, normal);
     const float metal = saturate(In.options.y * ((maps & 2u) != 0u ? SampleMaterial(gMetallicTexture, materialUV).r : 1.0f));
@@ -471,37 +576,96 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
         const float layerRoughness = (maps & 64u) != 0u ? SampleMaterial(gTerrainRoughness, materialUV).r : 1.0f;
         roughnessMap = lerp(roughnessMap, layerRoughness, weight);
     }
+    if (palette) roughnessMap = paletteRoughness;
+    if ((extraMaps & 4u) != 0u) color.rgb *= 2.0f * SampleMaterial(gDetailColor, detailUV).rgb;
+    if ((extraMaps & 16u) != 0u) roughnessMap *= 2.0f * SampleMaterial(gDetailRoughness, detailUV).r;
+    const float4 tissue = (extraMaps & 1u) != 0u ? SampleMaterial(gThickness, materialUV) : float4(1,1,1,1);
+    const float thickness = gDraw.textureOptions.w * tissue.r;
+    const float skinFraction = int(gDraw.lobes.x) == 7 ? tissue.g : 1.0f;
     float rough = clamp(In.options.z * roughnessMap, 0.045f, 1.0f);
+    if (gDraw.lobes.x > .5f) {
+        const float3 nx = ddx(normal), ny = ddy(normal);
+        const float variance = min(.08f, .12f*(dot(nx,nx)+dot(ny,ny)));
+        rough = sqrt(sqrt(saturate(rough*rough*rough*rough + variance)));
+    }
     const float3 geometric = authoredNormal && !frontFacing && gDraw.materialOptions.w > .5f ? -waveNormal : waveNormal;
-    ApplySurfaceWetness(geometric, metal, color.rgb, normal, rough);
-    float3 result = Brdf(color.rgb, metal, rough, normal, v, -gLights.direction.xyz) *
+    ApplySurfaceWetness(In.world,geometric, metal, color.rgb, normal, rough);
+    // The unnormalized mip footprint's first normal moment measures subpixel spread.
+    // Add it to GGX alpha² (perceptual roughness to the fourth), then recover roughness.
+    if (normalLength<1.0f) {
+        const float variance=min(.5f,(1.0f-normalLength)/max(normalLength,.05f)) *
+                             gDraw.materialOptions.x*gDraw.materialOptions.x;
+        const float alpha=rough*rough;
+        rough=sqrt(sqrt(saturate(alpha*alpha+variance)));
+    }
+    float3 result = PrincipledLighting(color.rgb, metal, rough, normal, v, -gLights.direction.xyz, surfaceTangent, coatNormal, thickness, geometric, skinFraction) *
                     gLights.colorIntensity.rgb * max(gLights.colorIntensity.w, 0.0f);
-    const bool scattering = max(gDraw.foliage.y, max(gDraw.foliage.z, gDraw.foliage.w)) > 0.0f;
+    const bool scattering = int(gDraw.lobes.x) != 2 && max(gDraw.foliage.y, max(gDraw.foliage.z, gDraw.foliage.w)) > 0.0f;
     float curvature = 0.0f;
     if (scattering) {
         const float3 smoothN = SafeDirection(faceNormal, normal);
         const float worldSpan = dot(ddx(In.world), ddx(In.world)) + dot(ddy(In.world), ddy(In.world));
         curvature = sqrt((dot(ddx(smoothN), ddx(smoothN)) + dot(ddy(smoothN), ddy(smoothN))) /
                          max(worldSpan, 1e-12f));
-        result += SubsurfaceDiffuse(color.rgb, metal, normal, -gLights.direction.xyz, curvature) *
+        result += SubsurfaceDiffuse(color.rgb, metal, normal, -gLights.direction.xyz, curvature, thickness) * skinFraction *
                   gLights.colorIntensity.rgb * max(gLights.colorIntensity.w, 0.0f);
     }
-    result *= SurfaceDirectionalShadow(In.world, normal);
+    // Horizon test in the baked card volume. Atlas thirds are independent views;
+    // clamp taps to the selected frame so neighboring silhouettes never occlude it.
+    float canopyVisibility = 1.0f;
+    if ((extraMaps & 32u) != 0u) {
+        const float3 incoming = -gLights.direction.xyz;
+        const float3 up = float3(0,1,0);
+        const float2 slope = float2(dot(incoming,surfaceTangent)/3.0f, -dot(incoming,up)*.6f);
+        const float frontLight = abs(dot(incoming,geometric));
+        const float frameIndex = floor(materialUV.x*3.0f-.00001f);
+        for (int stepIndex=1; stepIndex<=3; ++stepIndex) {
+            const float distance = .05f * float(stepIndex);
+            const float2 q = materialUV + slope * distance;
+            if (floor(q.x*3.0f) != frameIndex || q.y < 0 || q.y >= 1) continue;
+            const float opacity = SampleMaterial(gTexture,q).a;
+            const float height = SampleMaterial(gNormalTexture,q).a;
+            const float occluded = smoothstep(.025f, .10f, height-foamDetail-distance*frontLight);
+            canopyVisibility = min(canopyVisibility, 1.0f-.50f*occluded*opacity);
+        }
+    }
+    result *= canopyVisibility * SurfaceDirectionalShadow(In.world, shadowNormal);
+    if (debug == LUX_DEBUG_BASE_COLOR)
+        RETURN(float4(color.rgb,1));
+    if (debug == LUX_DEBUG_WORLD_NORMAL)
+        RETURN(float4(normal*.5f+.5f,1));
+    if (debug == LUX_DEBUG_ROUGHNESS)
+        RETURN(float4(float3(1,1,1)*rough,1));
+    if (debug == LUX_DEBUG_METALLIC)
+        RETURN(float4(float3(1,1,1)*metal,1));
+    if (debug == LUX_DEBUG_WATER_DEPTH || debug == LUX_DEBUG_WATER_REFLECTION)
+        RETURN(float4(0,0,0,1));
     bool useRestirDI = false;
+    float3 rayDebug = float3(0,0,0);
 #ifdef LUX_RAY_QUERY
     float4 restirGI = float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 denoisedSpec = float4(0.0f, 0.0f, 0.0f, 0.0f);
     if (RayEffect(LUX_RESTIR_DI | LUX_RESTIR_GI | LUX_RAY_DENOISE) && gDraw.options.y < 1.5f)
     {
-        const uint receiver = RestirReceiverIndex(In.position.xy, In.world, normal);
+        const uint receiver = RestirReceiverIndex(In.position.xy, In.world, shadowNormal);
         if (receiver != 0xffffffffu)
         {
+            if (debug == LUX_DEBUG_RESTIR_RESERVOIR) {
+                const float4 selected = gRestirLighting[receiver+2u];
+                rayDebug = saturate(float3(selected.x/16.0f,selected.z/64.0f,gRestirLighting[receiver+3u].w/32.0f));
+            }
+            if (debug == LUX_DEBUG_RAY_NOISE && RayEffect(LUX_RAY_DENOISE))
+                rayDebug = float3(1,1,1)*gRestirLighting[receiver+1u].w;
+            if (debug == LUX_DEBUG_DENOISED_LIGHTING && RayEffect(LUX_RAY_DENOISE)) {
+                rayDebug = gRestirLighting[receiver+3u].rgb + gRestirLighting[receiver+4u].rgb;
+                rayDebug /= 1.0f + rayDebug;
+            }
             if (RayEffect(LUX_RESTIR_DI))
             {
                 const float4 direct = gRestirLighting[receiver + 2u];
                 useRestirDI = direct.z > 0.0f;
                 if (useRestirDI)
-                    result += RestirDirectLighting(direct, In.world, color.rgb, metal, rough, normal, v);
+                    result += RestirDirectLighting(direct, In.world, color.rgb, metal, rough, normal, v, surfaceTangent, coatNormal, thickness, geometric, skinFraction);
             }
             if (RayEffect(LUX_RAY_DENOISE))
                 denoisedSpec = gRestirLighting[receiver + 4u];
@@ -510,6 +674,8 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
         }
     }
 #endif
+    if (debug >= LUX_DEBUG_RESTIR_RESERVOIR && debug <= LUX_DEBUG_DENOISED_LIGHTING)
+        RETURN(float4(rayDebug,1));
     if (!useRestirDI)
         for (uint i = 0; i < pointCount; ++i)
         {
@@ -519,13 +685,37 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
             const float distance = length(delta);
             const float falloff = saturate(1.0f - distance / max(source.w, 1e-5f));
             const float3 l = SafeDirection(delta, normal);
-            float3 response = Brdf(color.rgb, metal, rough, normal, v, l);
+            float3 response = PrincipledLighting(color.rgb, metal, rough, normal, v, l, surfaceTangent, coatNormal, thickness, geometric, skinFraction);
             if (scattering)
-                response += SubsurfaceDiffuse(color.rgb, metal, normal, l, curvature);
+                response += SubsurfaceDiffuse(color.rgb, metal, normal, l, curvature, thickness) * skinFraction;
             result += response * sourceColor.rgb * max(sourceColor.w, 0.0f) * falloff * falloff;
         }
     const float materialAO = (maps & 8u) != 0u ? lerp(1.0f, SampleMaterial(gOcclusionTexture, materialUV).r, gDraw.materialOptions.y) : 1.0f;
-    const float occlusion = materialAO * GroundTruthVisibility(In.world, normal, In.position.xy);
+    if (debug == LUX_DEBUG_MATERIAL_AO)
+        RETURN(float4(float3(1,1,1)*materialAO,1));
+    const float3 directLighting = result;
+    if (debug == LUX_DEBUG_DIRECT_LIGHTING)
+        RETURN(float4(result/(1.0f+result),1));
+    float3 bent;
+    const float visibility = GroundTruthVisibility(In.world, normal, In.position.xy, bent);
+    if (debug == LUX_DEBUG_GTAO)
+        RETURN(float4(float3(1,1,1)*visibility,1));
+    if (debug == LUX_DEBUG_BENT_NORMAL)
+        RETURN(float4(bent*.5f+.5f,1));
+    // GTAO multi-bounce diffuse fit, Jimenez et al. 2016. Specular occlusion only affects
+    // untraced environment radiance; screen-space and traced hits already test visibility.
+    const float3 albedo = saturate(color.rgb);
+    const float3 a = 2.0404f * albedo - 0.3324f;
+    const float3 b = -4.7951f * albedo + 0.6417f;
+    const float3 c = 2.7552f * albedo + 0.6903f;
+    const float3 diffuseVisibility = max(float3(visibility, visibility, visibility),
+                                         ((a * visibility + b) * visibility + c) * visibility);
+    const float specularVisibility = saturate(pow(saturate(dot(normal, v)) + visibility,
+                                               exp2(-16.0f * rough - 1.0f)) - 1.0f + visibility);
+    if (debug == LUX_DEBUG_IBL) {
+        const float3 ibl = EnvironmentLighting(color.rgb,metal,rough,normal,v,float4(0,0,0,0),bent,diffuseVisibility,specularVisibility)*materialAO;
+        RETURN(float4(ibl/(1.0f+ibl),1));
+    }
     float4 screenHit = float4(0, 0, 0, 0);
 #ifdef LUX_RAY_QUERY
     if (!RayEffect(2u))
@@ -533,14 +723,22 @@ float4 PS_MAIN(MeshOutput In, SV_ISFRONTFACE(bool) frontFacing)
         screenHit = HierarchicalReflection(In.world, normal, reflect(-v, normal), rough);
 #ifdef LUX_RAY_QUERY
     if (RayEffect(2u | 8u | LUX_RESTIR_GI | 64u))
-        result += RayEnvironmentLighting(color.rgb, metal, rough, normal, v, In.world, In.position.xy, restirGI, denoisedSpec, screenHit) * occlusion;
+        result += RayEnvironmentLighting(color.rgb, metal, rough, normal, v, In.world, In.position.xy, restirGI, denoisedSpec, screenHit, bent, diffuseVisibility, specularVisibility) * materialAO;
     else
 #endif
-        result += EnvironmentLighting(color.rgb, metal, rough, normal, v, screenHit) * occlusion;
+        result += EnvironmentLighting(color.rgb, metal, rough, normal, v, screenHit, bent, diffuseVisibility, specularVisibility) * materialAO;
+    if (debug == LUX_DEBUG_INDIRECT_LIGHTING) {
+        const float3 indirectLighting = max(result-directLighting,0.0f);
+        RETURN(float4(indirectLighting/(1.0f+indirectLighting),1));
+    }
+    if (debug == LUX_DEBUG_SSR_CONFIDENCE)
+        RETURN(float4(float3(1,1,1)*screenHit.a,1));
     float3 emission = gDraw.emissive.rgb;
     if (gDraw.emissive.w > 0.5f)
         emission *= SampleMaterial(gEmissiveTexture, materialUV).rgb;
-    color.rgb = result + emission;
+    if (debug == LUX_DEBUG_EMISSIVE)
+        RETURN(float4(emission/(1.0f+emission),1));
+    color.rgb = AerialPerspective(result + emission, In.world);
     color.rgb = clamp(color.rgb, 0.0f, 65504.0f);
     RETURN(color);
 }

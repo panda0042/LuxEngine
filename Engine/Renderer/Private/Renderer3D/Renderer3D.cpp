@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cfloat>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -156,6 +157,9 @@ struct Renderer3D::Context::Impl {
     // Scene draws retain GPU IDs until Render() records them. Cache eviction must not retire
     // buffers or textures that a previously submitted draw in this scene still references.
     std::vector<Ref<GpuTexture>> frameTextures;
+    // Retain the vertex stream actually submitted in this context. UpdateVertices
+    // uses copy-on-write, even when multiple poses are evaluated before the next render.
+    std::unordered_map<uint64, Ref<GpuBuffer>> previousVertices, submittedVertices;
     std::unordered_map<std::string, std::string> warnings;
     std::string lastError;
     size_t textureBytes = 0;
@@ -280,6 +284,8 @@ bool Mesh3D::Upload(GpuDevice* gpu, std::span<const Vertex3D> vertices,
     Release();
     vertices_ = std::move(verticesBuffer);
     indices_ = std::move(indicesBuffer);
+    skinBones_ = 0;
+    ocean_ = false;
     origin_ = origin;
     minimum_ = minimum;
     maximum_ = maximum;
@@ -293,6 +299,7 @@ void Mesh3D::Release() {
     indices_.reset();
     indexCount_ = 0;
     ocean_ = false;
+    skinBones_ = 0;
 }
 
 bool Mesh3D::IsValid() const {
@@ -300,7 +307,7 @@ bool Mesh3D::IsValid() const {
 }
 
 bool Mesh3D::UpdateVertices(std::span<const Vertex3D> vertices) {
-    if (ocean_ || !IsValid() ||
+    if (ocean_ || skinBones_ || !IsValid() ||
         vertices.size_bytes() / sizeof(Vertex3D) != vertices_->GetSize() / sizeof(RenderVertex))
         return false;
     const auto origin = vertices.front().position;
@@ -382,6 +389,98 @@ bool Mesh3D::UploadOcean(GpuDevice* gpu, const OceanSpectrum& spectrum) {
     return true;
 }
 
+bool Mesh3D::UploadSkinned(GpuDevice* gpu, const ModelSubmesh& part) {
+    if (!gpu || !gpu->IsReady() || !part.skinned || part.morphTargets || part.vertices.empty() ||
+        part.vertices.size() > 1000000 || part.bones.empty() || part.bones.size() > 1024 ||
+        part.indices.empty() || part.indices.size() % 3 ||
+        part.indices.size() > UINT32_MAX / sizeof(uint32))
+        return false;
+    for (const auto index : part.indices)
+        if (index >= part.vertices.size())
+            return false;
+    Mesh3D mesh;
+    mesh.origin_ = part.vertices.front().position;
+    std::vector<float> seed(12u * part.vertices.size());
+    const size_t vertexEntries = seed.size() / 4;
+    for (size_t i = 0; i < part.vertices.size(); ++i) {
+        const auto& v = part.vertices[i];
+        const Vec3 relative = v.position - mesh.origin_;
+        if (!FitsGpuVector(relative) || !FitsGpuVector(v.normal) || v.weights.size() > 1024 ||
+            !(std::abs(v.texCoords.x) <= FLT_MAX && std::abs(v.texCoords.y) <= FLT_MAX))
+            return false;
+        const size_t offset = seed.size() / 4 - vertexEntries;
+        if (offset + (v.weights.size() + 1) / 2 + vertexEntries > (1u << 24))
+            return false;
+        const float attributes[12] = {float(relative.x),
+                                      float(relative.y),
+                                      float(relative.z),
+                                      float(offset),
+                                      float(v.normal.x),
+                                      float(v.normal.y),
+                                      float(v.normal.z),
+                                      float(v.weights.size()),
+                                      float(v.texCoords.x),
+                                      float(v.texCoords.y),
+                                      0,
+                                      0};
+        std::copy_n(attributes, 12, seed.begin() + 12 * i);
+        for (const auto& influence : v.weights) {
+            if (influence.bone >= part.bones.size() ||
+                !(influence.weight >= 0 && std::isfinite(influence.weight)))
+                return false;
+            seed.push_back(float(influence.bone));
+            seed.push_back(influence.weight);
+        }
+        if (v.weights.size() % 2) {
+            seed.push_back(0);
+            seed.push_back(0);
+        }
+    }
+    mesh.vertices_ = CreateRef<GpuBuffer>();
+    mesh.indices_ = CreateRef<GpuBuffer>();
+    const uint32 indexBytes = uint32(part.indices.size() * sizeof(uint32));
+    if (!mesh.indices_->Initialize(gpu, BufferType::Index, indexBytes) ||
+        !mesh.indices_->SetData(part.indices.data(), indexBytes))
+        return false;
+    if (!gpu->backend_->CreateSkinBuffer(uint32(part.vertices.size()), uint32(part.bones.size()),
+                                         seed, mesh.vertices_->handle_))
+        return false;
+    mesh.vertices_->owner_ = gpu->backend_;
+    mesh.vertices_->sizeBytes_ = uint32(part.vertices.size() * sizeof(RenderVertex));
+    mesh.indexCount_ = uint32(part.indices.size());
+    mesh.skinBones_ = uint32(part.bones.size());
+    mesh.minimum_ = part.boundsMin - mesh.origin_;
+    mesh.maximum_ = part.boundsMax - mesh.origin_;
+    *this = std::move(mesh);
+    return true;
+}
+
+bool Mesh3D::UpdateSkin(std::span<const Mat4> palette, Vec3 low, Vec3 high) {
+    if (!skinBones_ || skinBones_ != palette.size() || !IsValid() ||
+        !FitsGpuVector(low - origin_) || !FitsGpuVector(high - origin_) || low.x > high.x ||
+        low.y > high.y || low.z > high.z)
+        return false;
+    auto owner = vertices_->owner_.lock();
+    if (!owner)
+        return false;
+    std::vector<float> floats;
+    floats.reserve(16 * palette.size());
+    for (const auto& matrix : palette) {
+        const auto relative = Mat4::Translate(origin_ * -1.0) * matrix * Mat4::Translate(origin_);
+        for (double c : relative.elements) {
+            if (!(std::abs(c) <= FLT_MAX))
+                return false;
+            floats.push_back(float(c));
+        }
+    }
+    if (!owner->UpdateSkinBuffer(vertices_->handle_, floats))
+        return false;
+    minimum_ = low - origin_;
+    maximum_ = high - origin_;
+    ++geometryRevision_;
+    return true;
+}
+
 bool Mesh3D::UpdateOcean(float timeSeconds) {
     if (!ocean_ || !vertices_)
         return false;
@@ -424,6 +523,8 @@ void Renderer3D::Context::Shutdown() {
         impl_->modern->ClearDraws();
     impl_->modern.reset();
     impl_->frameTextures.clear();
+    impl_->previousVertices.clear();
+    impl_->submittedVertices.clear();
     impl_->meshes.clear();
     impl_->textures.clear();
     impl_->warnings.clear();
@@ -491,6 +592,18 @@ void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera,
                           coastalWater->breakerHeight >= 0 && coastalWater->breakerHeight <= 4))
         throw std::invalid_argument("Invalid coastal water frame");
     impl_->settings = settings;
+    ApplyPostProcessVolumes(impl_->settings, camera.GetPosition());
+    if (settings.postDebugView >= PostDebugView::TextureMip) {
+        impl_->settings.showSkybox = false;
+        impl_->settings.lensDistortion = 0;
+        impl_->settings.physicalCamera.motionBlur = false;
+        impl_->settings.temporalAntialiasing = false;
+        impl_->settings.motionBlurShutter = 0;
+        if (settings.postDebugView != PostDebugView::VolumetricFog) {
+            impl_->settings.fog.density = 0;
+            impl_->settings.fog.volumes.clear();
+        }
+    }
     impl_->settings.mode = Render3DMode::Pbr;
     impl_->coastalWater = coastalWater;
     impl_->exposure = exposure;
@@ -526,6 +639,7 @@ void Renderer3D::Context::BeginScene(const PerspectiveCamera& camera,
                                     camera.GetPosition(), true});
     }
     impl_->stats = {};
+    impl_->submittedVertices.clear();
     impl_->frameTextures.clear();
     impl_->active = true;
 }
@@ -550,6 +664,8 @@ void Renderer3D::Context::EndScene() {
     }
     if (impl_->modern)
         impl_->modern->ClearDraws();
+    impl_->previousVertices.swap(impl_->submittedVertices);
+    impl_->submittedVertices.clear();
 }
 
 void Renderer3D::Context::AbortScene() {
@@ -603,6 +719,9 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
         return;
     if (!mesh.vertices_->BelongsTo(*impl_->device) || !mesh.indices_->BelongsTo(*impl_->device))
         return;
+    if (!(material.lodTransition >= -1 && material.lodTransition <= 1) ||
+        (material.surface && !material.surface->IsValid()))
+        return;
     const auto* texture = textures.baseColor;
     if ((texture && !texture->BelongsTo(*impl_->device)) ||
         (textures.normal && !textures.normal->BelongsTo(*impl_->device)) ||
@@ -645,10 +764,15 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
         return;
     if (material.windAmplitude > 0) {
         const auto inverse = relativeModel.InverseAffine();
-        const auto x = inverse.TransformDirection({material.windAmplitude, 0, 0});
-        const auto z = inverse.TransformDirection({0, 0, material.windAmplitude});
-        breakerMargin += Vec3{std::abs(x.x) + std::abs(z.x), std::abs(x.y) + std::abs(z.y),
-                              std::abs(x.z) + std::abs(z.z)};
+        float margin = material.windAmplitude;
+        for (const auto& interaction : impl_->settings.foliageInteractions)
+            margin += material.windAmplitude * interaction.strength;
+        const auto x = inverse.TransformDirection({margin, 0, 0});
+        const auto y = inverse.TransformDirection({0, .75 * margin, 0});
+        const auto z = inverse.TransformDirection({0, 0, margin});
+        breakerMargin += Vec3{std::abs(x.x) + std::abs(y.x) + std::abs(z.x),
+                              std::abs(x.y) + std::abs(y.y) + std::abs(z.y),
+                              std::abs(x.z) + std::abs(y.z) + std::abs(z.z)};
     }
     const bool shadowOnly =
         OutsideClipVolume(impl_->viewProjection * relativeModel, mesh.minimum_ - breakerMargin,
@@ -663,7 +787,8 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
         const auto& settings = impl_->settings;
         const bool useRays = settings.rayTracing.Enabled() ||
                              settings.radianceCascades.strength > 0 ||
-                             (settings.fog.density > 0 && settings.fog.rayTracedShadows);
+                             ((settings.fog.density > 0 || !settings.fog.volumes.empty()) &&
+                              settings.fog.rayTracedShadows);
         const bool rayCaster =
             opaqueCaster && !mesh.ocean_ && useRays && impl_->device->GetInfo().rayTracing;
         if (!rasterCaster && !rayCaster) {
@@ -681,7 +806,15 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     }
     auto normalSampling = material.textureSampling;
     normalSampling.normalMap = true;
-    std::array<Ref<GpuTexture>, 8> maps;
+    const bool packedTerrain = material.terrainLayer && material.terrainLayer->palette;
+    normalSampling.mipSemantic =
+        material.water || packedTerrain || (material.surface && material.surface->impostorDepth)
+            ? TextureMipSemantic::Default
+            : TextureMipSemantic::NormalVariance;
+    auto roughnessSampling = material.textureSampling;
+    roughnessSampling.mipSemantic =
+        packedTerrain ? TextureMipSemantic::Default : TextureMipSemantic::PerceptualRoughness;
+    std::array<Ref<GpuTexture>, 13> maps;
     const auto map = [this, &maps](size_t index, const std::string& path,
                                    TextureSampling sampling) {
         maps[index] = ResolveTexture(path, sampling, TextureColorSpace::Linear);
@@ -694,7 +827,7 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
                                 : map(1, material.metallicTexture, material.textureSampling);
     const uint64 roughness = textures.roughness
                                  ? textures.roughness->handle_
-                                 : map(2, material.roughnessTexture, material.textureSampling);
+                                 : map(2, material.roughnessTexture, roughnessSampling);
     const uint64 occlusion = textures.occlusion
                                  ? textures.occlusion->handle_
                                  : map(3, material.occlusionTexture, material.textureSampling);
@@ -725,7 +858,8 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
         if (terrainBase) {
             terrainColor = terrainBase->handle_;
             terrainNormal = map(4, layer.normalTexture, normalSampling);
-            terrainRoughness = map(5, layer.roughnessTexture, material.textureSampling);
+            terrainRoughness = map(5, layer.roughnessTexture,
+                                   layer.palette ? material.textureSampling : roughnessSampling);
             if (relief) {
                 terrainHeight = map(7, layer.heightTexture, material.textureSampling);
                 heightBlend = layer.heightBlend;
@@ -735,10 +869,16 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     }
     const bool alphaCoverage = texture && texture->alphaMaskCutoff_ > 0 &&
                                texture->alphaMaskCutoff_ == AlphaMaskCutoff(material);
+    const auto* normalMap = textures.normal ? textures.normal : maps[0].get();
     const uint32 sampling =
+        (normalMap && normalMap->normalVariance_ ? LUX_FORGE_NORMAL_VARIANCE : 0u) |
+        (maps[4] && maps[4]->normalVariance_ ? LUX_FORGE_LAYER_NORMAL_VARIANCE : 0u) |
         (material.textureSampling.addressMode == TextureAddressMode::Repeat ? 1u : 0u) |
         (material.textureSampling.anisotropic ? 2u : 0u) | (alphaCoverage ? 4u : 0u) |
-        (textures.unlitSprite ? LUX_FORGE_SAMPLING_UNLIT : 0u);
+        (textures.unlitSprite ? LUX_FORGE_SAMPLING_UNLIT : 0u) |
+        (terrainColor && terrainRoughness && material.terrainLayer->palette
+             ? LUX_FORGE_SAMPLING_TERRAIN_PALETTE
+             : 0u);
     Vec4 water{0, 0, 0, 0};
     if (material.water) {
         const auto airToWater = material.water->indexOfRefraction;
@@ -757,14 +897,57 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
                  static_cast<float>(absorption.z), airToWater};
     }
     const auto& settings = impl_->settings;
-    uint32 shadowPageMask = settings.virtualShadows && impl_->shadowProjection
-                                ? Rhi::VirtualShadowPageMask(
-                                      *impl_->shadowProjection, relativeModel,
-                                      mesh.minimum_ - breakerMargin, mesh.maximum_ + breakerMargin,
-                                      settings.shadowResolution, settings.shadowNormalBias)
-                                : LUX_VIRTUAL_SHADOW_ALL_PAGES;
+    uint32 shadowPageMask =
+        settings.virtualShadows && impl_->shadowProjection
+            ? Rhi::VirtualShadowPageMask(
+                  *impl_->shadowProjection, relativeModel, mesh.minimum_ - breakerMargin,
+                  mesh.maximum_ + breakerMargin, settings.shadowResolution,
+                  settings.shadowNormalBias, settings.shadowLightAngularRadius > 0 ? 41. : 2.)
+            : LUX_VIRTUAL_SHADOW_ALL_PAGES;
     if (outsideShadow)
         shadowPageMask = 0;
+    Vec4 lobes{0, 0, 0, 0}, optics{0, 0, 0, 0}, specular{0, 0, 0, 0};
+    std::array<uint64, 5> surfaceMaps{};
+    if (const auto& surface = material.surface) {
+        maps[10] = ResolveTexture(surface->detailColorTexture, material.textureSampling,
+                                  TextureColorSpace::Srgb);
+        surfaceMaps = {map(8, surface->thicknessTexture, material.textureSampling),
+                       map(9, surface->coatNormalTexture, normalSampling),
+                       maps[10] ? maps[10]->handle_ : 0,
+                       map(11, surface->detailNormalTexture, normalSampling),
+                       map(12, surface->detailRoughnessTexture, roughnessSampling)};
+        uint32 flags = surface->impostorDepth ? 32u : 0u;
+        for (uint32 index = 0; index < surfaceMaps.size(); ++index)
+            if (surfaceMaps[index])
+                flags |= 1u << index;
+        lobes = {float(uint32(surface->model) + 1u), surface->clearCoat, surface->coatRoughness,
+                 surface->anisotropy};
+        optics = {surface->sheen, surface->indexOfRefraction, surface->transmission,
+                  surface->detailScale};
+        specular = {float(surface->specularTint.x), float(surface->specularTint.y),
+                    float(surface->specularTint.z), float(flags)};
+    }
+    uint64 instance = material.motionInstance;
+    if (!instance && (material.water || material.windAmplitude > 0 ||
+                      (texture && material.alphaMode == MaterialAlphaMode::Mask))) {
+        // Untagged static placements of one mesh need distinct foliage coverage and water history.
+        // Hash the caller's double-precision transform, excluding camera and changing mesh origin.
+        instance = 14695981039346656037ull;
+        for (double coefficient : transform.elements)
+            instance = (instance ^ std::bit_cast<uint64>(coefficient)) * 1099511628211ull;
+        instance |= uint64{1} << 63;
+    }
+    Ref<GpuBuffer> prior;
+    const bool needsVertices =
+        !shadowOnly && !mesh.ocean_ && !mesh.skinBones_ && instance &&
+        (settings.temporalAntialiasing || settings.temporalDebugView != TemporalDebugView::Off ||
+         settings.motionBlurShutter > 0.f || settings.physicalCamera.motionBlur);
+    if (needsVertices) {
+        const auto found = impl_->previousVertices.find(mesh.indices_->handle_);
+        if (found != impl_->previousVertices.end() &&
+            found->second->GetSize() == mesh.vertices_->GetSize())
+            prior = found->second;
+    }
     if (!impl_->modern->AddDraw(
             {mesh.vertices_->handle_,
              mesh.indices_->handle_,
@@ -790,10 +973,10 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
              terrainColor,
              terrainNormal,
              terrainRoughness,
-             material.motionInstance,
+             instance,
              mesh.geometryRevision_,
              {material.wettingResponse * settings.surfaceWetness,
-              material.water ? material.water->rippleStrength : 0.f, 0, 0},
+              material.water ? material.water->rippleStrength : 0.f, impl_->settings.rainfall, 0},
              {material.windAmplitude, float(scatter.x), float(scatter.y), float(scatter.z)},
              material.subsurfaceThickness,
              material.emissive,
@@ -801,10 +984,21 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
              height,
              terrainHeight,
              material.parallaxDepth,
-             heightBlend}))
+             heightBlend,
+             prior ? prior->handle_ : 0,
+             lobes,
+             optics,
+             specular,
+             surfaceMaps,
+             material.lodTransition}))
         return;
     ++impl_->stats.meshCount;
     lockedState->RetainGeometry(mesh.vertices_, mesh.indices_);
+    if (needsVertices) {
+        impl_->submittedVertices[mesh.indices_->handle_] = mesh.vertices_;
+        if (prior && prior != mesh.vertices_)
+            lockedState->RetainGeometry(prior, mesh.indices_);
+    }
     ++impl_->stats.drawCalls;
 }
 
@@ -836,6 +1030,7 @@ Renderer3D::Context::ResolveTexture(const std::string& path, TextureSampling sam
         sourceKey + "\n" + std::to_string(static_cast<int>(colorSpace)) +
         std::to_string(sampling.mipmaps) + std::to_string(static_cast<int>(sampling.addressMode)) +
         std::to_string(sampling.anisotropic) + std::to_string(sampling.normalMap) + ":" +
+        std::to_string(static_cast<int>(sampling.mipSemantic)) + ":" +
         std::to_string(static_cast<int>(channel)) + ":" +
         std::to_string(std::bit_cast<uint32>(alphaMaskCutoff));
     auto found = impl_->textures.find(key);
@@ -958,11 +1153,10 @@ bool Renderer3D::Context::DrawMeshAssetImpl(const std::string& path, const Mat4&
     auto& cached = found->second;
     cached.used = ++impl_->sequence;
     const auto revision = path.empty() ? uint64{1} : AssetManager::GetMeshRevision(path);
+    const auto paths = MaterialTexturePaths(material);
     const bool requiresUv =
-        !material.baseColorTexture.empty() || !material.normalTexture.empty() ||
-        !material.metallicTexture.empty() || !material.roughnessTexture.empty() ||
-        !material.occlusionTexture.empty() || !material.emissiveTexture.empty() ||
-        !material.heightTexture.empty() || material.terrainLayer.has_value();
+        material.terrainLayer.has_value() ||
+        std::any_of(paths.begin(), paths.end(), [](const auto* path) { return !path->empty(); });
     if (modelSubmesh >= 0) {
         std::string error = gltfModel ? gltfError : std::string{};
         auto model = gltfModel ? *gltfModel : ModelAsset::Load(path, error);
@@ -985,6 +1179,13 @@ bool Renderer3D::Context::DrawMeshAssetImpl(const std::string& path, const Mat4&
                               "모델 포즈의 정점 데이터가 하위 메시와 일치하지 않습니다: " + path);
                 return false;
             }
+            const auto& renderSettings = impl_->settings;
+            const bool skinOnGpu =
+                material.gpuSkinning && instance && part.skinned && !part.morphTargets &&
+                !part.bones.empty() && part.bones.size() <= 1024 &&
+                !(renderSettings.rayTracing.Enabled() ||
+                  renderSettings.radianceCascades.strength > 0.f ||
+                  (renderSettings.fog.density > 0.f && renderSettings.fog.rayTracedShadows));
             const bool ownsPose = overridePose && poseOwner.get() == overridePose;
             const bool poseMatches = overridePose ? ownsPose && cached.usesOverride &&
                                                         cached.pose.lock() == poseOwner &&
@@ -992,7 +1193,8 @@ bool Renderer3D::Context::DrawMeshAssetImpl(const std::string& path, const Mat4&
                                                   : !cached.usesOverride && cached.time == time;
             if ((requiresUv || importedUv) && !part.hasTexCoords) {
                 error = "텍스처를 적용할 UV 좌표가 없는 모델입니다: " + path;
-            } else if (cached.model != model || cached.clip != clip || !poseMatches) {
+            } else if (cached.model != model || cached.clip != clip || !poseMatches ||
+                       (cached.mesh && cached.mesh->skinBones_ && !skinOnGpu)) {
                 ModelPose pose;
                 const std::vector<ModelVertex>* source = &part.vertices;
                 if (overridePose) {
@@ -1023,8 +1225,66 @@ bool Renderer3D::Context::DrawMeshAssetImpl(const std::string& path, const Mat4&
                         impl_->meshes.erase(oldest);
                     }
                     room = room && impl_->meshBytes - cached.bytes + bytes <= Budget;
-                    bool uploaded = room && cached.model == model && cached.mesh &&
-                                    cached.mesh->UpdateVertices(vertices);
+                    bool uploaded = false;
+                    const auto& worlds =
+                        overridePose ? overridePose->nodeWorldTransforms : pose.nodeWorldTransforms;
+                    if (room && skinOnGpu && part.node < worlds.size()) {
+                        std::vector<Mat4> palette;
+                        try {
+                            const auto inverse = worlds[part.node].InverseAffine();
+                            for (const auto& bone : part.bones) {
+                                if (bone.node >= worlds.size())
+                                    break;
+                                palette.push_back(inverse * worlds[bone.node] * bone.inverseBind);
+                            }
+                        } catch (const std::invalid_argument&) {
+                            palette.clear();
+                        }
+                        Vec3 lo = vertices.front().position, hi = lo;
+                        const auto extent = part.boundsMax - part.boundsMin;
+                        const double maxErrorSquared =
+                            .00015 * .00015 * std::max(1., extent.Dot(extent));
+                        bool linear = palette.size() == part.bones.size();
+                        // Keep sculpted overrides, dual-quaternion rigs and other deformations on
+                        // their authored path. The existing evaluated pose supplies conservative
+                        // exact bounds.
+                        for (size_t v = 0; linear && v < vertices.size(); ++v) {
+                            const auto& bind = part.vertices[v];
+                            Vec3 expected;
+                            double sum = 0;
+                            for (const auto& w : bind.weights) {
+                                if (w.bone >= palette.size()) {
+                                    linear = false;
+                                    break;
+                                }
+                                expected +=
+                                    palette[w.bone].TransformPoint(bind.position) * w.weight;
+                                sum += w.weight;
+                            }
+                            expected = sum > 0 ? expected * (1. / sum) : bind.position;
+                            const auto& actual = vertices[v].position;
+                            const auto errorVector = expected - actual;
+                            linear = linear && errorVector.Dot(errorVector) <= maxErrorSquared;
+                            ExtendBounds(lo, hi, actual);
+                        }
+                        if (linear) {
+                            auto candidate =
+                                cached.model == model && cached.mesh && cached.mesh->skinBones_
+                                    ? cached.mesh
+                                    : Ref<Mesh3D>{};
+                            if (!candidate) {
+                                candidate = CreateRef<Mesh3D>();
+                                if (!candidate->UploadSkinned(impl_->device, part))
+                                    candidate.reset();
+                            }
+                            uploaded = candidate && candidate->UpdateSkin(palette, lo, hi);
+                            if (uploaded)
+                                cached.mesh = std::move(candidate);
+                        }
+                    }
+                    if (!uploaded)
+                        uploaded = room && cached.model == model && cached.mesh &&
+                                   cached.mesh->UpdateVertices(vertices);
                     if (room && !uploaded) {
                         auto mesh = CreateRef<Mesh3D>();
                         uploaded = mesh->Upload(impl_->device, vertices, part.indices);
@@ -1193,13 +1453,18 @@ bool Renderer3D::Context::DrawMeshAssetImpl(const std::string& path, const Mat4&
                                  AlphaMaskCutoff(drawable));
         auto normalSample = sample;
         normalSample.normalMap = true;
+        normalSample.mipSemantic =
+            drawable.water ? TextureMipSemantic::Default : TextureMipSemantic::NormalVariance;
         const auto normal = drawable.normalTexture.empty()
                                 ? ResolveTexture(path, normalSample, TextureColorSpace::Linear, 0,
                                                  cached.model, imported->normalTexture)
                                 : nullptr;
         const auto map = [&](int32 index, const std::string& overridePath, TextureChannel channel) {
-            return overridePath.empty() ? ResolveTexture(path, sample, TextureColorSpace::Linear, 0,
-                                                         cached.model, index, channel)
+            auto filtering = sample;
+            if (channel == TextureChannel::Green)
+                filtering.mipSemantic = TextureMipSemantic::PerceptualRoughness;
+            return overridePath.empty() ? ResolveTexture(path, filtering, TextureColorSpace::Linear,
+                                                         0, cached.model, index, channel)
                                         : nullptr;
         };
         const auto metallic =

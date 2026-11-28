@@ -1,10 +1,11 @@
 #ifndef LUX_ATMOSPHERE_H
 #define LUX_ATMOSPHERE_H
+#include "LuxAirOptics.h"
 
 // Spherical Earth, distances in kilometres. Same extinction coefficients and
 // density scale heights as the offline Atmosphere panorama baker.
-float3 SkyScattering(float3 view, float3 sun, float altitude, float aerosol,
-                     float3 solarIrradiance) {
+float3 AtmosphereRadiance(float3 view, float3 sun, float altitude, float aerosol,
+                          float3 solarIrradiance, bool solarDisc) {
     const float radius = 6360.0f;
     const float top = radius + 100.0f;
     const float r = radius + clamp(altitude * .001f, .002f, 99.0f);
@@ -28,7 +29,9 @@ float3 SkyScattering(float3 view, float3 sun, float altitude, float aerosol,
         const float3 pos = float3(0, r, 0) + view * ((end + previous) * .5f);
         const float h = max(length(pos) - radius, 0.0f);
         const float2 density = exp(-h / float2(8.0f, 1.2f));
-        const float3 extinction = betaR * density.x + betaM * density.y;
+        const float3 ozone = float3(.000650f, .001881f, .000085f);
+        const float ozoneDensity = saturate(1.0f - abs(h - 25.0f) / 15.0f);
+        const float3 extinction = betaR * density.x + betaM * density.y + ozone * ozoneDensity;
         const float sunY = dot(normalize(pos), sun);
         const float horizon = -sqrt(saturate(2.0f * h / radius));
         if (sunY > horizon) {
@@ -36,16 +39,37 @@ float3 SkyScattering(float3 view, float3 sun, float altitude, float aerosol,
             const float elevation = max(sunY - horizon, 0.0f);
             const float2 solarDepth =
                 density * float2(8, 1.2f) / sqrt(elevation * elevation + float2(.00078f, .00012f));
+#ifdef LUX_ATMOSPHERE_TABLE
+            const float2 uv = AirUV(h, sunY);
+            const float3 lightTr = SampleLvlTex2D(LUX_ATMOSPHERE_TABLE, gSamplerTrilinearClamp,
+                                                  float2(uv.x * .5f, uv.y), 0)
+                                       .rgb;
+            const float3 multiple = SampleLvlTex2D(LUX_ATMOSPHERE_TABLE, gSamplerTrilinearClamp,
+                                                   float2(.5f + uv.x * .5f, uv.y), 0)
+                                        .rgb;
+            const float3 viewTr = exp(-depth - extinction * (.5f * ds));
+            scatter += viewTr *
+                       ((betaR * density.x * phaseR + .90f * betaM * density.y * phaseM) * lightTr +
+                        (betaR * density.x + .90f * betaM * density.y) * multiple) *
+                       ds;
+#else
             const float3 tr =
                 exp(-depth - extinction * (.5f * ds) - betaR * solarDepth.x - betaM * solarDepth.y);
             scatter += tr * (betaR * density.x * phaseR + .90f * betaM * density.y * phaseM) * ds;
+#endif
         }
         depth += extinction * ds;
         previous = end;
     }
-    if (!ground && sun.y > 0.0f)
-        scatter += exp(-depth) * smoothstep(.999980f, .999992f, mu) * 16.0f;
-    return .002f * float3(.34f, .46f, 1.0f) + scatter * 18.0f * solarIrradiance;
+    if (ground) {
+        // Lower hemisphere supplies the diffuse reflection of sunlit terrain to the sky probe.
+        scatter += exp(-depth) * float3(.12f, .14f, .12f) * saturate(sun.y) * .31830989f;
+    } else if (solarDisc && sun.y > 0.0f) {
+        const float radiusCos = .99998919f; // 0.00465 rad angular radius
+        const float aa = clamp(fwidth(mu) * .5f, .00000025f, .000008f);
+        scatter += exp(-depth) * smoothstep(radiusCos - aa, radiusCos + aa, mu) / .00006793f;
+    }
+    return .000025f * float3(.34f, .46f, 1.0f) + scatter * solarIrradiance;
 }
 
 float CloudHash(float3 p) {
@@ -68,20 +92,45 @@ float CloudNoise(float3 p) {
         t.z);
 }
 
-float CloudDensity(float3 p, float coverage, float footprint) {
-    const float height = saturate((p.y - 1250.0f) / 1150.0f);
-    const float envelope = smoothstep(0.0f, .18f, height) * (1.0f - smoothstep(.5f, 1.0f, height));
-    const float3 uv = p / 1024.0f;
-    // Fade sub-step detail to its mean at grazing view angles to prevent stacked bands.
-    const float medium =
-        lerp(CloudNoise(uv * 2.0f + 27.0f), .5f, smoothstep(150.0f, 500.0f, footprint));
-    const float fine = lerp(CloudNoise(uv * 8.0f), .5f, smoothstep(40.0f, 130.0f, footprint));
-    const float shape = CloudNoise(uv) * .65f + medium * .25f + fine * .10f;
-    return saturate((shape - lerp(.82f, .18f, coverage)) * 2.8f) * envelope;
+// Distance to jittered lattice sites. Restrict the jitter to keep distant sites
+// from affecting the compact erosion kernel outside the eight enclosing corners.
+float CloudCellular(float3 p) {
+    const float3 cell = floor(p);
+    const float3 f = frac(p);
+    float nearest = 1.0f;
+    UNROLL for (int i = 0; i < 8; ++i) {
+        const float3 corner = float3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+        const float h = CloudHash(cell + corner);
+        const float3 delta = corner - f + .36f * (frac(h * float3(13.13f, 41.71f, 83.37f)) - .5f);
+        nearest = min(nearest, dot(delta, delta));
+    }
+    return saturate(sqrt(nearest) * 1.3f);
 }
 
-float3 CloudLayer(float3 sky, float3 view, float3 sun, float coverage, float3 eye,
-                  float3 solarIrradiance) {
+float CloudDensity(float3 p, float coverage, float footprint) {
+    const float height = saturate((p.y - 1250.0f) / 1150.0f);
+    const float3 uv = p / 1024.0f;
+    const float weather = CloudNoise(float3(uv.x * .25f, 7.0f, uv.z * .25f));
+    const float tower = smoothstep(.25f, .8f, weather + coverage * .16f);
+    const float envelope =
+        smoothstep(0.0f, .12f, height) *
+        (1.0f - smoothstep(lerp(.2f, .57f, tower), lerp(.52f, 1.0f, tower), height));
+    const float base = CloudNoise(uv) * .67f + CloudNoise(uv * 2.0f + 27.0f) * .33f;
+    const float localCoverage = coverage + (weather - .5f) * .32f;
+    float mass = (base - lerp(.79f, .23f, localCoverage)) * 3.8f * envelope;
+    if (mass <= 0.0f)
+        return 0.0f;
+    const float erosion = lerp(CloudCellular(uv * 4.0f), .5f, smoothstep(50.0f, 180.0f, footprint));
+    return saturate(mass - erosion * .32f);
+}
+
+float CloudPhase(float mu, float g) {
+    return (1.0f - g * g) / (12.56637f * pow(max(1.0f + g * g - 2.0f * g * mu, .015f), 1.5f));
+}
+
+float3 CloudTransport(float3 sky, float3 view, float3 sun, float coverage, float3 eye,
+                      float3 solarIrradiance, out(float) visibleSky) {
+    visibleSky = 1.0f;
     if (coverage <= 0.0f || abs(view.y) < .00001f)
         return sky;
     const float2 bounds = (float2(1250.0f, 2400.0f) - eye.y) / view.y;
@@ -102,11 +151,17 @@ float3 CloudLayer(float3 sky, float3 view, float3 sun, float coverage, float3 ey
         if (density > .001f) {
             const float sunDepth = 140.0f * CloudDensity(pos + sun * 70.0f, coverage, 140.0f) +
                                    380.0f * CloudDensity(pos + sun * 330.0f, coverage, 380.0f);
-            const float phase = .45f + .85f * pow(saturate(dot(sun, view)), 8.0f);
+            const float mu = dot(sun, view);
+            const float opticalDepth = sunDepth * .005f;
+            const float powder = 1.0f - exp(-2.0f * density);
+            const float phase = .85f * CloudPhase(mu, .72f) + .15f * CloudPhase(mu, -.25f);
+            const float multiple = .35f * CloudPhase(mu, .3f) * exp(-opticalDepth * .35f);
             const float3 source =
-                float3(.015f, .022f, .04f) +
+                float3(.00002f, .00003f, .00005f) +
                 daylight * solarIrradiance *
-                    (float3(.16f, .22f, .32f) + direct * (phase * exp(-sunDepth * .005f)));
+                    (float3(.020f, .032f, .055f) *
+                         (.4f + .6f * saturate((pos.y - 1250.0f) / 1150.0f)) +
+                     direct * (phase * exp(-opticalDepth) + multiple) * (.8f + .4f * powder));
             const float opacity = 1.0f - exp(-density * ds * .005f);
             scatter += transmittance * opacity * source;
             transmittance *= 1.0f - opacity;
@@ -114,6 +169,8 @@ float3 CloudLayer(float3 sky, float3 view, float3 sun, float coverage, float3 ey
                 break;
         }
     }
-    return lerp(sky, scatter + transmittance * sky, 1.0f - smoothstep(18000.0f, 35000.0f, entry));
+    const float horizonFade = 1.0f - smoothstep(18000.0f, 35000.0f, entry);
+    visibleSky = lerp(1.0f, transmittance, horizonFade);
+    return scatter * horizonFade + visibleSky * sky;
 }
 #endif

@@ -87,7 +87,12 @@ def prepare(cache, catalog, decoded_cache=None, vegetation=False):
             subprocess.run(["gltf-transform", "ktxdecompress", raw, packed], check=True)
             subprocess.run(["gltf-transform", "dequantize", packed, decoded], check=True)
         target = SAMPLE_ASSETS / package / name
-        records.append((item, {**src, "url": url, "format": "GLB"}, export(decoded, target)))
+        files = export(decoded, target)
+        if name == "norway-spruce":
+            from bake_tree_views import bake
+            bake(target,target)
+            files.extend(target / f"spruce-views-{suffix}.png" for suffix in ("color","normal-depth"))
+        records.append((item, {**src, "url": url, "format": "GLB"}, files))
     manifest({package: records})
 
 

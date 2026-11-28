@@ -11,8 +11,11 @@
 extern "C" {
 #endif
 
-#define LUX_FORGE_API_VERSION 24u
+#define LUX_FORGE_API_VERSION 25u
 #define LUX_FORGE_SAMPLING_UNLIT 8u
+#define LUX_FORGE_NORMAL_VARIANCE 32u
+#define LUX_FORGE_LAYER_NORMAL_VARIANCE 64u
+#define LUX_FORGE_SAMPLING_TERRAIN_PALETTE 16u
 
 #if defined(_WIN32)
 #if defined(LUX_FORGE_BUILD)
@@ -95,8 +98,10 @@ typedef struct LuxForgeStats {
     uint32_t waterReflectionPasses;
     uint32_t temporalResolvePasses, temporalHistoryPasses;
     uint32_t restirPasses, temporalRestirPasses, rayDenoiserPasses, objectMotionDraws;
+    uint32_t deformedMotionDraws, waterMotionDraws, skinningDispatches;
     uint32_t radianceCascadePasses;
     uint32_t virtualShadowPages;
+    uint32_t reusedShadowPages;
     uint32_t requestedShadowPages;
     uint64_t gpuTimingFrame;
     double gpuTimeMs;
@@ -167,6 +172,9 @@ typedef struct LuxForgeSceneDraw {
     uint32_t emissiveTexture;
     uint32_t heightTexture, terrainHeight;
     float parallaxDepth, heightBlend;
+    uint32_t previousVertexBuffer;
+    float lobes[4], optics[4], specular[4], lodTransition;
+    uint32_t surfaceMaps[5];
 } LuxForgeSceneDraw;
 
 // One HDR scene pass (port of the Vulkan backend's Scene3DRenderer). The vec4 fields and the
@@ -182,12 +190,16 @@ typedef struct LuxForgeScene {
     float up[4];
     float forward[4];
     float shadowMatrix[16];
-    float shadowOptions[4];    // x: on, y: 1/resolution, z: depth bias, w: normal bias
-    uint32_t shadowResolution; // 0 = no shadow pass (then shadowOptions[0] must be 0)
-    uint32_t environmentMap;   // from createEnvironment
-    float rayOptions[4];       // effect flags, maximum ray distance, bounces, indirect strength
-    float fogColorDensity[4];  // linear RGB scattering albedo and base extinction
-    float fogOptions[4];       // maximum distance, height falloff, camera altitude, anisotropy
+    float shadowCascades[4][4]; // crop scale, offsets in clip XY, far split depth; zero disables
+    float shadowOptions[4];     // x: on, y: 1/resolution, z: depth bias, w: normal bias
+    uint32_t shadowResolution;  // 0 = no shadow pass (then shadowOptions[0] must be 0)
+    uint32_t environmentMap;    // from createEnvironment
+    float rayOptions[4];        // effect flags, maximum ray distance, bounces, indirect strength
+    float fogColorDensity[4];   // linear RGB scattering albedo and base extinction
+    float fogOptions[4];        // maximum distance, height falloff, camera altitude, anisotropy
+    float fogMedia[4]; // density variation, multiple scattering, history weight, local-volume count
+    float fogLocal[4][4]; // camera-relative centres and radii
+    float fogLocalDensity[4];
     int rayTracedFog;
     uint32_t waterEnvironmentMap;
     float waterReflection[4]; // enabled, rotation (radians), intensity, reserved
@@ -197,17 +209,26 @@ typedef struct LuxForgeScene {
     uint64_t temporalView; // zero disables history; independent contexts have distinct IDs
     double temporalOrigin[3];
     uint32_t temporalAntialiasing, temporalRestir, rayDenoiser;
-    float motionBlurShutter, temporalSharpness;
+    float motionBlurShutter, temporalSharpness, shutterSeconds;
+    uint32_t temporalDebugView;
     float gtaoRadius, contactShadowDistance, shadowLightAngularRadius;
     uint32_t hierarchicalReflections;
     float postEffects[4], autoExposure, gradingStrength;
-    uint32_t gradingTexture;
+    uint32_t gradingTexture, gradingTextureB;
+    float gradeMix, bloomFirefly, luminanceScale;
+    uint32_t postDebugView;
     uint32_t physicallyBasedBloom, apertureBlades;
     float physicalExposureGain,
         physicalCocFraction; // exposure scale; CoC radius at infinity / frame height
+    float meterRange[4],
+        meterResponse[4]; // percentiles, EV bounds; speeds, compensation, autofocus
+    float bloomRadius, bloomScatter, focalMetres;
+    float gradeControls[4], gradeLift[4], gradeGamma[4], gradeGain[4], gradeShadows[4],
+        gradeMids[4], gradeHighs[4];
     float localExposure;
     uint64_t postView;
-    float atmosphere[4], wind[4], weatherOrigin[4];
+    float atmosphere[4], wind[4], weatherOrigin[4], skyLighting[4], solarSource[4];
+    float foliageContacts[2][4];
     float optics[4], lensFlareStrength;
 } LuxForgeScene;
 
@@ -281,6 +302,9 @@ typedef struct LuxForgeApi {
     uint32_t (*createOceanBuffer)(LuxForgeDevice* device, uint32_t resolution, const float* modes,
                                   float patchLength, float foamThreshold, float foamSoftness);
     int (*updateOceanBuffer)(LuxForgeDevice* device, uint32_t buffer, float timeSeconds);
+    uint32_t (*createSkinBuffer)(LuxForgeDevice*, uint32_t vertices, uint32_t bones,
+                                 const float* seed, uint32_t float4Count);
+    int (*updateSkinBuffer)(LuxForgeDevice*, uint32_t buffer, const float* palette, uint32_t bones);
 } LuxForgeApi;
 
 typedef const LuxForgeApi* (*LuxForgeGetApiFn)(void);

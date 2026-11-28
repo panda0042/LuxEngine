@@ -7,7 +7,7 @@ Pipeline* CreateTemporalPipeline(LuxForgeDevice* device, Shader* shader, uint32_
     RasterizerStateDesc raster = {};
     raster.mCullMode = CULL_MODE_NONE;
     DepthStateDesc noDepth = {};
-    TinyImageFormat formats[] = {kHdrFormat, TinyImageFormat_R32_SFLOAT, kHdrFormat};
+    TinyImageFormat formats[] = {kHdrFormat, TinyImageFormat_R32G32_SFLOAT, kHdrFormat};
     graphics.pShaderProgram = shader;
     graphics.pRasterizerState = &raster;
     graphics.pDepthState = &noDepth;
@@ -31,7 +31,7 @@ bool InitTemporal(LuxForgeDevice* device) {
     if (!temporal.shader)
         return false;
     const DescriptorSetDesc layout =
-        SRT_SET_DESC(LuxTemporalSrt, Persistent, device->framesInFlight * 2, 0);
+        SRT_SET_DESC(LuxTemporalSrt, Persistent, device->framesInFlight * 4, 0);
     addDescriptorSet(device->renderer, &layout, &temporal.set);
 
     BufferLoadDesc constants = {};
@@ -56,6 +56,13 @@ bool InitTemporal(LuxForgeDevice* device) {
         SRT_LAYOUT_DESC(LuxSceneSrt, PerBatch), SRT_LAYOUT_DESC(LuxSceneSrt, PerDraw));
     VertexLayout meshLayout;
     MeshVertexLayout(meshLayout);
+    meshLayout.mBindingCount = 2;
+    meshLayout.mBindings[1].mStride = LuxForgeDevice::kVertexStride;
+    auto& previousPosition = meshLayout.mAttribs[meshLayout.mAttribCount++];
+    previousPosition = meshLayout.mAttribs[0];
+    previousPosition.mBinding = 1;
+    previousPosition.mLocation = 5;
+    previousPosition.mSemantic = SEMANTIC_TEXCOORD2;
     DepthStateDesc equal = {};
     equal.mDepthTest = true;
     equal.mDepthFunc = CMP_EQUAL;
@@ -80,7 +87,8 @@ bool InitTemporal(LuxForgeDevice* device) {
     return temporal.ready;
 }
 
-bool PrepareTemporal(LuxForgeDevice* device, bool taa, bool composite, bool blur) {
+bool PrepareTemporal(LuxForgeDevice* device, bool taa, bool composite, bool blur,
+                     bool separateComposite) {
     auto& temporal = device->temporal;
     if (!InitTemporal(device))
         return false;
@@ -96,6 +104,10 @@ bool PrepareTemporal(LuxForgeDevice* device, bool taa, bool composite, bool blur
         if (!temporal.compositePipeline)
             return false;
     }
+    if (taa && composite && !blur && separateComposite && !temporal.overlay.target &&
+        !AddSceneTarget(device, temporal.overlay, device->width, device->height, kHdrFormat, 8,
+                        "LuxForge overlay composition"))
+        return false;
     if (!temporal.motion.target &&
         !AddSceneTarget(device, temporal.motion, device->width, device->height, kHdrFormat, 8,
                         "LuxForge per-object motion vectors"))
@@ -106,6 +118,29 @@ bool PrepareTemporal(LuxForgeDevice* device, bool taa, bool composite, bool blur
         if (temporal.blurShader)
             temporal.blurPipeline = CreateTemporalPipeline(device, temporal.blurShader, 1);
     }
+    if (blur && !temporal.tileShader) {
+        temporal.tileShader = LoadShader(device, "luxfullscreen.vert", "luxshuttertile.frag");
+        if (temporal.tileShader)
+            temporal.tilePipeline = CreateTemporalPipeline(device, temporal.tileShader, 1);
+    }
+    if (blur && !temporal.neighborShader) {
+        temporal.neighborShader =
+            LoadShader(device, "luxfullscreen.vert", "luxshutterneighbor.frag");
+        if (temporal.neighborShader)
+            temporal.neighborPipeline = CreateTemporalPipeline(device, temporal.neighborShader, 1);
+    }
+    if (blur && (!temporal.tilePipeline || !temporal.neighborPipeline))
+        return false;
+    if (blur && !temporal.tiles.target &&
+        !AddSceneTarget(device, temporal.tiles, (device->width + 15) / 16,
+                        (device->height + 15) / 16, kHdrFormat, 8,
+                        "LuxForge maximum shutter velocity per tile"))
+        return false;
+    if (blur && !temporal.neighbors.target &&
+        !AddSceneTarget(device, temporal.neighbors, (device->width + 15) / 16,
+                        (device->height + 15) / 16, kHdrFormat, 8,
+                        "LuxForge maximum neighboring velocity"))
+        return false;
     if (blur && !temporal.blurred.target) {
         if (!temporal.blurPipeline ||
             !AddSceneTarget(device, temporal.blurred, device->width, device->height, kHdrFormat, 8,
@@ -118,7 +153,8 @@ bool PrepareTemporal(LuxForgeDevice* device, bool taa, bool composite, bool blur
         if (!AddSceneTarget(device, temporal.color[i], device->width, device->height, kHdrFormat, 8,
                             "LuxForge temporal color") ||
             !AddSceneTarget(device, temporal.depth[i], device->width, device->height,
-                            TinyImageFormat_R32_SFLOAT, 4, "LuxForge temporal depth")) {
+                            TinyImageFormat_R32G32_SFLOAT, 8,
+                            "LuxForge temporal depth and surface ID")) {
             RetireTemporal(device);
             return false;
         }
@@ -158,20 +194,34 @@ void DrawObjectMotion(LuxForgeDevice* device, Cmd* cmd, const LuxForgeScene& sce
     cmdBindRenderTargets(cmd, &bind);
     cmdSetViewport(cmd, 0, 0, float(device->width), float(device->height), 0, 1);
     cmdSetScissor(cmd, 0, 0, device->width, device->height);
-    const uint32_t stride = LuxForgeDevice::kVertexStride;
-    const uint64_t offset = 0;
+    const uint32_t strides[] = {LuxForgeDevice::kVertexStride, LuxForgeDevice::kVertexStride};
+    const uint64_t offsets[] = {0, 0};
     auto& frame = device->frames[device->frameSlot];
     bool bound = false;
     const bool continuous =
         temporal.view == scene.temporalView && temporal.frame + 1 == frameNumber;
     decltype(temporal.previousObjects) next;
+    // Retain IDs for surviving keys. New keys reject history on their first frame and may
+    // safely reuse departed IDs. Every visible draw fits in the compact exact-half ID space.
+    std::bitset<LuxForgeDevice::kMaxDraws> assigned;
+    if (continuous)
+        for (const auto& mesh : visible) {
+            auto prior =
+                temporal.previousObjects.find({mesh.draw->motionInstance, mesh.draw->indexBuffer});
+            if (prior != temporal.previousObjects.end())
+                assigned.set(prior->second.tag);
+        }
+    uint32_t freeTag = 0;
     for (size_t i = 0; i < visible.size(); ++i) {
         const auto& mesh = visible[i];
         const auto& draw = *mesh.draw;
         const bool windy = draw.foliage[0] > 0.f &&
                            (std::abs(scene.wind[0]) + std::abs(scene.wind[1]) > 0.001f ||
                             std::abs(temporal.wind[0]) + std::abs(temporal.wind[1]) > 0.001f);
-        if ((!draw.motionInstance && !windy) || mesh.layer != SceneLayer::Opaque)
+        const auto& slot = device->buffers[draw.vertexBuffer];
+        const bool water = mesh.layer == SceneLayer::Water;
+        if ((!draw.motionInstance && !windy && !water) ||
+            (mesh.layer != SceneLayer::Opaque && !water))
             continue;
         if (!bound) {
             bound = true;
@@ -191,48 +241,84 @@ void DrawObjectMotion(LuxForgeDevice* device, Cmd* cmd, const LuxForgeScene& sce
                         product[4 * col + row] += vp[4 * k + row] * model[4 * col + k];
             return product;
         };
-        // Binary16 represents each integer up to 2048 exactly. Reserve zero for
-        // untracked surfaces; update the tag even when no prior transform exists.
-        const uint64_t id =
-            draw.motionInstance ^ (uint64_t(draw.indexBuffer) * 0x9e3779b97f4a7c15ull);
-        const uint32_t hash = uint32_t(id ^ (id >> 29u) ^ (id >> 49u));
-        const float surfaceTag = float(1u + hash % 2047u);
+        uint32_t tag = 0;
+        const bool known = continuous && previous != temporal.previousObjects.end();
+        if (known) {
+            tag = previous->second.tag;
+        } else if (const auto it = next.find(key); it != next.end()) {
+            tag = it->second.tag;
+        } else {
+            while (freeTag < assigned.size() && assigned.test(freeTag))
+                ++freeTag;
+            if (freeTag >= assigned.size())
+                continue;
+            tag = freeTag++;
+            assigned.set(tag);
+        }
+        // Use binary16 exponent as well as mantissa to carry 16384 exact positive codes.
+        const float surfaceTag = std::ldexp(1.f + float(tag % 1024u) / 1024.f, int(tag / 1024u));
         std::memcpy(block + offsetof(LuxDraw, previousWind) + sizeof(float), &surfaceTag,
                     sizeof(float));
-        const bool windValid = !windy || (std::abs(scene.wind[0] - temporal.wind[0]) < .05f &&
-                                          std::abs(scene.wind[1] - temporal.wind[1]) < .05f);
-        if (continuous && windValid) {
-            if (draw.motionInstance) {
-                if (previous != temporal.previousObjects.end() &&
-                    previous->second.vertices == draw.vertexBuffer &&
-                    previous->second.revision == draw.geometryRevision)
-                    std::memcpy(block + offsetof(LuxDraw, previousMvp), previous->second.mvp.data(),
-                                16 * sizeof(float));
-            } else {
-                // Untagged foliage is static geometry; reconstruct its previous model relative to
-                // the old camera.
-                std::array<float, 16> oldModel{};
-                std::copy_n(draw.model, 16, oldModel.begin());
-                for (unsigned axis = 0; axis < 3; ++axis)
-                    oldModel[12 + axis] +=
-                        float(scene.temporalOrigin[axis] - temporal.origin[axis]);
-                const auto previousMvp = multiply(temporal.matrix.data(), oldModel.data());
-                std::memcpy(block + offsetof(LuxDraw, previousMvp), previousMvp.data(),
-                            sizeof previousMvp);
-            }
+        const bool previousStream = draw.previousVertexBuffer &&
+                                    draw.previousVertexBuffer < device->buffers.size() &&
+                                    device->buffers[draw.previousVertexBuffer].buffer &&
+                                    device->buffers[draw.previousVertexBuffer].size == slot.size;
+        const float oceanHistory = ((slot.ocean && slot.ocean->lastDispatchFrame == frameNumber) ||
+                                    (slot.skin && slot.skin->frame == frameNumber))
+                                       ? 1.f
+                                       : 0.f;
+        std::memcpy(block + offsetof(LuxDraw, previousWind) + 2 * sizeof(float), &oceanHistory,
+                    sizeof(float));
+        if (known && ((previous->second.vertices == draw.vertexBuffer &&
+                       (previous->second.revision == draw.geometryRevision || slot.skin)) ||
+                      (previousStream && previous->second.vertices == draw.previousVertexBuffer))) {
+            const auto& object = previous->second;
+            const float deformation[] = {temporal.wind[0], temporal.wind[1], object.amplitude,
+                                         object.breakerHeight};
+            const float coastal[] = {float(temporal.origin[0]) - temporal.weatherOrigin[0],
+                                     float(temporal.origin[2]) - temporal.weatherOrigin[1],
+                                     temporal.breakerTime, 0};
+            std::memcpy(block + offsetof(LuxDraw, previousMvp), object.mvp.data(),
+                        sizeof object.mvp);
+            std::memcpy(block + offsetof(LuxDraw, previousPhaseX), object.phaseX.data(),
+                        sizeof object.phaseX);
+            std::memcpy(block + offsetof(LuxDraw, previousPhaseZ), object.phaseZ.data(),
+                        sizeof object.phaseZ);
+            std::memcpy(block + offsetof(LuxDraw, previousDeformation), deformation,
+                        sizeof deformation);
+            std::memcpy(block + offsetof(LuxDraw, previousCoast), coastal, sizeof coastal);
             std::memcpy(block + offsetof(LuxDraw, previousWindProjection), temporal.matrix.data(),
                         16 * sizeof(float));
             std::memcpy(block + offsetof(LuxDraw, previousWind), &temporal.wind[2], sizeof(float));
         }
-        if (draw.motionInstance)
-            next[key] = {multiply(scene.viewProjection, draw.model), draw.vertexBuffer,
-                         draw.geometryRevision};
+        auto& object = next[key];
+        object.mvp = multiply(scene.viewProjection, draw.model);
+        for (unsigned c = 0; c < 4; ++c) {
+            object.phaseX[c] = draw.model[c * 4];
+            object.phaseZ[c] = draw.model[c * 4 + 2];
+        }
+        object.phaseX[3] += scene.weatherOrigin[0];
+        object.phaseZ[3] += scene.weatherOrigin[1];
+        object.amplitude = draw.foliage[0];
+        object.breakerHeight =
+            slot.ocean && water && scene.waterReflection[3] >= 1.f ? scene.forward[3] : 0.f;
+        object.tag = tag;
+        object.vertices = draw.vertexBuffer;
+        object.revision = draw.geometryRevision;
         BindDescriptors(device, cmd, mesh.material % LuxForgeDevice::kMaterialBankSize,
                         device->materialSets[device->frameSlot]
                                             [mesh.material / LuxForgeDevice::kMaterialBankSize]);
         BindDescriptors(device, cmd, index, frame.drawSet);
-        Buffer* vertices = device->buffers[draw.vertexBuffer].buffer;
-        cmdBindVertexBuffer(cmd, 1, &vertices, &stride, &offset);
+        Buffer* last =
+            previousStream ? device->buffers[draw.previousVertexBuffer].buffer : slot.buffer;
+        Buffer* streams[] = {slot.buffer, last};
+        if (previousStream) {
+            device->buffers[draw.previousVertexBuffer].lastUsedFrame = frameNumber;
+            device->frameStats.deformedMotionDraws += last != slot.buffer;
+        }
+        device->frameStats.deformedMotionDraws += slot.skin && slot.skin->frame == frameNumber;
+        device->frameStats.waterMotionDraws += water;
+        cmdBindVertexBuffer(cmd, 2, streams, strides, offsets);
         cmdBindIndexBuffer(cmd, device->buffers[draw.indexBuffer].buffer, INDEX_TYPE_UINT32, 0);
         cmdDrawIndexed(cmd, draw.indexCount, 0, 0);
         ++device->frameStats.objectMotionDraws;
@@ -241,6 +327,9 @@ void DrawObjectMotion(LuxForgeDevice* device, Cmd* cmd, const LuxForgeScene& sce
     cmdBindRenderTargets(cmd, nullptr);
     temporal.previousObjects.swap(next);
     std::copy_n(scene.wind, 3, temporal.wind.begin());
+    std::copy_n(scene.weatherOrigin, 2, temporal.weatherOrigin.begin());
+    temporal.breakerTime = scene.waterReflection[3] - 1.f;
+    std::memcpy(temporal.foliageContacts, scene.foliageContacts, sizeof scene.foliageContacts);
     temporal.motion.lastUsedFrame = frameNumber;
     Transition(cmd, temporal.motion, RESOURCE_STATE_SHADER_RESOURCE);
 }
@@ -279,10 +368,17 @@ bool WriteTemporalConstants(LuxForgeDevice* device, const LuxForgeScene& scene,
     const bool taaHistory = history && temporal.taaFrame + 1 == frame;
     values[32] = taaHistory ? 1.f : 0.f;
     values[33] = water ? 1.f : 0.f;
-    values[34] = history ? scene.motionBlurShutter : 0.f;
+    const auto now = Clock::now();
+    const float frameSeconds = std::chrono::duration<float>(now - temporal.shutterTime).count();
+    temporal.shutterTime = now;
+    const float shutter = scene.shutterSeconds > 0 && frameSeconds > 0
+                              ? std::min(1.f, scene.shutterSeconds / frameSeconds)
+                              : scene.motionBlurShutter;
+    values[34] = history ? shutter : 0.f;
     values[35] = scene.temporalSharpness;
     values[36] = (temporal.jitter[0] - jitter[0]) * .5f;
     values[37] = (temporal.jitter[1] - jitter[1]) * -.5f;
+    values[38] = float(scene.temporalDebugView);
 
     const uint32_t offset = device->frameSlot * LuxForgeDevice::kSceneStride;
     std::memcpy(static_cast<uint8_t*>(temporal.constants->pCpuMappedAddress) + offset,
@@ -377,10 +473,9 @@ void SaveTemporalView(LuxForgeDevice* device, const LuxForgeScene& scene,
 Texture* BlurMotion(LuxForgeDevice* device, Cmd* cmd, Texture* source,
                     LuxForgeDevice::SceneTarget& depth, uint64_t frame) {
     auto& temporal = device->temporal;
-    const uint32_t entry = device->framesInFlight + device->frameSlot;
     const uint32_t offset = device->frameSlot * LuxForgeDevice::kSceneStride;
     DescriptorDataRange range{offset, LuxForgeDevice::kSceneStride, 0};
-    DescriptorData params[4]{};
+    DescriptorData params[5]{};
     params[0].mIndex = SRT_RES_IDX(LuxTemporalSrt, Persistent, gTemporal);
     params[0].ppBuffers = &temporal.constants;
     params[0].pRanges = &range;
@@ -390,23 +485,33 @@ Texture* BlurMotion(LuxForgeDevice* device, Cmd* cmd, Texture* source,
     params[2].ppTextures = &depth.target->pTexture;
     params[3].mIndex = SRT_RES_IDX(LuxTemporalSrt, Persistent, gMotionVectors);
     params[3].ppTextures = &temporal.motion.target->pTexture;
-    updateDescriptorSet(device->renderer, entry, temporal.set, std::size(params), params);
+    params[4].mIndex = SRT_RES_IDX(LuxTemporalSrt, Persistent, gShutterTiles);
     Transition(cmd, depth, RESOURCE_STATE_SHADER_RESOURCE);
-    Transition(cmd, temporal.blurred, RESOURCE_STATE_RENDER_TARGET);
-    BindRenderTargetsDesc targets{};
-    targets.mRenderTargetCount = 1;
-    targets.mRenderTargets[0].pRenderTarget = temporal.blurred.target;
-    targets.mRenderTargets[0].mLoadAction = LOAD_ACTION_CLEAR;
-    targets.mRenderTargets[0].mStoreAction = STORE_ACTION_STORE;
-    cmdBindRenderTargets(cmd, &targets);
-    cmdSetViewport(cmd, 0, 0, float(device->width), float(device->height), 0, 1);
-    cmdSetScissor(cmd, 0, 0, device->width, device->height);
-    BindPipeline(device, cmd, temporal.blurPipeline);
-    BindDescriptors(device, cmd, entry, temporal.set);
-    cmdDraw(cmd, 3, 0);
-    cmdBindRenderTargets(cmd, nullptr);
-    Transition(cmd, temporal.blurred, RESOURCE_STATE_SHADER_RESOURCE);
-    temporal.blurred.lastUsedFrame = frame;
-    ++device->frameStats.drawCalls;
+    const auto pass = [&](LuxForgeDevice::SceneTarget& target, Pipeline* pipeline, uint32_t slot,
+                          Texture* tileInput) {
+        const uint32_t entry = slot * device->framesInFlight + device->frameSlot;
+        params[4].ppTextures = &tileInput;
+        updateDescriptorSet(device->renderer, entry, temporal.set, std::size(params), params);
+        Transition(cmd, target, RESOURCE_STATE_RENDER_TARGET);
+        BindRenderTargetsDesc targets{};
+        targets.mRenderTargetCount = 1;
+        targets.mRenderTargets[0].pRenderTarget = target.target;
+        targets.mRenderTargets[0].mLoadAction = LOAD_ACTION_DONTCARE;
+        targets.mRenderTargets[0].mStoreAction = STORE_ACTION_STORE;
+        cmdBindRenderTargets(cmd, &targets);
+        cmdSetViewport(cmd, 0, 0, float(target.target->mWidth), float(target.target->mHeight), 0,
+                       1);
+        cmdSetScissor(cmd, 0, 0, target.target->mWidth, target.target->mHeight);
+        BindPipeline(device, cmd, pipeline);
+        BindDescriptors(device, cmd, entry, temporal.set);
+        cmdDraw(cmd, 3, 0);
+        cmdBindRenderTargets(cmd, nullptr);
+        Transition(cmd, target, RESOURCE_STATE_SHADER_RESOURCE);
+        target.lastUsedFrame = frame;
+        ++device->frameStats.drawCalls;
+    };
+    pass(temporal.tiles, temporal.tilePipeline, 1, temporal.motion.target->pTexture);
+    pass(temporal.neighbors, temporal.neighborPipeline, 2, temporal.tiles.target->pTexture);
+    pass(temporal.blurred, temporal.blurPipeline, 3, temporal.neighbors.target->pTexture);
     return temporal.blurred.target->pTexture;
 }

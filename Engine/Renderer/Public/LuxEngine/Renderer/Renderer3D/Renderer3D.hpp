@@ -13,6 +13,7 @@
 namespace LuxEngine {
 class ModelAsset;
 struct ModelPose;
+struct ModelSubmesh;
 
 struct Vertex3D {
     Vec3 position;
@@ -40,6 +41,35 @@ struct TerrainLayer3D {
     std::string roughnessTexture;
     std::string heightTexture; // Linear red, white is the top of the surface.
     float heightBlend = 0;     // Height contrast in [0,1]; zero keeps the vertex-only blend.
+    // Four biome pairs in a 4x2 wrapped atlas. RGB vertex weights select three families
+    // (the fourth is the remainder). Alpha blends the two members of each family.
+    // baseColorTexture is sRGB, roughnessTexture holds linear normal XY, roughness and height.
+    bool palette = false;
+};
+
+enum class SurfaceModel : uint32 { Standard, Foliage, Skin, Hair, Cloth, Cornea, Character };
+
+struct PrincipledSurface {
+    SurfaceModel model = SurfaceModel::Standard;
+    float clearCoat = 0, coatRoughness = .12f, anisotropy = 0, sheen = 0;
+    float transmission = 0, indexOfRefraction = 1.5f, detailScale = 8;
+    Vec3 specularTint{1, 1, 1};
+    bool impostorDepth =
+        false; // Alpha of the normal map encodes front-surface depth, in card widths.
+    std::string thicknessTexture, coatNormalTexture;
+    std::string detailColorTexture, detailNormalTexture, detailRoughnessTexture;
+
+    bool IsValid() const {
+        const auto range = [](double value, double low, double high) {
+            return value >= low && value <= high;
+        };
+        return model <= SurfaceModel::Character && range(clearCoat, 0, 1) &&
+               range(coatRoughness, .02, 1) && range(anisotropy, -.95f, .95f) &&
+               range(sheen, 0, 1) && range(transmission, 0, 1) &&
+               range(indexOfRefraction, 1, 2.5) && range(detailScale, .1f, 1024) &&
+               range(specularTint.x, 0, 1) && range(specularTint.y, 0, 1) &&
+               range(specularTint.z, 0, 1);
+    }
 };
 
 struct Material3D {
@@ -70,6 +100,11 @@ struct Material3D {
     std::string emissiveTexture; // sRGB color multiplied by emissive.
     std::string heightTexture;   // Linear height, sampled for opaque mesh relief.
     float parallaxDepth = 0;     // Maximum virtual relief below the mesh surface, in metres.
+    std::optional<PrincipledSurface> surface;
+    bool gpuSkinning =
+        false; // Opt into compute for linear, non-morph rigs with matching pose palettes.
+    // For paired LODs, +t fades out the near mesh and -t fades in the far mesh.
+    float lodTransition = 0;
 };
 
 // Enumerate all file references, including an optional terrain layer, for editing and packaging.
@@ -77,7 +112,7 @@ template <typename Material> auto MaterialTexturePaths(Material& material) {
     using Path = std::remove_reference_t<decltype((material.heightTexture))>;
 
     struct Paths {
-        std::array<Path*, 11> values;
+        std::array<Path*, 16> values;
         size_t count;
 
         auto begin() const {
@@ -96,6 +131,12 @@ template <typename Material> auto MaterialTexturePaths(Material& material) {
     if (auto& layer = material.terrainLayer) {
         for (auto* path : {&layer->baseColorTexture, &layer->normalTexture,
                            &layer->roughnessTexture, &layer->heightTexture})
+            paths.values[paths.count++] = path;
+    }
+    if (auto& surface = material.surface) {
+        for (auto* path :
+             {&surface->thicknessTexture, &surface->coatNormalTexture, &surface->detailColorTexture,
+              &surface->detailNormalTexture, &surface->detailRoughnessTexture})
             paths.values[paths.count++] = path;
     }
     return paths;
@@ -173,6 +214,9 @@ public:
     bool UploadOcean(GpuDevice* device, const OceanSpectrum& spectrum);
     // Records the GPU transform inside an open frame, before any draw that uses this mesh.
     bool UpdateOcean(float timeSeconds);
+    bool UploadSkinned(GpuDevice* device, const ModelSubmesh& submesh);
+    // Bone matrices map bind-local vertices to current node-local space.
+    bool UpdateSkin(std::span<const Mat4> palette, Vec3 localMinimum, Vec3 localMaximum);
     void Release();
     bool IsValid() const;
 
@@ -185,6 +229,7 @@ private:
     uint32 indexCount_ = 0;
     uint64 geometryRevision_ = 0;
     bool ocean_ = false;
+    uint32 skinBones_ = 0;
     Vec3 origin_;
     Vec3 minimum_, maximum_;
 };

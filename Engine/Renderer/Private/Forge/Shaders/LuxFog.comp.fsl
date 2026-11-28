@@ -27,9 +27,94 @@ float FogShadow(float3 position) {
     const int2 atlasPixel = ShadowAtlasPixel(virtualPixel, gFog.virtualShadowPages);
     if (atlasPixel.x < 0)
         return 1.0f;
-    const float nearest = LoadTex2D(gFogShadow, NO_SAMPLER, atlasPixel, 0).r;
+    const float nearest = LoadTex2D(gFogShadow, NO_SAMPLER, atlasPixel + int2(1, 1) * (gFog.shadowOptions.x > 1.5f ? resolution : 0), 0).r;
     return ndc.z - gFog.shadowOptions.z <= nearest ? 1.0f : 0.0f;
 #endif
+}
+
+#define LUX_CLOUD_TEXTURE gFogCloud
+#include "LuxCloudVisibility.h"
+#undef LUX_CLOUD_TEXTURE
+
+float FogPhase(float cosine, float g) {
+    const float d = max(1.0f + g*g - 2.0f*g*cosine, 1e-4f);
+    return (1.0f - g*g) * 0.07957747155f / (d*sqrt(d));
+}
+
+float FogNoiseCorner(float3 p) {
+    // Wrap the hash identically at the 512-metre floating-origin boundary.
+    const float3 grid = p - floor(p / 32.0f) * 32.0f;
+    float3 h = frac(grid * float3(.1031f, .1030f, .0973f));
+    h += dot(h, h.yxz + 33.33f);
+    return frac((h.x + h.y) * h.z);
+}
+
+float FogNoise(float3 position) {
+    const float3 p = (position + gFog.noiseOrigin.xyz) / 16.0f;
+    const float3 base = floor(p);
+    const float3 t = frac(p);
+    const float3 blend = t*t*(3.0f-2.0f*t);
+    float result = 0.0f;
+    for (uint i=0u; i<8u; ++i) {
+        const float3 corner = float3(i & 1u, (i >> 1u) & 1u, i >> 2u);
+        const float3 w = lerp(1.0f-blend, blend, corner);
+        result += w.x*w.y*w.z*FogNoiseCorner(base + corner);
+    }
+    return result;
+}
+
+float MediumExtinction(float3 position) {
+    const float altitude = max(gFog.options.z + position.y, 0.0f);
+    float density = gFog.colorDensity.w * exp(-altitude * gFog.options.y);
+    for (uint i=0u; i<uint(gFog.media.w); ++i) {
+        const float4 sphere = gFog.local[i];
+        const float3 offset = (position - sphere.xyz) / sphere.w;
+        const float radial = saturate(1.0f - dot(offset, offset));
+        density += radial * radial * gFog.localDensity[i];
+    }
+    if (gFog.media.x > 0.0f)
+        density *= lerp(1.0f, 2.0f * FogNoise(position), gFog.media.x);
+    return density;
+}
+
+float3 FogPointLights(float3 position, float3 viewRay, float g) {
+    float3 radiance = float3(0.0f,0.0f,0.0f);
+    for (uint i=0u; i<uint(gFog.noiseOrigin.w); ++i) {
+        const float4 source = gFog.pointPosition[i];
+        const float3 delta = source.xyz - position;
+        const float distance = length(delta);
+        if (distance >= source.w) continue;
+        const float falloff = 1.0f - distance/max(source.w,.0001f);
+        const float4 color = gFog.pointRadiance[i];
+        radiance += color.rgb * color.w * falloff * falloff *
+                    FogPhase(dot(viewRay, delta/max(distance,.0001f)), g);
+    }
+    return radiance;
+}
+
+float4 ReprojectFog(float4 current, float3 boundary) {
+    if (gFog.media.z <= 0.0f) return current;
+    const float4 clip = mul(gFog.previousViewProjection, float4(boundary + gFog.displacement.xyz,1.0f));
+    if (clip.w <= 0.0f || clip.w > gFog.options.x) return current;
+    const float2 uv = clip.xy / clip.w * float2(.5f,-.5f) + .5f;
+    if (uv.x < 0.0f || uv.y < 0.0f || uv.x > 1.0f || uv.y > 1.0f) return current;
+    const float scale = FogDepthScale(gFog.options.x);
+    const float z = float(LUX_FOG_SLICES) * log2(1.0f + clip.w/scale) / log2(1.0f + gFog.options.x/scale) - 1.0f;
+    const float3 last = float3(LUX_FOG_COLUMNS-1u,LUX_FOG_ROWS-1u,LUX_FOG_SLICES-1u);
+    const float3 coord = clamp(float3(uv * float2(LUX_FOG_COLUMNS,LUX_FOG_ROWS)-.5f,z), float3(0,0,0), last);
+    const uint3 base = uint3(coord);
+    const float3 t = coord - float3(base);
+    float4 history = float4(0,0,0,0);
+    for (uint i=0u; i<8u; ++i) {
+        const uint3 offset = uint3(i & 1u,(i >> 1u) & 1u,i >> 2u);
+        const uint3 cell = min(base + offset,uint3(last));
+        const float3 w = lerp(1.0f-t,t,float3(offset));
+        history += w.x*w.y*w.z*gFogHistory[FogIndex(cell.xy,cell.z)];
+    }
+    const float3 colorDelta = abs(current.rgb - history.rgb) / (.025f + current.rgb + history.rgb);
+    const float confidence = saturate(1.0f - 8.0f*abs(current.w-history.w)) *
+                             saturate(1.0f - max(colorDelta.x,max(colorDelta.y,colorDelta.z)));
+    return lerp(current,history,gFog.media.z * confidence);
 }
 
 ROOT_SIGNATURE(ComputeRootSignature)
@@ -48,10 +133,7 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
     const float rayLength = length(ray);
     const float g = gFog.options.w;
     const float cosTheta = dot(ray / rayLength, gFog.lightDirection.xyz);
-    const float phase = (1.0f - g * g) /
-                        (12.566370614359172f * pow(max(1.0f + g * g - 2.0f * g * cosTheta,
-                                                       1e-4f), 1.5f));
-    const float3 sun = gFog.lightRadiance.xyz * phase;
+    const float3 sun = gFog.lightRadiance.xyz * FogPhase(cosTheta, g);
     const bool hasSun = dot(sun, sun) > 0.0f;
     const float zScale = FogDepthScale(gFog.options.x);
     const float zStep = log2(1.0f + gFog.options.x / zScale) / float(LUX_FOG_SLICES);
@@ -62,16 +144,24 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
     for (uint slice = 0u; slice < LUX_FOG_SLICES; ++slice) {
         const float end = zScale * (exp2(zStep * float(slice + 1u)) - 1.0f);
         const float3 samplePosition = ray * ((previous + end) * 0.5f);
-        const float altitude = max(gFog.options.z + samplePosition.y, 0.0f);
-        const float extinction = gFog.colorDensity.w * exp(-altitude * gFog.options.y);
+        const float extinction = MediumExtinction(samplePosition);
         const float stepT = exp(-extinction * (end - previous) * rayLength);
-        float visibility = 1.0f;
-        if (hasSun && stepT < 1.0f && transmittance > 1e-5f)
-            visibility = FogShadow(samplePosition);
-        const float3 incoming = gFog.ambientRadiance.xyz + sun * visibility;
+        float3 incoming = gFog.ambientRadiance.xyz;
+        if (stepT < 1.0f && transmittance > 1e-5f) {
+            if (hasSun) {
+                const float cloud = CloudShadowTransmittance(samplePosition, gFog.lightDirection.xyz,
+                                                 gFog.cloud.x, gFog.cloud.y, gFog.cloud.z);
+                const float visibility = FogShadow(samplePosition);
+                incoming += sun * visibility * cloud;
+                // Isotropic secondary scattering grows with optical thickness.
+                incoming += gFog.lightRadiance.xyz * gFog.colorDensity.rgb * (.07957747155f *
+                           cloud * gFog.media.y * (1.0f - transmittance * sqrt(stepT)));
+            }
+            incoming += FogPointLights(samplePosition, ray / rayLength, g);
+        }
         scatter += transmittance * (1.0f - stepT) * gFog.colorDensity.rgb * incoming;
         transmittance *= stepT;
-        gFogVolume[FogIndex(cell, slice)] = float4(scatter, transmittance);
+        gFogVolume[FogIndex(cell, slice)] = ReprojectFog(float4(scatter, transmittance), ray * end);
         previous = end;
     }
     RETURN();

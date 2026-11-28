@@ -15,12 +15,30 @@ float4 PS_MAIN(FullscreenOutput In)
     const float2 p = In.uv * 2.0f - 1.0f;
     const float3 direction = normalize(gScene.forward.xyz + p.x * gScene.right.xyz + p.y * gScene.up.xyz);
     const float3 sun = normalize(-gLights.direction.xyz);
-    const float3 solarIrradiance = gLights.colorIntensity.rgb * max(gLights.colorIntensity.w, 0.0f);
-    float3 sky = gScene.atmosphere.x > .5f
-        ? SkyScattering(direction, sun, gScene.atmosphere.w, gScene.atmosphere.y, solarIrradiance)
-        : SampleLvlTexCube(gSkyEnv, gSamplerTrilinearClamp, RotateEnvironment(direction), 0.0f).rgb * gScene.environment.w;
-    sky = CloudLayer(sky, direction, sun, gScene.atmosphere.z,
-                     float3(gScene.weatherOrigin.z, gScene.atmosphere.w, gScene.weatherOrigin.w), solarIrradiance);
+    const float3 solarIrradiance = gScene.solarSource.w>.5f ? gScene.solarSource.rgb : gLights.colorIntensity.rgb * max(gLights.colorIntensity.w, 0.0f);
+    float3 sky;
+    if(gScene.atmosphere.x>.5f) {
+        const float4 cached=SampleLvlTex2D(gSkyView,gSamplerTrilinearClamp,SkyViewUV(direction),0);
+        sky=cached.rgb;
+        if (gScene.shadowMetrics.w==30.0f) {
+            const float opacity=1.0f-cached.a;
+            RETURN(float4(opacity,opacity,opacity,1));
+        }
+        const float altitude=clamp(gScene.atmosphere.w*.001f,.002f,99.99f);
+        const float cosAngle=dot(direction,sun);
+        if(sun.y>AirHorizon(altitude) && cosAngle>.99996f) {
+            const float2 uv=AirUV(altitude,sun.y);
+            const float3 transmission=SampleLvlTex2D(gAirOptics,gSamplerTrilinearClamp,float2(uv.x*.5f,uv.y),0).rgb;
+            const float aa=clamp(fwidth(cosAngle)*.5f,.00000025f,.000008f);
+            sky+=cached.a*transmission*solarIrradiance*
+                 (smoothstep(.99998919f-aa,.99998919f+aa,cosAngle)/.00006793f);
+        }
+    } else {
+        sky=SampleLvlTexCube(gSkyEnv,gSamplerTrilinearClamp,RotateEnvironment(direction),0).rgb*gScene.environment.w;
+        float visibleSky;
+        sky=CloudTransport(sky,direction,sun,gScene.atmosphere.z,
+                  float3(gScene.weatherOrigin.z,gScene.atmosphere.w,gScene.weatherOrigin.w),solarIrradiance,visibleSky);
+    }
     // Keep chromaticity while fitting bright sources into the scene's FP16 attachment.
     sky /= max(1.0f, max(sky.r, max(sky.g, sky.b)) / 65504.0f);
     RETURN(float4(sky, 1.0f));

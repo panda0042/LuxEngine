@@ -1160,6 +1160,9 @@ bool Scene::ValidateForSerialization() {
                   mesh->material.terrainLayer->heightBlend < 0 ||
                   mesh->material.terrainLayer->heightBlend > 1)))
                 return false;
+            if ((mesh->material.surface && !mesh->material.surface->IsValid()) ||
+                !(mesh->material.lodTransition >= -1 && mesh->material.lodTransition <= 1))
+                return false;
             const auto& emission = mesh->material.emissive;
             if (!Finite(emission) || std::min({emission.x, emission.y, emission.z}) < 0 ||
                 std::max({emission.x, emission.y, emission.z}) > 65504)

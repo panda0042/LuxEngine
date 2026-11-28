@@ -63,13 +63,20 @@ Json ToJson(const RayTracingSettings& rays) {
 }
 
 Json ToJson(const VolumetricFogSettings& fog) {
+    Json volumes = Json::array();
+    for (const auto& v : fog.volumes)
+        volumes.push_back({{"center", v.center}, {"radius", v.radius}, {"density", v.density}});
     return {{"color", ToJson(fog.color)},
             {"density", fog.density},
             {"max_distance", fog.maxDistance},
             {"height_falloff", fog.heightFalloff},
             {"base_height", fog.baseHeight},
             {"anisotropy", fog.anisotropy},
-            {"ray_traced_shadows", fog.rayTracedShadows}};
+            {"ray_traced_shadows", fog.rayTracedShadows},
+            {"density_variation", fog.densityVariation},
+            {"multiple_scattering", fog.multipleScattering},
+            {"history_weight", fog.historyWeight},
+            {"volumes", std::move(volumes)}};
 }
 
 Json ToJson(const std::vector<Keyframe>& keys) {
@@ -178,6 +185,27 @@ void ReadJsonValue(const Json& json, VolumetricFogSettings& fog) {
     ReadJsonValue(json.at("base_height"), fog.baseHeight);
     ReadJsonValue(json.at("anisotropy"), fog.anisotropy);
     ReadJsonValue(json.at("ray_traced_shadows"), fog.rayTracedShadows);
+    if (json.contains("density_variation"))
+        ReadJsonValue(json.at("density_variation"), fog.densityVariation);
+    if (json.contains("multiple_scattering"))
+        ReadJsonValue(json.at("multiple_scattering"), fog.multipleScattering);
+    if (json.contains("history_weight"))
+        ReadJsonValue(json.at("history_weight"), fog.historyWeight);
+    if (json.contains("volumes")) {
+        const auto& volumes = json.at("volumes");
+        RequireValidScene(volumes.is_array() && volumes.size() <= 4);
+        fog.volumes.clear();
+        for (const auto& v : volumes) {
+            LocalFogVolume local;
+            const auto& center = v.at("center");
+            RequireValidScene(center.is_array() && center.size() == 3);
+            for (size_t axis = 0; axis < 3; ++axis)
+                ReadJsonValue(center.at(axis), local.center[axis]);
+            ReadJsonValue(v.at("radius"), local.radius);
+            ReadJsonValue(v.at("density"), local.density);
+            fog.volumes.push_back(local);
+        }
+    }
 }
 
 void ReadJsonValue(const Json& json, std::vector<uint8_t>& tiles) {
@@ -334,6 +362,8 @@ bool Scene::SerializeToString(std::string& output) {
             render["motion_blur_shutter"] = ToJson(settings_.render3D.motionBlurShutter);
         const Render3DSettings defaults;
         const auto& visual = settings_.render3D;
+        if (visual.temporalDebugView != defaults.temporalDebugView)
+            render["temporal_debug_view"] = static_cast<uint32>(visual.temporalDebugView);
         if (visual.temporalSharpness != defaults.temporalSharpness)
             render["temporal_sharpness"] = ToJson(visual.temporalSharpness);
         if (visual.gtaoRadius != defaults.gtaoRadius)
@@ -358,24 +388,91 @@ bool Scene::SerializeToString(std::string& output) {
             render["auto_exposure"] = ToJson(visual.autoExposure);
         if (visual.depthOfFieldRadius != defaults.depthOfFieldRadius)
             render["depth_of_field_radius"] = ToJson(visual.depthOfFieldRadius);
+        if (visual.metering != defaults.metering) {
+            const auto& value = visual.metering;
+            render["metering"] = {{"low_percentile", value.lowPercentile},
+                                  {"high_percentile", value.highPercentile},
+                                  {"min_ev", value.minEV},
+                                  {"max_ev", value.maxEV},
+                                  {"brighten_speed", value.brightenSpeed},
+                                  {"darken_speed", value.darkenSpeed},
+                                  {"compensation_ev", value.compensationEV}};
+        }
+        if (visual.colorGrade != defaults.colorGrade) {
+            const auto& value = visual.colorGrade;
+            render["color_grade"] = {{"temperature_kelvin", value.temperatureK},
+                                     {"tint", value.tint},
+                                     {"saturation", value.saturation},
+                                     {"vibrance", value.vibrance},
+                                     {"contrast", value.contrast},
+                                     {"lift", value.lift},
+                                     {"gamma", value.gamma},
+                                     {"gain", value.gain},
+                                     {"shadows", value.shadows},
+                                     {"midtones", value.midtones},
+                                     {"highlights", value.highlights}};
+        }
+        if (visual.bloomRadius != defaults.bloomRadius)
+            render["bloom_radius"] = visual.bloomRadius;
+        if (visual.bloomScatter != defaults.bloomScatter)
+            render["bloom_scatter"] = visual.bloomScatter;
+        if (!visual.postVolumes.empty()) {
+            auto& volumes = render["post_volumes"] = Json::array();
+            for (const auto& box : visual.postVolumes) {
+                Json volume{{"global", box.global}, {"priority", box.priority},
+                            {"center", box.center}, {"half_extent", box.halfExtent},
+                            {"weight", box.weight}, {"blend_distance", box.blendDistance}};
+                if (box.compensationEV)
+                    volume["compensation_ev"] = *box.compensationEV;
+                if (box.bloomIntensity)
+                    volume["bloom_intensity"] = *box.bloomIntensity;
+                if (box.localExposure)
+                    volume["local_exposure"] = *box.localExposure;
+                if (box.saturation)
+                    volume["saturation"] = *box.saturation;
+                if (box.temperatureK)
+                    volume["temperature_kelvin"] = *box.temperatureK;
+                if (box.focusDistance)
+                    volume["focus_distance"] = *box.focusDistance;
+                volumes.push_back(std::move(volume));
+            }
+        }
         if (visual.physicalCamera != defaults.physicalCamera) {
             const auto& camera = visual.physicalCamera;
             render["physical_camera"] = {{"exposure", camera.exposure},
                                          {"depth_of_field", camera.depthOfField},
+                                         {"autofocus_speed", camera.autofocusSpeed},
                                          {"iso", camera.iso},
                                          {"shutter_seconds", camera.shutterSeconds},
+                                         {"motion_blur", camera.motionBlur},
                                          {"f_number", camera.fNumber},
                                          {"sensor_height_mm", camera.sensorHeightMm},
                                          {"luminance_scale", camera.luminanceScale}};
         }
+        if (visual.bloomFireflySuppression != defaults.bloomFireflySuppression)
+            render["bloom_firefly_suppression"] = visual.bloomFireflySuppression;
+        if (visual.colorGradingMix != defaults.colorGradingMix)
+            render["color_grading_mix"] = visual.colorGradingMix;
+        if (visual.secondaryColorGradingLut != defaults.secondaryColorGradingLut)
+            render["secondary_color_grading_lut"] = visual.secondaryColorGradingLut;
+        if (visual.textureLodBias != defaults.textureLodBias)
+            render["texture_lod_bias"] = visual.textureLodBias;
+        if (visual.postDebugView != defaults.postDebugView)
+            render["post_debug_view"] = static_cast<uint32>(visual.postDebugView);
         if (visual.focusDistance != defaults.focusDistance)
             render["focus_distance"] = ToJson(visual.focusDistance);
         if (visual.colorGradingLut != defaults.colorGradingLut)
             render["color_grading_lut"] = ToJson(visual.colorGradingLut);
         if (visual.colorGradingStrength != defaults.colorGradingStrength)
             render["color_grading_strength"] = ToJson(visual.colorGradingStrength);
+        if (visual.dynamicSkyLighting != defaults.dynamicSkyLighting)
+            render["dynamic_sky_lighting"] = ToJson(visual.dynamicSkyLighting);
+        if (visual.cloudShadowStrength != defaults.cloudShadowStrength)
+            render["cloud_shadow_strength"] = ToJson(visual.cloudShadowStrength);
         if (visual.dynamicAtmosphere != defaults.dynamicAtmosphere)
             render["dynamic_atmosphere"] = ToJson(visual.dynamicAtmosphere);
+        if (visual.atmosphereSolarIrradiance != defaults.atmosphereSolarIrradiance)
+            render["atmosphere_solar_irradiance"] = visual.atmosphereSolarIrradiance;
         if (visual.aerosolDensity != defaults.aerosolDensity)
             render["aerosol_density"] = ToJson(visual.aerosolDensity);
         if (visual.vignette != defaults.vignette)
@@ -390,8 +487,16 @@ bool Scene::SerializeToString(std::string& output) {
             render["lens_flare_strength"] = visual.lensFlareStrength;
         if (visual.cloudCoverage != defaults.cloudCoverage)
             render["cloud_coverage"] = ToJson(visual.cloudCoverage);
+        if (visual.foliageInteractions != defaults.foliageInteractions) {
+            for (const auto& interaction : visual.foliageInteractions)
+                render["foliage_interactions"].push_back({{"center", ToJson(interaction.center)},
+                                                          {"radius", interaction.radius},
+                                                          {"strength", interaction.strength}});
+        }
         if (visual.windVelocity.x != 0 || visual.windVelocity.y != 0)
             render["wind_velocity"] = ToJson(visual.windVelocity);
+        if (visual.rainfall != defaults.rainfall)
+            render["rainfall"] = visual.rainfall;
         if (visual.surfaceWetness != defaults.surfaceWetness)
             render["surface_wetness"] = visual.surfaceWetness;
         if (visual.weatherTime != defaults.weatherTime)
@@ -407,6 +512,8 @@ bool Scene::SerializeToString(std::string& output) {
             render["ray_tracing"] = rays;
         if (fog != ToJson(VolumetricFogSettings{}))
             render["volumetric_fog"] = fog;
+        if (settings_.render3D.cascadedShadows)
+            render["cascaded_shadows"] = true;
         if (settings_.render3D.virtualShadows)
             render["virtual_shadows"] = true;
         const auto& water = settings_.render3D.waterReflection;
@@ -472,6 +579,29 @@ bool Scene::SerializeToString(std::string& output) {
                 value["alpha_mode"] = static_cast<int>(component->material.alphaMode);
                 value["alpha_cutoff"] = ToJson(component->material.alphaCutoff);
                 value["double_sided"] = component->material.doubleSided;
+                if (component->material.gpuSkinning)
+                    value["gpu_skinning"] = true;
+                if (component->material.lodTransition != 0)
+                    value["lod_transition"] = component->material.lodTransition;
+                if (const auto& s = component->material.surface) {
+                    Json block = Json::object();
+                    block["model"] = static_cast<uint32>(s->model);
+                    block["impostor_depth"] = s->impostorDepth;
+                    block["clear_coat"] = ToJson(s->clearCoat);
+                    block["coat_roughness"] = ToJson(s->coatRoughness);
+                    block["anisotropy"] = ToJson(s->anisotropy);
+                    block["sheen"] = ToJson(s->sheen);
+                    block["transmission"] = ToJson(s->transmission);
+                    block["ior"] = ToJson(s->indexOfRefraction);
+                    block["detail_scale"] = ToJson(s->detailScale);
+                    block["specular_tint"] = ToJson(s->specularTint);
+                    block["thickness_texture"] = ToJson(s->thicknessTexture);
+                    block["coat_normal"] = ToJson(s->coatNormalTexture);
+                    block["detail_color"] = ToJson(s->detailColorTexture);
+                    block["detail_normal"] = ToJson(s->detailNormalTexture);
+                    block["detail_roughness"] = ToJson(s->detailRoughnessTexture);
+                    value["principled_surface"] = std::move(block);
+                }
                 if (component->material.wettingResponse > 0)
                     value["wetting_response"] = component->material.wettingResponse;
                 if (const auto& water = component->material.water)
@@ -497,6 +627,8 @@ bool Scene::SerializeToString(std::string& output) {
                                               {"roughness_texture", layer->roughnessTexture},
                                               {"height_texture", layer->heightTexture},
                                               {"height_blend", layer->heightBlend}};
+                    if (layer->palette)
+                        value["terrain_layer"]["palette"] = true;
                 }
                 if (!component->material.emissiveTexture.empty())
                     value["emissive_texture"] = component->material.emissiveTexture;
@@ -695,6 +827,12 @@ bool Scene::DeserializeJson(const std::string& data) {
             ReadJsonValue(*value, settings.render3D.screenSpaceAntialiasing);
         if (const auto value = render.find("temporal_antialiasing"); value != render.end())
             ReadJsonValue(*value, settings.render3D.temporalAntialiasing);
+        if (render.contains("temporal_debug_view")) {
+            uint32 view = 0;
+            ReadJsonValue(render.at("temporal_debug_view"), view);
+            RequireValidScene(view <= static_cast<uint32>(TemporalDebugView::Transparency));
+            settings.render3D.temporalDebugView = static_cast<TemporalDebugView>(view);
+        }
         if (render.contains("temporal_sharpness"))
             ReadJsonValue(render.at("temporal_sharpness"), settings.render3D.temporalSharpness);
         if (render.contains("motion_blur_shutter"))
@@ -724,6 +862,122 @@ bool Scene::DeserializeJson(const std::string& data) {
             ReadJsonValue(render.at("auto_exposure"), settings.render3D.autoExposure);
         if (render.contains("depth_of_field_radius"))
             ReadJsonValue(render.at("depth_of_field_radius"), settings.render3D.depthOfFieldRadius);
+        if (render.contains("metering")) {
+            const auto& block = render.at("metering");
+            RequireValidScene(block.is_object());
+            auto& value = settings.render3D.metering;
+            if (block.contains("low_percentile"))
+                ReadJsonValue(block.at("low_percentile"), value.lowPercentile);
+            if (block.contains("high_percentile"))
+                ReadJsonValue(block.at("high_percentile"), value.highPercentile);
+            if (block.contains("min_ev"))
+                ReadJsonValue(block.at("min_ev"), value.minEV);
+            if (block.contains("max_ev"))
+                ReadJsonValue(block.at("max_ev"), value.maxEV);
+            if (block.contains("brighten_speed"))
+                ReadJsonValue(block.at("brighten_speed"), value.brightenSpeed);
+            if (block.contains("darken_speed"))
+                ReadJsonValue(block.at("darken_speed"), value.darkenSpeed);
+            if (block.contains("compensation_ev"))
+                ReadJsonValue(block.at("compensation_ev"), value.compensationEV);
+        }
+        if (render.contains("color_grade")) {
+            const auto& block = render.at("color_grade");
+            RequireValidScene(block.is_object());
+            auto& value = settings.render3D.colorGrade;
+            if (block.contains("temperature_kelvin"))
+                ReadJsonValue(block.at("temperature_kelvin"), value.temperatureK);
+            if (block.contains("tint"))
+                ReadJsonValue(block.at("tint"), value.tint);
+            if (block.contains("saturation"))
+                ReadJsonValue(block.at("saturation"), value.saturation);
+            if (block.contains("vibrance"))
+                ReadJsonValue(block.at("vibrance"), value.vibrance);
+            if (block.contains("contrast"))
+                ReadJsonValue(block.at("contrast"), value.contrast);
+            if (block.contains("lift")) {
+                const auto& triplet = block.at("lift");
+                RequireValidScene(triplet.is_array() && triplet.size() == 3);
+                for (size_t i = 0; i < 3; ++i)
+                    ReadJsonValue(triplet.at(i), value.lift[i]);
+            }
+            if (block.contains("gamma")) {
+                const auto& triplet = block.at("gamma");
+                RequireValidScene(triplet.is_array() && triplet.size() == 3);
+                for (size_t i = 0; i < 3; ++i)
+                    ReadJsonValue(triplet.at(i), value.gamma[i]);
+            }
+            if (block.contains("gain")) {
+                const auto& triplet = block.at("gain");
+                RequireValidScene(triplet.is_array() && triplet.size() == 3);
+                for (size_t i = 0; i < 3; ++i)
+                    ReadJsonValue(triplet.at(i), value.gain[i]);
+            }
+            if (block.contains("shadows")) {
+                const auto& triplet = block.at("shadows");
+                RequireValidScene(triplet.is_array() && triplet.size() == 3);
+                for (size_t i = 0; i < 3; ++i)
+                    ReadJsonValue(triplet.at(i), value.shadows[i]);
+            }
+            if (block.contains("midtones")) {
+                const auto& triplet = block.at("midtones");
+                RequireValidScene(triplet.is_array() && triplet.size() == 3);
+                for (size_t i = 0; i < 3; ++i)
+                    ReadJsonValue(triplet.at(i), value.midtones[i]);
+            }
+            if (block.contains("highlights")) {
+                const auto& triplet = block.at("highlights");
+                RequireValidScene(triplet.is_array() && triplet.size() == 3);
+                for (size_t i = 0; i < 3; ++i)
+                    ReadJsonValue(triplet.at(i), value.highlights[i]);
+            }
+        }
+        if (render.contains("bloom_radius"))
+            ReadJsonValue(render.at("bloom_radius"), settings.render3D.bloomRadius);
+        if (render.contains("bloom_scatter"))
+            ReadJsonValue(render.at("bloom_scatter"), settings.render3D.bloomScatter);
+        if (render.contains("post_volumes")) {
+            const auto& volumes = render.at("post_volumes");
+            RequireValidScene(volumes.is_array() && volumes.size() <= 64);
+            settings.render3D.postVolumes.clear();
+            for (const auto& volume : volumes) {
+                RequireValidScene(volume.is_object());
+                PostProcessVolume box;
+                if (volume.contains("global"))
+                    ReadJsonValue(volume.at("global"), box.global);
+                if (volume.contains("priority"))
+                    ReadJsonValue(volume.at("priority"), box.priority);
+                if (volume.contains("blend_distance"))
+                    ReadJsonValue(volume.at("blend_distance"), box.blendDistance);
+                if (volume.contains("weight"))
+                    ReadJsonValue(volume.at("weight"), box.weight);
+                if (volume.contains("center")) {
+                    const auto& p = volume.at("center");
+                    RequireValidScene(p.is_array() && p.size() == 3);
+                    for (size_t i = 0; i < 3; ++i)
+                        ReadJsonValue(p.at(i), box.center[i]);
+                }
+                if (volume.contains("half_extent")) {
+                    const auto& p = volume.at("half_extent");
+                    RequireValidScene(p.is_array() && p.size() == 3);
+                    for (size_t i = 0; i < 3; ++i)
+                        ReadJsonValue(p.at(i), box.halfExtent[i]);
+                }
+                if (volume.contains("compensation_ev"))
+                    ReadJsonValue(volume.at("compensation_ev"), box.compensationEV.emplace());
+                if (volume.contains("bloom_intensity"))
+                    ReadJsonValue(volume.at("bloom_intensity"), box.bloomIntensity.emplace());
+                if (volume.contains("local_exposure"))
+                    ReadJsonValue(volume.at("local_exposure"), box.localExposure.emplace());
+                if (volume.contains("saturation"))
+                    ReadJsonValue(volume.at("saturation"), box.saturation.emplace());
+                if (volume.contains("temperature_kelvin"))
+                    ReadJsonValue(volume.at("temperature_kelvin"), box.temperatureK.emplace());
+                if (volume.contains("focus_distance"))
+                    ReadJsonValue(volume.at("focus_distance"), box.focusDistance.emplace());
+                settings.render3D.postVolumes.push_back(std::move(box));
+            }
+        }
         if (render.contains("physical_camera")) {
             const auto& camera = render.at("physical_camera");
             RequireValidScene(camera.is_object());
@@ -732,8 +986,12 @@ bool Scene::DeserializeJson(const std::string& data) {
                 ReadJsonValue(camera.at("exposure"), physical.exposure);
             if (camera.contains("depth_of_field"))
                 ReadJsonValue(camera.at("depth_of_field"), physical.depthOfField);
+            if (camera.contains("autofocus_speed"))
+                ReadJsonValue(camera.at("autofocus_speed"), physical.autofocusSpeed);
             if (camera.contains("iso"))
                 ReadJsonValue(camera.at("iso"), physical.iso);
+            if (camera.contains("motion_blur"))
+                ReadJsonValue(camera.at("motion_blur"), physical.motionBlur);
             if (camera.contains("shutter_seconds"))
                 ReadJsonValue(camera.at("shutter_seconds"), physical.shutterSeconds);
             if (camera.contains("f_number"))
@@ -743,6 +1001,21 @@ bool Scene::DeserializeJson(const std::string& data) {
             if (camera.contains("luminance_scale"))
                 ReadJsonValue(camera.at("luminance_scale"), physical.luminanceScale);
         }
+        if (render.contains("bloom_firefly_suppression"))
+            ReadJsonValue(render.at("bloom_firefly_suppression"),
+                          settings.render3D.bloomFireflySuppression);
+        if (render.contains("color_grading_mix"))
+            ReadJsonValue(render.at("color_grading_mix"), settings.render3D.colorGradingMix);
+        if (render.contains("secondary_color_grading_lut"))
+            ReadJsonValue(render.at("secondary_color_grading_lut"),
+                          settings.render3D.secondaryColorGradingLut);
+        if (render.contains("texture_lod_bias"))
+            ReadJsonValue(render.at("texture_lod_bias"), settings.render3D.textureLodBias);
+        if (render.contains("post_debug_view")) {
+            uint32 mode = 0;
+            ReadJsonValue(render.at("post_debug_view"), mode);
+            settings.render3D.postDebugView = static_cast<PostDebugView>(mode);
+        }
         if (render.contains("focus_distance"))
             ReadJsonValue(render.at("focus_distance"), settings.render3D.focusDistance);
         if (render.contains("color_grading_lut"))
@@ -750,8 +1023,16 @@ bool Scene::DeserializeJson(const std::string& data) {
         if (render.contains("color_grading_strength"))
             ReadJsonValue(render.at("color_grading_strength"),
                           settings.render3D.colorGradingStrength);
+        if (render.contains("dynamic_sky_lighting"))
+            ReadJsonValue(render.at("dynamic_sky_lighting"), settings.render3D.dynamicSkyLighting);
+        if (render.contains("cloud_shadow_strength"))
+            ReadJsonValue(render.at("cloud_shadow_strength"),
+                          settings.render3D.cloudShadowStrength);
         if (render.contains("dynamic_atmosphere"))
             ReadJsonValue(render.at("dynamic_atmosphere"), settings.render3D.dynamicAtmosphere);
+        if (render.contains("atmosphere_solar_irradiance"))
+            ReadJsonValue(render.at("atmosphere_solar_irradiance"),
+                          settings.render3D.atmosphereSolarIrradiance);
         if (render.contains("aerosol_density"))
             ReadJsonValue(render.at("aerosol_density"), settings.render3D.aerosolDensity);
         if (render.contains("vignette"))
@@ -766,8 +1047,21 @@ bool Scene::DeserializeJson(const std::string& data) {
             ReadJsonValue(render.at("lens_flare_strength"), settings.render3D.lensFlareStrength);
         if (render.contains("cloud_coverage"))
             ReadJsonValue(render.at("cloud_coverage"), settings.render3D.cloudCoverage);
+        if (render.contains("foliage_interactions")) {
+            const auto& interactions = render.at("foliage_interactions");
+            RequireValidScene(interactions.is_array() &&
+                              interactions.size() <= settings.render3D.foliageInteractions.size());
+            for (size_t i = 0; i < interactions.size(); ++i) {
+                auto& destination = settings.render3D.foliageInteractions[i];
+                ReadJsonValue(interactions.at(i).at("center"), destination.center);
+                ReadJsonValue(interactions.at(i).at("radius"), destination.radius);
+                ReadJsonValue(interactions.at(i).at("strength"), destination.strength);
+            }
+        }
         if (render.contains("wind_velocity"))
             ReadJsonValue(render.at("wind_velocity"), settings.render3D.windVelocity);
+        if (render.contains("rainfall"))
+            ReadJsonValue(render.at("rainfall"), settings.render3D.rainfall);
         if (render.contains("surface_wetness"))
             ReadJsonValue(render.at("surface_wetness"), settings.render3D.surfaceWetness);
         if (render.contains("weather_time"))
@@ -781,6 +1075,8 @@ bool Scene::DeserializeJson(const std::string& data) {
             ReadJsonValue(render.at("ray_tracing"), settings.render3D.rayTracing);
         if (render.contains("volumetric_fog"))
             ReadJsonValue(render.at("volumetric_fog"), settings.render3D.fog);
+        if (render.contains("cascaded_shadows"))
+            ReadJsonValue(render.at("cascaded_shadows"), settings.render3D.cascadedShadows);
         if (render.contains("virtual_shadows"))
             ReadJsonValue(render.at("virtual_shadows"), settings.render3D.virtualShadows);
         if (render.contains("water_reflection")) {
@@ -887,6 +1183,50 @@ bool Scene::DeserializeJson(const std::string& data) {
                         if (data.contains("ripple_strength"))
                             ReadJsonValue(data.at("ripple_strength"), water.rippleStrength);
                     }
+                    if (value.contains("gpu_skinning"))
+                        ReadJsonValue(value.at("gpu_skinning"), component.material.gpuSkinning);
+                    if (value.contains("lod_transition"))
+                        ReadJsonValue(value.at("lod_transition"), component.material.lodTransition);
+                    if (value.contains("principled_surface")) {
+                        const auto& block = value.at("principled_surface");
+                        RequireValidScene(block.is_object());
+                        auto& s = component.material.surface.emplace();
+                        if (block.contains("impostor_depth"))
+                            ReadJsonValue(block.at("impostor_depth"), s.impostorDepth);
+                        if (block.contains("model")) {
+                            uint32 model = 0;
+                            ReadJsonValue(block.at("model"), model);
+                            RequireValidScene(model <=
+                                              static_cast<uint32>(SurfaceModel::Character));
+                            s.model = static_cast<SurfaceModel>(model);
+                        }
+                        if (block.contains("clear_coat"))
+                            ReadJsonValue(block.at("clear_coat"), s.clearCoat);
+                        if (block.contains("coat_roughness"))
+                            ReadJsonValue(block.at("coat_roughness"), s.coatRoughness);
+                        if (block.contains("anisotropy"))
+                            ReadJsonValue(block.at("anisotropy"), s.anisotropy);
+                        if (block.contains("sheen"))
+                            ReadJsonValue(block.at("sheen"), s.sheen);
+                        if (block.contains("transmission"))
+                            ReadJsonValue(block.at("transmission"), s.transmission);
+                        if (block.contains("ior"))
+                            ReadJsonValue(block.at("ior"), s.indexOfRefraction);
+                        if (block.contains("detail_scale"))
+                            ReadJsonValue(block.at("detail_scale"), s.detailScale);
+                        if (block.contains("specular_tint"))
+                            ReadJsonValue(block.at("specular_tint"), s.specularTint);
+                        if (block.contains("thickness_texture"))
+                            ReadJsonValue(block.at("thickness_texture"), s.thicknessTexture);
+                        if (block.contains("coat_normal"))
+                            ReadJsonValue(block.at("coat_normal"), s.coatNormalTexture);
+                        if (block.contains("detail_color"))
+                            ReadJsonValue(block.at("detail_color"), s.detailColorTexture);
+                        if (block.contains("detail_normal"))
+                            ReadJsonValue(block.at("detail_normal"), s.detailNormalTexture);
+                        if (block.contains("detail_roughness"))
+                            ReadJsonValue(block.at("detail_roughness"), s.detailRoughnessTexture);
+                    }
                     if (value.contains("wind_amplitude"))
                         ReadJsonValue(value.at("wind_amplitude"), component.material.windAmplitude);
                     if (value.contains("subsurface_radius"))
@@ -911,6 +1251,8 @@ bool Scene::DeserializeJson(const std::string& data) {
                             ReadJsonValue(data.at("roughness_texture"), layer.roughnessTexture);
                         if (data.contains("height_texture"))
                             ReadJsonValue(data.at("height_texture"), layer.heightTexture);
+                        if (data.contains("palette"))
+                            ReadJsonValue(data.at("palette"), layer.palette);
                         if (data.contains("height_blend"))
                             ReadJsonValue(data.at("height_blend"), layer.heightBlend);
                     }

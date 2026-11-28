@@ -73,17 +73,21 @@ void RebaseSceneReferences(LuxEngine::Scene& scene, const fs::path& owner,
     const auto& currentSettings = scene.GetSettings();
     if (!currentSettings.render3D.environmentPath.empty() ||
         !currentSettings.render3D.waterReflection.environmentPath.empty() ||
-        !currentSettings.render3D.colorGradingLut.empty()) {
+        !currentSettings.render3D.colorGradingLut.empty() ||
+        !currentSettings.render3D.secondaryColorGradingLut.empty()) {
         auto settings = currentSettings;
-        for (auto* path : {&settings.render3D.environmentPath,
-                           &settings.render3D.waterReflection.environmentPath,
-                           &settings.render3D.colorGradingLut})
+        for (auto* path :
+             {&settings.render3D.environmentPath,
+              &settings.render3D.waterReflection.environmentPath,
+              &settings.render3D.colorGradingLut, &settings.render3D.secondaryColorGradingLut})
             if (!path->empty())
                 *path = resolve(*path);
         if (settings.render3D.environmentPath != currentSettings.render3D.environmentPath ||
             settings.render3D.waterReflection.environmentPath !=
                 currentSettings.render3D.waterReflection.environmentPath ||
-            settings.render3D.colorGradingLut != currentSettings.render3D.colorGradingLut) {
+            settings.render3D.colorGradingLut != currentSettings.render3D.colorGradingLut ||
+            settings.render3D.secondaryColorGradingLut !=
+                currentSettings.render3D.secondaryColorGradingLut) {
             if (edits)
                 edits->settings = std::move(settings);
             else if (!scene.SetSettings(settings))

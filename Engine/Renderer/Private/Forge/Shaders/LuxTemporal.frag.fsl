@@ -9,7 +9,7 @@ STRUCT(FullscreenOutput)
 STRUCT(TemporalOutput)
 {
     DATA(float4, color, SV_Target0);
-    DATA(float, depth, SV_Target1);
+    DATA(float2, depth, SV_Target1);
 #ifdef LUX_TEMPORAL_COMPOSITE
     DATA(float4, composite, SV_Target2);
 #endif
@@ -21,6 +21,12 @@ float3 TemporalYCoCg(float3 rgb) {
 }
 float3 TemporalRgb(float3 ycc) {
     return float3(ycc.x + ycc.y - ycc.z, ycc.x + ycc.z, ycc.x - ycc.y - ycc.z);
+}
+
+float4 TemporalCubicWeights(float t) {
+    const float t2 = t*t, t3 = t2*t;
+    return float4(-.5f*t + t2 - .5f*t3, 1.0f - 2.5f*t2 + 1.5f*t3,
+                  .5f*t + 2.0f*t2 - 1.5f*t3, -.5f*t2 + .5f*t3);
 }
 
 ROOT_SIGNATURE(DefaultRootSignature)
@@ -38,15 +44,16 @@ TemporalOutput PS_MAIN(FullscreenOutput In)
         hardwareDepth < LoadTex2D(gTemporalOpaqueDepth, NO_SAMPLER, pixel, 0).r;
     TemporalOutput Out;
     Out.color = current;
-    // Store a surface fingerprint in the low 11 bits of R32 depth. Dropping
-    // those mantissa bits changes eye depth by less than 0.025%, below our
-    // 0.6% water and 1.2% solid depth rejection thresholds.
     const float4 velocity = LoadTex2D(gMotionVectors, NO_SAMPLER, pixel, 0);
-    const uint tag = uint(abs(velocity.w));
-    const uint z = asuint(water ? -eyeDepth : eyeDepth) & 0xfffff800u;
-    Out.depth = eyeDepth > 0.0f ? asfloat(z | tag) : 0.0f;
+    const float tag = abs(velocity.w);
+    Out.depth = float2(water ? -eyeDepth : eyeDepth, tag);
 #ifdef LUX_TEMPORAL_COMPOSITE
-    Out.composite = current;
+    const int diagnostic = int(gTemporal.jitterDelta.z);
+    const float2 displayMotion = (velocity.xy - gTemporal.jitterDelta.xy) * gTemporal.viewport.xy;
+    Out.composite = diagnostic == 0 ? current : float4(0, 0, 0, 1);
+    if (diagnostic == 1 && abs(velocity.w) > .5f)
+        Out.composite.rgb = velocity.w < 0 ? float3(1, 0, 0) : float3(.5f + .04f * displayMotion.x, .5f + .04f * displayMotion.y, 0);
+    if (diagnostic == 4 && eyeDepth > 0.0f) Out.composite.rgb = float3(1, 1, 1);
 #endif
     if (eyeDepth <= 0.0f || gTemporal.history.x < 0.5f)
         RETURN(Out);
@@ -61,45 +68,61 @@ TemporalOutput PS_MAIN(FullscreenOutput In)
     if (expectedDepth <= 0.0f)
         RETURN(Out);
     const float2 previousUv = velocity.w > 0.5f ? (In.position.xy / gTemporal.viewport.xy + velocity.xy) : clip.xy / clip.w * float2(0.5f, -0.5f) + 0.5f;
+#ifdef LUX_TEMPORAL_COMPOSITE
+    if (diagnostic == 1 && velocity.w == 0) {
+        const float2 cameraVelocity = (previousUv - gTemporal.jitterDelta.xy) * gTemporal.viewport.xy - In.position.xy;
+        Out.composite.rgb = float3(.5f+.04f*cameraVelocity.x,.5f+.04f*cameraVelocity.y,0);
+    }
+#endif
     const float2 previous = previousUv * gTemporal.viewport.xy - 0.5f;
     if (previous.x < 0.0f || previous.y < 0.0f ||
         previous.x > gTemporal.viewport.x - 1.0f || previous.y > gTemporal.viewport.y - 1.0f)
         RETURN(Out);
 
-    // Bilinear history, excluding samples from the wrong surface or uncovered pixels.
+    // Reconstruct band-limited history on continuous surfaces. Across disocclusions or
+    // screen edges, fall back to a renormalized footprint containing only matching samples.
     const int2 base = int2(floor(previous));
     const float2 f = previous - float2(base);
-    const float epsilon = water ? max(0.023f, expectedDepth * 0.006f)
-                                : max(0.045f, expectedDepth * 0.012f);
-    float3 accumulated = float3(0.0f, 0.0f, 0.0f);
+    const float4 wx = TemporalCubicWeights(f.x), wy = TemporalCubicWeights(f.y);
+    const float epsilon = water ? max(0.023f, expectedDepth * 0.006f) : max(0.045f, expectedDepth * 0.012f);
+    float3 cubic = float3(0, 0, 0), bilinear = float3(0, 0, 0);
     float confidence = 0.0f;
-    UNROLL for (int j = 0; j < 2; ++j)
-    {
-        UNROLL for (int i = 0; i < 2; ++i)
-        {
-            const int2 p = min(base + int2(i, j), size - 1);
-            const float d = LoadTex2D(gPreviousDepth, NO_SAMPLER, p, 0).r;
-            const uint bits = asuint(d);
-            const float lastDepth = asfloat(bits & 0xfffff800u);
-            const float sampleDepth = water ? -lastDepth : lastDepth;
-            if ((bits & 2047u) == tag && sampleDepth > 0.0f && abs(sampleDepth - expectedDepth) < epsilon)
-            {
+    bool continuous = true;
+    UNROLL for (int j = -1; j <= 2; ++j) {
+        UNROLL for (int i = -1; i <= 2; ++i) {
+            const int2 q = base + int2(i, j);
+            if (q.x < 0 || q.y < 0 || q.x >= size.x || q.y >= size.y) {
+                continuous = false;
+                continue;
+            }
+            const float2 d = LoadTex2D(gPreviousDepth, NO_SAMPLER, q, 0).rg;
+            const float z = water ? -d.x : d.x;
+            if (d.y != tag || z <= 0.0f || abs(z - expectedDepth) >= epsilon) {
+                continuous = false;
+                continue;
+            }
+            const float3 c = LoadTex2D(gPreviousColor, NO_SAMPLER, q, 0).rgb;
+            cubic += c * (wx[i + 1] * wy[j + 1]);
+            if (i >= 0 && i <= 1 && j >= 0 && j <= 1) {
                 const float weight = (i == 0 ? 1.0f - f.x : f.x) * (j == 0 ? 1.0f - f.y : f.y);
-                accumulated += LoadTex2D(gPreviousColor, NO_SAMPLER, p, 0).rgb * weight;
+                bilinear += c * weight;
                 confidence += weight;
             }
         }
     }
     if (confidence < 0.25f)
         RETURN(Out);
-
-    const float3 rawHistory = accumulated / confidence;
+    const float3 rawHistory = continuous ? max(cubic, float3(0, 0, 0)) : bilinear / confidence;
     const float motion = length((previousUv - gTemporal.jitterDelta.xy) * gTemporal.viewport.xy - In.position.xy);
-    float weight = 0.0f;
+    float weight = 0.0f, reactiveMask = 0.0f;
     if (water) {
         const float change = length(current.rgb - rawHistory) /
                              max(0.20f, max(length(current.rgb), length(rawHistory)));
         const float reactivity = smoothstep(0.08f, 0.36f, change);
+        reactiveMask = reactivity;
+#ifdef LUX_TEMPORAL_COMPOSITE
+        if (diagnostic == 2) Out.composite.rgb = float3(reactivity, reactivity, reactivity);
+#endif
         weight = confidence * 0.42f * (1.0f - reactivity) *
                  (1.0f - smoothstep(1.0f, 18.0f, motion));
         if (weight <= 0.001f)
@@ -119,7 +142,7 @@ TemporalOutput PS_MAIN(FullscreenOutput In)
             const int2 q = clamp(pixel + int2(x, y), int2(0, 0), size - 1);
             const float depth = LoadTex2D(gCurrentDepth, NO_SAMPLER, q, 0).r;
             const float zNeighbor = -gTemporal.up.w / max(-gTemporal.right.w - depth, 1e-7f);
-            const uint neighborTag = uint(abs(LoadTex2D(gMotionVectors, NO_SAMPLER, q, 0).w));
+            const float neighborTag = abs(LoadTex2D(gMotionVectors, NO_SAMPLER, q, 0).w);
             if (depth >= 1.0f || abs(zNeighbor - eyeDepth) > epsilonCurrent || neighborTag != tag)
                 continue;
             const float3 value = TemporalYCoCg(LoadTex2D(gCurrentColor, NO_SAMPLER, q, 0).rgb);
@@ -143,6 +166,7 @@ TemporalOutput PS_MAIN(FullscreenOutput In)
         const float change = length(historical - center) /
                              max(.04f, max(abs(historical.x), abs(center.x)) + deviation.x);
         const float reactive = smoothstep(.12f, .75f, change);
+        reactiveMask = reactive;
         const float stable = support * (1.0f - reactive) / (1.0f + motion * .055f);
         weight = confidence * lerp(.08f, .86f, stable);
     }
@@ -156,7 +180,10 @@ TemporalOutput PS_MAIN(FullscreenOutput In)
     }
     Out.color.rgb = clamp(TemporalRgb(resolved), 0.0f, 65504.0f);
 #ifdef LUX_TEMPORAL_COMPOSITE
-    Out.composite = Out.color;
+    if (diagnostic == 0) Out.composite = Out.color;
+    if (diagnostic == 2) Out.composite.rgb = float3(reactiveMask, reactiveMask, reactiveMask);
+    if (diagnostic == 3) Out.composite.rgb = float3(weight, weight, weight);
+    if (diagnostic == 4) Out.composite.rgb = float3(1, 1, 1) * (1.0f - confidence);
 #endif
     RETURN(Out);
 }

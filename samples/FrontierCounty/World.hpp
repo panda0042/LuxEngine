@@ -15,6 +15,8 @@ using LuxEngine::Vec3;
 using LuxEngine::Vec4;
 
 inline constexpr int ChunkSize = 256;
+inline constexpr unsigned TerrainCells = 32;
+inline constexpr double TerrainStep = double(ChunkSize) / TerrainCells;
 inline constexpr int WorldHalf = 8192;
 inline constexpr double LakeLevel = 12;
 inline constexpr Vec2 LakeCenter{305, 390};
@@ -52,10 +54,16 @@ std::span<const Structure> Structures();
 struct Plant {
     Vec3 ground, dimensions;
     double yaw = 0;
+    float lodTransition = 0;
+    double longitudinalTilt = 0;
 };
 
 inline constexpr int CoverTileSize = 12;
-std::array<std::vector<Plant>, 2> GroundCover(ChunkKey tile, unsigned seed);
+enum class GroundSpecies : size_t { Grass, Sedge, Fern, Sapling, Deadwood, Dandelion, Count };
+inline constexpr std::array<std::string_view, size_t(GroundSpecies::Count)> GroundSpeciesNames{
+    "grass-clump", "sedge-tuft", "fern", "sapling", "deadwood", "dandelion"};
+using GroundPlants = std::array<std::vector<Plant>, GroundSpeciesNames.size()>;
+GroundPlants GroundCover(ChunkKey tile, unsigned seed);
 
 struct Obstacle {
     Vec3 center;

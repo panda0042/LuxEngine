@@ -1,4 +1,5 @@
 #include <LuxEditor/Project/PathEncoding.hpp>
+#include <LuxEditor/Scene/PostProcessControls.hpp>
 #include <LuxEditor/Scene/SceneSettingsDialog.hpp>
 #include <LuxEngine/Environment/EnvironmentMap.hpp>
 #include <LuxUI/Widgets.hpp>
@@ -8,6 +9,7 @@ namespace LuxEditor {
 std::optional<LuxEngine::SceneSettings>
 ShowSceneSettingsDialog(LuxUI::Widget* parent, const LuxEngine::SceneSettings& settings,
                         const std::string& sourcePath) {
+    auto result = settings;
     LuxUI::Dialog dialog(parent);
     dialog.setWindowTitle(LUX_UI_TEXT("씬 설정"));
     dialog.setMinimumWidth(360);
@@ -133,6 +135,7 @@ ShowSceneSettingsDialog(LuxUI::Widget* parent, const LuxEngine::SceneSettings& s
         number(shadowGroup, LUX_UI_TEXT("깊이 바이어스"), r.shadowDepthBias, 0, .1, 6);
     auto* normalBias =
         number(shadowGroup, LUX_UI_TEXT("법선 바이어스"), r.shadowNormalBias, 0, 10, 4);
+    AddPostProcessControls(*layout, *body, result.render3D);
     auto* physics = group(LUX_UI_TEXT("물리"));
     auto* overrideGravity = new LuxUI::CheckBox(LUX_UI_TEXT("씬 중력 사용"), &dialog);
     overrideGravity->setChecked(settings.overrideGravity);
@@ -167,7 +170,6 @@ ShowSceneSettingsDialog(LuxUI::Widget* parent, const LuxEngine::SceneSettings& s
                    ? previous
                    : static_cast<float>(field->value());
     };
-    auto result = settings;
     result.clearColor = {
         value(clear[0], settings.clearColor.x), value(clear[1], settings.clearColor.y),
         value(clear[2], settings.clearColor.z), value(clear[3], settings.clearColor.w)};

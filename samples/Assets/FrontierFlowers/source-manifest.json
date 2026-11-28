@@ -1,0 +1,107 @@
+{
+  "name": "Dandelion 01",
+  "version": "Poly Haven glTF 2.0 / 8k",
+  "url": "https://polyhaven.com/a/dandelion_01",
+  "license": "CC0-1.0",
+  "licenseUrl": "https://polyhaven.com/license",
+  "authors": {
+    "Rico Cilliers": "modeling",
+    "Rob Tuytel": "photography"
+  },
+  "sourceFiles": {
+    "diff.jpg": {
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/dandelion_01/dandelion_01_diff_8k.jpg",
+      "sha256": "3848711731ea4d39e7b1125bea316cbb3742a74a1e0ff39b130b59e20918b3d1",
+      "bytes": 13053252,
+      "dimensions": [
+        8192,
+        8192
+      ]
+    },
+    "alpha.png": {
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/8k/dandelion_01/dandelion_01_alpha_8k.png",
+      "sha256": "7f334ace86540c4415689a014c86de2766be97bddbf6924f22826024bcca80f2",
+      "bytes": 1354424,
+      "dimensions": [
+        8192,
+        8192
+      ]
+    },
+    "normal.jpg": {
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/dandelion_01/dandelion_01_nor_gl_8k.jpg",
+      "sha256": "8f9f0a72c85ee95e180fce3066620dd823ebb6bc1100e9a30a61fe46be04d917",
+      "bytes": 17977571,
+      "dimensions": [
+        8192,
+        8192
+      ]
+    },
+    "rough.jpg": {
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/dandelion_01/dandelion_01_rough_8k.jpg",
+      "sha256": "6872b2bad6ff4ad06f8b6c67343827f265aeef3a6d99ce5455f64dfa96932a72",
+      "bytes": 11015823,
+      "dimensions": [
+        8192,
+        8192
+      ]
+    },
+    "dandelion.gltf": {
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/dandelion_01/dandelion_01_8k.gltf",
+      "sha256": "a8753bafa5693d0aca6ddd48e0b845e9a16cce9587e04fa53db32ff961989c48",
+      "bytes": 8915
+    },
+    "dandelion_01.bin": {
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/dandelion_01/dandelion_01.bin",
+      "sha256": "ccff5a564f56a69374c09c25ae86c3684c46329309b4eef4569255b1ad54bdd0",
+      "bytes": 1676648
+    }
+  },
+  "sourceNode": "dandelion_01_a_LOD0",
+  "sourceTriangles": 23542,
+  "mesh": {
+    "vertices": 1454,
+    "triangles": 1249,
+    "boundsMin": [
+      -0.12620310485363007,
+      -0.002436659298837185,
+      -0.13672634959220886
+    ],
+    "boundsMax": [
+      0.0939415842294693,
+      0.16043809056282043,
+      0.11247499287128448
+    ]
+  },
+  "geometricError": 0.02413805201649666,
+  "runtimeTextureDimensions": [
+    1024,
+    1024
+  ],
+  "files": [
+    {
+      "path": "flower.obj",
+      "bytes": 107313,
+      "sha256": "d8765957e7cb110a5356a3b0862a7adfba70a9ce7d5e9b7f4ef05e8eae52fe3a"
+    },
+    {
+      "path": "albedo.png",
+      "bytes": 916500,
+      "sha256": "32725d4661e80b271c839915bc442e3785f08d47c38e3c3e0f438c3d37f88073"
+    },
+    {
+      "path": "normal.png",
+      "bytes": 927753,
+      "sha256": "af9acc665902d667fae3ab3a0d8841385cb1b66aab1e37f5c2381d312ae8e92e"
+    },
+    {
+      "path": "roughness.png",
+      "bytes": 316258,
+      "sha256": "9e839ac508bbf8e60d57f4a78e85806f06010b24d16f6e5883eee3a24406fe17"
+    },
+    {
+      "path": "License.txt",
+      "bytes": 122,
+      "sha256": "2072374bad080dd8c0bef74f9af27112b1cb813ed7093ab814639f87c19edc1a"
+    }
+  ]
+}

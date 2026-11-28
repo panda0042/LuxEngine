@@ -617,7 +617,7 @@ void ScenePlayer::OnRender(float) {
         auto renderSettings = scene_->GetSettings().render3D;
         for (auto* path :
              {&renderSettings.environmentPath, &renderSettings.waterReflection.environmentPath,
-              &renderSettings.colorGradingLut})
+              &renderSettings.colorGradingLut, &renderSettings.secondaryColorGradingLut})
             if (!path->empty())
                 *path = scene_->ResolveAssetPath(*path);
         Renderer3D::BeginScene(camera3D_, renderSettings, scene_->GetSettings().exposure);

@@ -239,8 +239,10 @@ private:
 
     void InspectAssets(LuxEngine::Scene& scene, const fs::path& owner) {
         const auto& render = scene.GetSettings().render3D;
-        if (!render.colorGradingLut.empty()) {
-            const auto file = ResolveModel(render.colorGradingLut, owner, true);
+        for (const auto* path : {&render.colorGradingLut, &render.secondaryColorGradingLut}) {
+            if (path->empty())
+                continue;
+            const auto file = ResolveModel(*path, owner, true);
             if (gradingFiles_.insert(file).second)
                 Charge(fs::file_size(file));
         }

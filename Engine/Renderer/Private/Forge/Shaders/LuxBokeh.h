@@ -20,21 +20,23 @@ float2 ApertureTap(uint index, uint count, float blades) {
     return radial * lerp(float2(cos(a), sin(a)), float2(cos(a + arc), sin(a + arc)), frac(segment));
 }
 
-float BlurRadius(float depth) {
+float BlurRadius(float depth, float focus) {
     // Thin-lens signed circle of confusion; negative denotes the near field.
-    const float defocus = 1.0f - gPost.lens.w / max(depth, 1e-4f);
+    const float defocus = 1.0f - focus / max(depth, 1e-4f);
     const float radiusLimit = min(gPost.lens.z, 32.0f);
     if (gPost.cameraEffects.w > 0.0f)
-        return clamp(gPost.cameraEffects.w * defocus, -radiusLimit, radiusLimit);
+        return clamp(gPost.cameraEffects.w * (gPost.lens.w - gPost.bloomFocus.z) /
+                         max(focus - gPost.bloomFocus.z, .0001f) * defocus,
+                     -radiusLimit, radiusLimit);
     return clamp(defocus, -1.0f, 1.0f) * radiusLimit;
 }
 
-float3 ApplyLens(int2 pixel, int2 upper, float4 center) {
+float3 ApplyLens(int2 pixel, int2 upper, float4 center, float focus) {
     if (gPost.lens.z <= 0.0f)
         return center.rgb / center.a;
     const float z = EyeDepth(pixel);
     const float nearBias = max(0.025f * z, 0.02f);
-    const float radius = abs(BlurRadius(z));
+    const float radius = abs(BlurRadius(z, focus));
     const float blades = gPost.cameraEffects.z;
     float3 sum = center.rgb;
     float weight = center.a;
@@ -65,7 +67,7 @@ float3 ApplyLens(int2 pixel, int2 upper, float4 center) {
             const float sz = EyeDepth(int2(round(p)));
             if (sz >= z - nearBias)
                 continue;
-            const float nearRadius = -BlurRadius(sz);
+            const float nearRadius = -BlurRadius(sz, focus);
             // Radial sample position in normalized aperture space, also valid for a polygon.
             const float needed = sqrt((float(i) + 0.5f) / 12.0f) * maxRadius;
             const float w = smoothstep(needed - 0.5f, needed + 0.5f, nearRadius);

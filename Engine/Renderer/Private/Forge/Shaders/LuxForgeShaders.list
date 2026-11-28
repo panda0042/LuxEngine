@@ -110,6 +110,16 @@
 #include "LuxRestirResolve.comp.fsl"
 #end
 
+#comp luxraywavelet.comp
+#include "LuxRayWavelet.comp.fsl"
+#end
+
+#comp luxraywaveletwide.comp
+#define LUX_WAVELET_WIDE
+#include "LuxRayWavelet.comp.fsl"
+#undef LUX_WAVELET_WIDE
+#end
+
 #comp FT_RAYTRACING luxradiancecascades.comp
 #include "LuxRadianceCascades.comp.fsl"
 #end
@@ -138,6 +148,14 @@
 #include "LuxPostExposure.frag.fsl"
 #end
 
+#comp luxmeter.comp
+#include "LuxMeter.comp.fsl"
+#end
+
+#frag luxpostup.frag
+#include "LuxPostUp.frag.fsl"
+#end
+
 #frag luxpostfinal.frag
 #include "LuxPostFinal.frag.fsl"
 #end
@@ -149,4 +167,52 @@
 
 #frag luxmotionblur.frag
 #include "LuxMotionBlur.frag.fsl"
+#end
+
+#frag luxskycapture.frag
+#include "LuxSkyCache.frag.fsl"
+#end
+#frag luxskysh.frag
+#define LUX_SKY_SH
+#include "LuxSkyCache.frag.fsl"
+#end
+#frag luxskygloss.frag
+#define LUX_SKY_GLOSS
+#include "LuxSkyCache.frag.fsl"
+#end
+#frag luxcloudshadow.frag
+#define LUX_CLOUD_SHADOW
+#include "LuxSkyCache.frag.fsl"
+#end
+
+#frag luxshuttertile.frag
+#include "LuxShutterMax.frag.fsl"
+#end
+#frag luxshutterneighbor.frag
+#define LUX_SHUTTER_NEIGHBOR
+#include "LuxShutterMax.frag.fsl"
+#end
+
+#frag luxtransmittance.frag
+#define LUX_TRANSMITTANCE
+#include "LuxSkyCache.frag.fsl"
+#end
+
+#frag luxmultiscatter.frag
+#define LUX_MULTIPLE_SCATTER
+#include "LuxSkyCache.frag.fsl"
+#end
+
+#frag luxskyview.frag
+#define LUX_SKY_VIEW
+#include "LuxSkyCache.frag.fsl"
+#end
+
+#comp luxskin.comp
+#include "LuxSkin.comp.fsl"
+#end
+
+#frag luxaerial.frag
+#define LUX_AERIAL
+#include "LuxSkyCache.frag.fsl"
 #end

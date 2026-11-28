@@ -52,6 +52,9 @@ public:
     bool CreateBuffer(BufferType type, uint32 sizeBytes, uint64& handle) override;
     bool CreateOceanBuffer(uint32 resolution, std::span<const float> modes, float patchLength,
                            float foamThreshold, float foamSoftness, uint64& handle) override;
+    bool CreateSkinBuffer(uint32 vertices, uint32 bones, std::span<const float> seed,
+                          uint64& handle) override;
+    bool UpdateSkinBuffer(uint64 handle, std::span<const float> palette) override;
     bool UpdateOceanBuffer(uint64 handle, float timeSeconds) override;
     bool UpdateBuffer(uint64 handle, const void* data, uint32 sizeBytes,
                       uint32 offsetBytes) override;

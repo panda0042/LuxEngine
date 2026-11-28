@@ -245,9 +245,13 @@ void ForgeBackend::CollectFrameStats(GpuFrameStats& frame) const {
     frame.restirPasses = stats.restirPasses;
     frame.temporalRestirPasses = stats.temporalRestirPasses;
     frame.objectMotionDraws = stats.objectMotionDraws;
+    frame.skinningDispatches = stats.skinningDispatches;
+    frame.deformedMotionDraws = stats.deformedMotionDraws;
+    frame.waterMotionDraws = stats.waterMotionDraws;
     frame.rayDenoiserPasses = stats.rayDenoiserPasses;
     frame.radianceCascadePasses = stats.radianceCascadePasses;
     frame.virtualShadowPages = stats.virtualShadowPages;
+    frame.reusedShadowPages = stats.reusedShadowPages;
     frame.requestedShadowPages = stats.requestedShadowPages;
     frame.vertexBytes = stats.vertexBytes;
     frame.uploadBytes = stats.uploadBytes;
@@ -510,6 +514,25 @@ bool ForgeBackend::CreateOceanBuffer(uint32 resolution, std::span<const float> m
     return true;
 }
 
+bool ForgeBackend::CreateSkinBuffer(uint32 vertices, uint32 bones, std::span<const float> seed,
+                                    uint64& handle) {
+    if (!Usable() || seed.size() % 4 || seed.size() / 4 > UINT32_MAX)
+        return false;
+    const auto id = lib_->api->createSkinBuffer(lib_->device, vertices, bones, seed.data(),
+                                                uint32(seed.size() / 4));
+    if (!id)
+        return false;
+    buffers_.insert(id);
+    handle = id;
+    return true;
+}
+
+bool ForgeBackend::UpdateSkinBuffer(uint64 handle, std::span<const float> palette) {
+    return Usable() && frameOpen_ && buffers_.count(handle) && palette.size() % 16 == 0 &&
+           lib_->api->updateSkinBuffer(lib_->device, uint32(handle), palette.data(),
+                                       uint32(palette.size() / 16));
+}
+
 bool ForgeBackend::UpdateOceanBuffer(uint64 handle, float timeSeconds) {
     if (!Usable())
         return false;
@@ -654,6 +677,16 @@ public:
         d.sampling = draw.sampling;
         d.shadowOnly = draw.shadowOnly ? 1 : 0;
         d.shadowPageMask = draw.shadowPageMask;
+        Copy4(d.lobes, draw.lobes);
+        Copy4(d.optics, draw.optics);
+        Copy4(d.specular, draw.specular);
+        d.lodTransition = draw.lodTransition;
+        for (size_t i = 0; i < draw.surfaceMaps.size(); ++i) {
+            if (draw.surfaceMaps[i] && !backend_->textures_.count(draw.surfaceMaps[i]))
+                return false;
+            d.surfaceMaps[i] = static_cast<uint32_t>(draw.surfaceMaps[i]);
+        }
+        d.previousVertexBuffer = static_cast<uint32_t>(draw.previousVertexBuffer);
         d.motionInstance = draw.motionInstance;
         d.geometryRevision = draw.geometryRevision;
         d.terrainColor = static_cast<uint32_t>(draw.terrainColor);
@@ -728,7 +761,10 @@ public:
                              settings.lensDistortion});
         scene.lensFlareStrength = settings.lensFlareStrength;
         scene.temporalSharpness = settings.temporalSharpness;
+        scene.temporalDebugView = static_cast<uint32_t>(settings.temporalDebugView);
         scene.motionBlurShutter = settings.motionBlurShutter;
+        scene.shutterSeconds =
+            settings.physicalCamera.motionBlur ? settings.physicalCamera.shutterSeconds : 0.f;
         scene.temporalAntialiasing = settings.temporalAntialiasing;
         scene.temporalRestir = settings.rayTracing.temporalRestir;
         scene.rayDenoiser = settings.rayTracing.denoiser;
@@ -743,11 +779,59 @@ public:
                                   settings.depthOfFieldRadius, settings.focusDistance});
         scene.autoExposure = settings.autoExposure ? 1.f : 0.f;
         scene.physicallyBasedBloom = settings.physicallyBasedBloom;
+        const auto& meter = settings.metering;
+        Copy4(scene.meterRange,
+              {meter.lowPercentile, meter.highPercentile, meter.minEV, meter.maxEV});
+        Copy4(scene.meterResponse, {meter.brightenSpeed, meter.darkenSpeed, meter.compensationEV,
+                                    settings.physicalCamera.autofocusSpeed});
+        scene.bloomRadius = settings.bloomRadius;
+        scene.bloomScatter = settings.bloomScatter;
+        const auto& grade = settings.colorGrade;
+        Copy4(scene.gradeControls, {grade.saturation, grade.vibrance, grade.contrast,
+                                    float(grade != SceneColorGrade{})});
+        std::copy_n(grade.lift.begin(), 3, scene.gradeLift);
+        std::copy_n(grade.gamma.begin(), 3, scene.gradeGamma);
+        std::copy_n(grade.gain.begin(), 3, scene.gradeGain);
+        std::copy_n(grade.shadows.begin(), 3, scene.gradeShadows);
+        std::copy_n(grade.midtones.begin(), 3, scene.gradeMids);
+        std::copy_n(grade.highlights.begin(), 3, scene.gradeHighs);
+        // CIE daylight chromaticity mapped to linear Rec.709; the 6500 K response is unity.
+        const auto white = [](double kelvin) {
+            const double k = 1000. / kelvin;
+            const double x =
+                kelvin < 4000   ? -.2661239 * k * k * k - .234358 * k * k + .8776956 * k + .17991
+                : kelvin < 7000 ? -4.607 * k * k * k + 2.9678 * k * k + .09911 * k + .244063
+                                : -2.0064 * k * k * k + 1.9018 * k * k + .24748 * k + .23704;
+            const double y = kelvin < 4000 ? -.9549476 * x * x * x - 1.37418593 * x * x +
+                                                 2.09137015 * x - .16748867
+                                           : -3 * x * x + 2.87 * x - .275;
+            const double X = x / y, Z = (1 - x - y) / y;
+            return Vec3{3.2406 * X - 1.5372 - .4986 * Z, -.9689 * X + 1.8758 + .0415 * Z,
+                        .0557 * X - .204 + 1.057 * Z};
+        };
+        const Vec3 reference = white(6500), illuminant = white(grade.temperatureK);
+        scene.gradeLift[3] = float(reference.x / std::max(.1, illuminant.x));
+        scene.gradeGamma[3] =
+            float(reference.y / std::max(.1, illuminant.y) * std::exp2(-grade.tint));
+        scene.gradeGain[3] = float(reference.z / std::max(.1, illuminant.z));
         scene.localExposure = settings.localExposure;
         scene.apertureBlades = settings.apertureBlades;
         scene.gradingStrength = settings.colorGradingStrength;
+        scene.postDebugView = static_cast<uint32_t>(settings.postDebugView);
+        scene.luminanceScale = settings.physicalCamera.luminanceScale;
+        scene.gradeMix = settings.colorGradingMix;
+        scene.bloomFirefly = settings.bloomFireflySuppression;
+        gradingError_.clear();
+        scene.gradingTextureB =
+            GradingTexture(*lib, settings.secondaryColorGradingLut,
+                           settings.colorGradingStrength > 0 && settings.colorGradingMix > 0);
         scene.gradingTexture =
             GradingTexture(*lib, settings.colorGradingLut, settings.colorGradingStrength > 0);
+        Copy4(scene.skyLighting,
+              {settings.dynamicAtmosphere && settings.dynamicSkyLighting ? 1.f : 0.f,
+               settings.cloudShadowStrength, std::exp2(settings.textureLodBias), 0.f});
+        const float solar = settings.atmosphereSolarIrradiance;
+        Copy4(scene.solarSource, {solar, solar, solar, solar > 0.f ? 1.f : 0.f});
         Copy4(scene.atmosphere,
               {settings.dynamicAtmosphere ? 1.f : 0.f, settings.aerosolDensity,
                settings.cloudCoverage, float(std::clamp(origin.y, -1000., 100000.))});
@@ -766,6 +850,14 @@ public:
               {float(std::remainder(origin.x, 256.)), float(std::remainder(origin.z, 256.)),
                cloudOrigin(origin.x, settings.windVelocity.x),
                cloudOrigin(origin.z, settings.windVelocity.y)});
+        for (size_t i = 0; i < settings.foliageInteractions.size(); ++i) {
+            const auto& area = settings.foliageInteractions[i];
+            const double x = area.center.x - origin.x, z = area.center.y - origin.z;
+            if (area.radius > 0 && std::abs(x) < 100000 && std::abs(z) < 100000)
+                Copy4(scene.foliageContacts[i],
+                      {float(x) + scene.weatherOrigin[0], float(z) + scene.weatherOrigin[1],
+                       area.radius, area.strength});
+        }
         for (size_t index = 0; index < draws_.size(); ++index)
             CopyMatrix(draws_[index].model, Mat4::Translate(origin * -1.0) * models_[index]);
         Copy4(scene.camera, {0, 0, 0, exposure});
@@ -777,8 +869,12 @@ public:
         scene.options[1] = settings.imageBasedLighting && active ? 1.f : 0.f;
         scene.options[2] =
             (settings.toneMapping ? 1.f : 0.f) + (settings.screenSpaceAntialiasing ? 2.f : 0.f);
-        scene.options[3] =
-            settings.dynamicAtmosphere || (settings.showSkybox && active) ? 1.f : 0.f;
+        scene.options[3] = (settings.dynamicAtmosphere || (settings.showSkybox && active)) &&
+                                   (settings.postDebugView < PostDebugView::TextureMip ||
+                                    settings.postDebugView == PostDebugView::CloudDensity ||
+                                    settings.postDebugView == PostDebugView::VolumetricFog)
+                               ? 1.f
+                               : 0.f;
         const auto& view = camera.GetViewMatrix().elements;
         const auto& projection = camera.GetProjectionMatrix().elements;
         for (int i = 0; i < 3; ++i) {
@@ -803,12 +899,18 @@ public:
             // A real lens cannot focus inside its focal length. Stop just outside that limit.
             const double focus = std::max(double(settings.focusDistance), focal + .0001);
             scene.postEffects[3] = static_cast<float>(focus);
+            scene.focalMetres = static_cast<float>(focal);
             scene.physicalCocFraction =
                 static_cast<float>(focal * focal / (2.0 * lens.fNumber * (focus - focal) * sensor));
         }
         scene.forward[3] = coastalWater ? coastalWater->breakerHeight : 0.f;
         if (settings.shadows) {
-            CopyMatrix(scene.shadowMatrix, SceneShadowProjection(camera, settings));
+            if (settings.cascadedShadows) {
+                const auto fit = FitShadowCascades(camera, settings);
+                CopyMatrix(scene.shadowMatrix, fit.projection);
+                std::memcpy(scene.shadowCascades, fit.crops.data(), sizeof scene.shadowCascades);
+            } else
+                CopyMatrix(scene.shadowMatrix, SceneShadowProjection(camera, settings));
             scene.shadowOptions[0] = 1;
             scene.shadowOptions[1] = 1.f / settings.shadowResolution;
             scene.shadowOptions[2] = settings.shadowDepthBias;
@@ -838,6 +940,15 @@ public:
               {fog.maxDistance, fog.heightFalloff,
                static_cast<float>(std::clamp(origin.y - fog.baseHeight, -1e6, 1e6)),
                fog.anisotropy});
+        Copy4(scene.fogMedia, {fog.densityVariation, fog.multipleScattering, fog.historyWeight,
+                               static_cast<float>(fog.volumes.size())});
+        for (size_t i = 0; i < fog.volumes.size() && i < 4; ++i) {
+            const auto& v = fog.volumes[i];
+            Copy4(scene.fogLocal[i], {static_cast<float>(v.center[0] - origin.x),
+                                      static_cast<float>(v.center[1] - origin.y),
+                                      static_cast<float>(v.center[2] - origin.z), v.radius});
+            scene.fogLocalDensity[i] = v.density;
+        }
         scene.rayTracedFog = fog.rayTracedShadows;
         scene.virtualShadows = settings.shadows && settings.virtualShadows;
         const auto& cascades = settings.radianceCascades;
@@ -894,9 +1005,8 @@ private:
 
     uint32_t GradingTexture(ForgeLibrary& lib, const std::string& path, bool enabled) {
         constexpr uint64_t idleFrames = 600;
-        constexpr size_t maxEntries = 16; // Equal to the maximum number of scene passes per frame.
+        constexpr size_t maxEntries = 32; // Two LUTs per scene pass, up to sixteen views.
         const uint64_t frame = lib.api->framesPresented(lib.device);
-        gradingError_.clear();
         if (frame - lastGradingSweep_ >= 60) {
             std::erase_if(gradingCache_, [&](const GradingEntry& item) {
                 if (frame - item.usedFrame < idleFrames)
@@ -953,7 +1063,8 @@ private:
                     grade.error += " (" + path + ")";
             }
         }
-        gradingError_ = grade.error;
+        if (!grade.error.empty())
+            gradingError_ = grade.error;
         return grade.handle;
     }
 

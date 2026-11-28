@@ -20,6 +20,8 @@ void EnvironmentQuality() {
         });
     };
     GpuFrameCapture day, night, overcast;
+    // 100 klux with the sample calibration of 25 kcd/m² per scene radiance unit.
+    settings.sun.intensity = 4.f;
     settings.sun.direction = {0, -1, 0};
     if (!capture(day, [] {}))
         return Check(false, "day sky captures");
@@ -27,6 +29,8 @@ void EnvironmentQuality() {
     if (!capture(night, [] {}))
         return Check(false, "night sky captures");
     const auto noon = At(day, .5f, .25f), dark = At(night, .5f, .25f);
+    std::printf("  Zenith RGB day %d,%d,%d, night %d,%d,%d\n", noon[0], noon[1], noon[2], dark[0],
+                dark[1], dark[2]);
     Check(noon[2] > dark[2] + 25 && noon[2] > noon[0], "sky radiance follows solar elevation");
     settings.sun.direction = {0, -1, 0};
     const auto previousSun = settings.sun.intensity;
@@ -60,6 +64,25 @@ void EnvironmentQuality() {
     if (!mesh.Upload(&session.gpu, quad, triangles))
         return Check(false, "test leaf upload");
     auto draw = [&] { renderer.DrawMesh(mesh, Mat4{}, leaf); };
+    {
+        const auto previous = settings;
+        settings.dynamicAtmosphere = settings.dynamicSkyLighting = true;
+        settings.imageBasedLighting = false;
+        settings.environmentIntensity = 1;
+        settings.sun = {{0, -1, 0}, {1, 1, 1}, 4};
+        GpuFrameCapture lit, unlit;
+        if (!capture(lit, draw))
+            return Check(false, "live sky probe captures");
+        settings.sun.intensity = 0;
+        if (!capture(unlit, draw))
+            return Check(false, "updated live sky probe captures");
+        const auto litPixel = At(lit, .5f, .5f), unlitPixel = At(unlit, .5f, .5f);
+        std::printf("  Indirect-only diffuse blue day %d, sun off %d\n", litPixel[2],
+                    unlitPixel[2]);
+        Check(litPixel[2] > unlitPixel[2] + 10,
+              "live SH irradiance illuminates a vertical surface without a static HDRI");
+        settings = previous;
+    }
     GpuFrameCapture opaque, transmitted, bent;
     if (!capture(opaque, draw))
         return Check(false, "opaque backlight capture");
@@ -101,6 +124,31 @@ void EnvironmentQuality() {
                   v.texCoords.x <= 1.000001,
               "decal remains on the receiver inside the UV rectangle");
     const auto vertexCount = projected.size();
+    auto mud = p, track = p;
+    mud.layer = -1;
+    mud.uvOrigin = {.25, .5};
+    mud.uvSize = {.25, .5};
+    track.layer = 2;
+    track.tint.w = .4;
+    std::vector<Vertex3D> layered;
+    std::vector<uint32> layeredIndices;
+    Check(AppendProjectedDecals(std::array{track, mud}, quad, triangles, layered, layeredIndices) &&
+              layered.size() == vertexCount * 2 &&
+              std::all_of(layered.begin(), layered.begin() + vertexCount,
+                          [](const auto& v) {
+                              return v.texCoords.x >= .24999 && v.texCoords.x <= .50001 &&
+                                     v.texCoords.y >= .49999 && v.texCoords.y <= 1.00001 &&
+                                     v.color.w == 1;
+                          }) &&
+              layered.back().color.w < .41,
+          "PBR decal layers sort by priority and address their atlas rectangles");
+    auto invalid = track;
+    invalid.uvSize.x = 0;
+    const auto priorIndices = layeredIndices.size();
+    Check(!AppendProjectedDecals(std::array{mud, invalid}, quad, triangles, layered,
+                                 layeredIndices) &&
+              layered.size() == vertexCount * 2 && layeredIndices.size() == priorIndices,
+          "an invalid decal rolls back only the current batch");
     p.center.z = 1;
     Check(AppendProjectedDecal(p, quad, triangles, projected, indices) &&
               projected.size() == vertexCount,

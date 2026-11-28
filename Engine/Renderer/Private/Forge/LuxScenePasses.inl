@@ -24,13 +24,14 @@ void DrawShadowPass(const ScenePass& pass, uint32_t entry, const VirtualShadowPl
     Transition(cmd, device->shadow, RESOURCE_STATE_DEPTH_WRITE);
     BindRenderTargetsDesc bind = {};
     bind.mDepthStencil.pDepthStencil = device->shadow.target;
-    bind.mDepthStencil.mLoadAction = LOAD_ACTION_CLEAR;
+    bind.mDepthStencil.mLoadAction = shadowPlan.preserve ? LOAD_ACTION_LOAD : LOAD_ACTION_CLEAR;
     bind.mDepthStencil.mStoreAction = STORE_ACTION_STORE;
     bind.mDepthStencil.mLoadActionStencil = LOAD_ACTION_DONTCARE;
     bind.mDepthStencil.mStoreActionStencil = STORE_ACTION_DONTCARE;
     cmdBindRenderTargets(cmd, &bind);
     DrawVirtualShadowPages(device, cmd, pass.draws.meshes, pass.firstDraw, entry, shadowPlan);
     device->frameStats.virtualShadowPages += shadowPlan.count;
+    device->frameStats.reusedShadowPages += shadowPlan.reused;
     device->frameStats.requestedShadowPages += shadowPlan.requestedPages;
     cmdBindRenderTargets(cmd, nullptr);
     Transition(cmd, device->shadow, RESOURCE_STATE_SHADER_RESOURCE);

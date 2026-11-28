@@ -21,7 +21,8 @@
         "dog-walker/model.fbx",
         "dog-walker/motion.fbx",
         "dog-walker/normal.png",
-        "dog-walker/roughness.png"
+        "dog-walker/roughness.png",
+        "dog-walker/tissue.png"
       ]
     },
     {
@@ -40,7 +41,8 @@
         "hiker/albedo.png",
         "hiker/model.fbx",
         "hiker/normal.png",
-        "hiker/roughness.png"
+        "hiker/roughness.png",
+        "hiker/tissue.png"
       ]
     },
     {
@@ -59,7 +61,8 @@
         "road-worker/albedo.png",
         "road-worker/model.fbx",
         "road-worker/normal.png",
-        "road-worker/roughness.png"
+        "road-worker/roughness.png",
+        "road-worker/tissue.png"
       ]
     }
   ],
@@ -172,6 +175,33 @@
       "format": "PNG",
       "width": 256,
       "height": 256,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "hiker/tissue.png",
+      "bytes": 21408,
+      "sha256": "08d99e579b17ee7dfd865776322ff1952580d55029888d623846a65440b1de20",
+      "format": "PNG",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "road-worker/tissue.png",
+      "bytes": 53564,
+      "sha256": "07b51f0717d67545beb57c848f4fce1c8bdf82b6f5b298e5d093b701966e4c20",
+      "format": "PNG",
+      "width": 1024,
+      "height": 1024,
+      "colorSpace": "Linear"
+    },
+    {
+      "path": "dog-walker/tissue.png",
+      "bytes": 17817,
+      "sha256": "7f69038b7d3fcc24c02700b0ad00f426c6247d7e262c8a1ce9ccac68bc777892",
+      "format": "PNG",
+      "width": 1024,
+      "height": 1024,
       "colorSpace": "Linear"
     }
   ]

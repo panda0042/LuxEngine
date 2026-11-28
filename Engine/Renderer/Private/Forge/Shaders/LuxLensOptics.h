@@ -51,6 +51,24 @@ float3 LensGhosts(float2 uv) {
         const float2 haloUv = .5f - axis * (1.0f - .30f / radius);
         ghosts += FlareSource(haloUv) * (.055f * smoothstep(.08f, .20f, radius));
     }
+    // A polygonal aperture creates diffraction axes perpendicular to its blades.
+    // Sample visible HDR light at three offsets along each orientation. Occluded
+    // sources vanish from this scene-color convolution on the same frame.
+    const int blades = int(gPost.cameraEffects.z);
+    if (blades >= 3) {
+        const int axes = (blades % 2) == 0 ? blades / 2 : blades;
+        float3 spikes = float3(0, 0, 0);
+        const float2 aspect = float2(gPost.dimensions.x / gPost.dimensions.y, 1.0f);
+        for (int i = 0; i < axes; ++i) {
+            const float theta = 3.14159265f * float(i) / float(axes);
+            const float2 stepUv = .009f * aspect * float2(cos(theta), sin(theta));
+            for (int tap = 1; tap <= 3; ++tap) {
+                const float2 d = float(tap * tap) * stepUv;
+                spikes += (FlareSource(uv + d) + FlareSource(uv - d)) / float(tap * tap);
+            }
+        }
+        ghosts += spikes * (.018f / float(axes));
+    }
     return ghosts * gPost.flare.x;
 }
 

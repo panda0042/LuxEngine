@@ -76,7 +76,15 @@ void Characters::Load(const std::filesystem::path& assets) {
         asset.material.alphaMode = MaterialAlphaMode::Opaque;
         asset.material.baseColorTexture = Utf8Path(root / "albedo.png");
         asset.material.normalTexture = Utf8Path(root / "normal.png");
+        asset.material.gpuSkinning = true;
         asset.material.roughnessTexture = Utf8Path(root / "roughness.png");
+        auto& surface = asset.material.surface.emplace();
+        surface.model = SurfaceModel::Character;
+        surface.indexOfRefraction = 1.40f;
+        surface.sheen = .48f;
+        surface.thicknessTexture = Utf8Path(root / "tissue.png");
+        asset.material.subsurfaceRadius = {.0012, .00052, .00032};
+        asset.material.subsurfaceThickness = .0022f;
     }
 }
 
@@ -105,10 +113,12 @@ bool Characters::VerifyClips() const {
     return !ModelAsset::LoadFbx(characters_.front().clipSource->sourcePath, error);
 }
 
-Ref<const ModelPose> Characters::SamplePose(size_t outfit, unsigned motion, double time) {
+Ref<const ModelPose> Characters::SamplePose(size_t outfit, unsigned motion, double time,
+                                            double& supportY) {
     const auto key = std::tuple{outfit, motion, time};
     if (const auto found = poses_.find(key); found != poses_.end()) {
         found->second.lastUse = ++poseClock_;
+        supportY = found->second.supportY;
         return found->second.pose;
     }
 
@@ -120,7 +130,13 @@ Ref<const ModelPose> Characters::SamplePose(size_t outfit, unsigned motion, doub
     pose->deformationPositions = std::vector<std::vector<Vec3>>{};
     size_t bytes = sizeof(ModelPose) + pose->nodeWorldTransforms.capacity() * sizeof(Mat4) +
                    pose->submeshes.capacity() * sizeof(std::vector<ModelVertex>);
-    for (auto& vertices : pose->submeshes) {
+    supportY = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < pose->submeshes.size(); ++i) {
+        auto& vertices = pose->submeshes[i];
+        const auto& node =
+            pose->nodeWorldTransforms.at(characters_[outfit].model->submeshes[i].node);
+        for (const auto& vertex : vertices)
+            supportY = std::min(supportY, node.TransformPoint(vertex.position).y);
         bytes += vertices.capacity() * sizeof(ModelVertex);
         for (auto& vertex : vertices)
             vertex.weights = std::vector<ModelWeight>{};
@@ -135,7 +151,7 @@ Ref<const ModelPose> Characters::SamplePose(size_t outfit, unsigned motion, doub
             poseBytes_ -= oldest->second.bytes;
             poses_.erase(oldest);
         }
-        poses_.emplace(key, CachedPose{pose, bytes, ++poseClock_});
+        poses_.emplace(key, CachedPose{pose, bytes, supportY, ++poseClock_});
         poseBytes_ += bytes;
     }
     return pose;
@@ -160,14 +176,14 @@ void Characters::Draw(Renderer3D::Context& renderer, size_t actor, Vec3 position
         std::fmod(state.phase + dt * (motion ? std::clamp(speed / 1.55, .48, 1.75) : 1), duration);
     const double sample = std::floor(state.phase * 24) / 24;
     if (sample != state.sampledTime) {
-        state.pose = SamplePose(outfit, motion, sample);
+        state.pose = SamplePose(outfit, motion, sample, state.supportY);
         ++state.revision;
         state.sampledTime = sample;
     }
     const auto scale = asset.scale;
     const Mat4 transform = Mat4::Translate(position) * Mat4::RotateY(std::numbers::pi - yaw) *
                            Mat4::Scale({scale, scale * (crouched ? .78 : 1), scale}) *
-                           Mat4::Translate(asset.foot * -1);
+                           Mat4::Translate({-asset.foot.x, -state.supportY, -asset.foot.z});
     for (size_t i = 0; i < asset.model->submeshes.size(); ++i) {
         const auto matrix =
             transform * state.pose->nodeWorldTransforms.at(asset.model->submeshes[i].node);

@@ -4,7 +4,7 @@ using ScreenState = LuxForgeDevice::ScreenState;
 
 enum class ScreenBlock : uint32_t { Surface = 1, Capture, Quarter, Sixteenth };
 constexpr uint32_t kSceneUniformBanks =
-    5; // existing scene block followed by the four screen blocks
+    8; // main scene block, four screen blocks and three near shadow cascade matrices
 
 uint32_t ScreenOffset(uint32_t pass, ScreenBlock block) {
     return (static_cast<uint32_t>(block) * LuxForgeDevice::kMaxScenePasses + pass) *
@@ -57,7 +57,7 @@ bool InitDepthReduction(LuxForgeDevice* device) {
     RasterizerStateDesc raster = {};
     raster.mCullMode = CULL_MODE_NONE;
     DepthStateDesc noDepth = {};
-    TinyImageFormat format = TinyImageFormat_R32_SFLOAT;
+    TinyImageFormat format = TinyImageFormat_R32G32_SFLOAT;
     graphics.pShaderProgram = state.shader;
     graphics.pRasterizerState = &raster;
     graphics.pDepthState = &noDepth;
@@ -90,8 +90,8 @@ bool PrepareScreen(LuxForgeDevice* device, bool hierarchy) {
     for (auto& level : state.levels) {
         w = (w + 3) / 4;
         h = (h + 3) / 4;
-        if (!AddSceneTarget(device, level, w, h, TinyImageFormat_R32_SFLOAT, 4,
-                            "LuxForge hierarchical minimum depth")) {
+        if (!AddSceneTarget(device, level, w, h, TinyImageFormat_R32G32_SFLOAT, 8,
+                            "LuxForge hierarchical min-max depth")) {
             RetireScreen(device);
             return false;
         }
@@ -140,7 +140,7 @@ void BuildDepthHierarchy(LuxForgeDevice* device, Cmd* cmd, uint32_t pass, uint64
         auto& output = state.levels[i];
         const auto block = i ? ScreenBlock::Sixteenth : ScreenBlock::Quarter;
         WriteScreenBlock(device, pass, block,
-                         {float(source->mWidth), float(source->mHeight), 0, 0});
+                         {float(source->mWidth), float(source->mHeight), float(i), 0});
         DescriptorDataRange range{ScreenOffset(pass, block), LuxForgeDevice::kSceneStride, 0};
         DescriptorData params[2] = {};
         params[0].mIndex = SRT_RES_IDX(LuxDepthReduceSrt, Persistent, gReduce);

@@ -1,5 +1,13 @@
 #include "LuxSceneResources.h"
 #include "LuxVegetationWind.h"
+#include "LuxCoastalBreaker.h"
+
+float3 MotionBreaker(float2 xz, float time, float height) {
+    if (height <= 0.0f) return float3(0, 0, 0);
+    const CoastalBreakerSample b = EvaluateCoastalBreaker(xz.x, xz.y, time, height);
+    return b.height > .0001f || abs(b.horizontal) > .0001f
+             ? float3(b.horizontal, b.height, 0) : float3(0, 0, 0);
+}
 
 STRUCT(MotionInput)
 {
@@ -8,6 +16,7 @@ STRUCT(MotionInput)
     DATA(float2, uv, TEXCOORD0);
     DATA(float3, normal, NORMAL);
     DATA(float4, vertexData, TEXCOORD1);
+    DATA(float3, previousPosition, TEXCOORD2);
 };
 STRUCT(MotionVertex)
 {
@@ -24,12 +33,21 @@ MotionVertex VS_MAIN(MotionInput In)
     MotionVertex Out;
     Out.uvAlpha = float3(In.uv, In.color.a * gDraw.albedo.a);
     const float4 local = float4(In.position, 1.0f);
-    const float4 world = mul(gDraw.model, local);
-    const float3 bent = world.xyz + WindOffset(world.xyz, In.vertexData.x, gScene.wind.z);
-    Out.currentClip = mul(gDraw.viewProjection, float4(bent, 1.0f));
+    float4 world = mul(gDraw.model, local);
+    world.xyz += MotionBreaker(world.xz + gDraw.coastalBreaker.xy,
+                               gDraw.coastalBreaker.w, gDraw.coastalBreaker.z);
+    world.xyz += WindOffset(world.xyz, In.vertexData.x, gScene.wind.z);
+    Out.currentClip = mul(gDraw.viewProjection, world);
     Out.position = Out.currentClip;
-    const float3 previousBend = WindOffset(world.xyz, In.vertexData.x, gDraw.previousWind.x);
-    Out.previousClip = mul(gDraw.previousMvp, local) +
-                       mul(gDraw.previousWindProjection, float4(previousBend, 0.0f));
+    const float4 previous = float4(gDraw.previousWind.z > 0.5f ? In.vertexData.yzw : In.previousPosition, 1.0f);
+    const float2 phase = float2(dot(previous, gDraw.previousPhaseX), dot(previous, gDraw.previousPhaseZ));
+    const float3 crest = MotionBreaker(phase + gDraw.previousCoast.xy,
+                                       gDraw.previousCoast.z, gDraw.previousDeformation.w);
+    const float3 previousBend = EvaluateWind(phase + crest.xz, In.vertexData.x, gDraw.previousWind.x,
+                                             gDraw.previousDeformation.xy, gDraw.previousDeformation.z) +
+                                ContactBend(phase,In.vertexData.x,gDraw.previousDeformation.z,gScene.previousContacts[0]) +
+                                ContactBend(phase,In.vertexData.x,gDraw.previousDeformation.z,gScene.previousContacts[1]);
+    Out.previousClip = mul(gDraw.previousMvp, previous) +
+                       mul(gDraw.previousWindProjection, float4(crest + previousBend, 0.0f));
     RETURN(Out);
 }

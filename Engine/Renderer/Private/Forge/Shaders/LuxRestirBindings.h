@@ -6,6 +6,8 @@ DECL_BUFFER(Persistent, Buffer(float4), gRayInstances)
 DECL_BUFFER(Persistent, Buffer(float4), gRayTriangles)
 #ifdef LUX_RESTIR_SEEDING
 DECL_TEXTURE(Persistent, TexCube(float4), gRestirEnvironment)
+DECL_TEXTURE(Persistent, Tex2D(float4), gRaySkyGloss)
+DECL_TEXTURE(Persistent, Tex2D(float4), gRaySkySH)
 DECL_RWBUFFER(Persistent, RWBuffer(float4), gRestirCandidates)
 #else
 DECL_BUFFER(Persistent, Buffer(float4), gRestirCandidates)

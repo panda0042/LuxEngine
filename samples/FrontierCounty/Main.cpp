@@ -1,15 +1,14 @@
-#include "Benchmark.hpp"
 #include "Characters.hpp"
 #include "Game.hpp"
 #include "PropModels.hpp"
+#include "RenderDebugPanel.hpp"
+#include "SurfaceMarks.hpp"
 #include <Common/Artwork.hpp>
-#include <Common/SampleApplication.hpp>
 #include <LuxEngine/Application.hpp>
 #include <LuxEngine/EntryPoint.hpp>
 #include <LuxEngine/Renderer/Water/WaterSurface.hpp>
 #include <SDL3/SDL.h>
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <deque>
 #include <format>
@@ -25,117 +24,12 @@ namespace Frontier {
 namespace {
 using namespace LuxEngine;
 constexpr double Tau = 2 * std::numbers::pi;
-constexpr auto AutomationTimeout = std::chrono::seconds(45);
-
-struct Quality {
-    std::string_view name;
-    unsigned trees, shadow, fog;
-    int radius;
-    bool virtualShadows;
-};
-
-constexpr std::array Qualities{
-    Quality{"low", 96, 1024, 55, 1, false},        Quality{"medium", 160, 1024, 80, 1, false},
-    Quality{"high", 256, 1024, 120, 2, false},     Quality{"ultra", 352, 2048, 150, 2, true},
-    Quality{"cinematic", 512, 2048, 190, 2, true}, Quality{"extreme", 1024, 4096, 230, 3, true},
-};
-constexpr std::array<std::string_view, 5> Scenarios{"town", "drive", "forest", "water", "weather"};
-
-struct Options {
-    Quality quality = Qualities[2];
-    std::string_view scenario = "water";
-    std::filesystem::path output = "frontier-benchmark", capture;
-    unsigned seed = 4805, width = 1280, height = 720, warmup = 60, frames = 180, daySeconds = 3600;
-    bool smoke = false, benchmark = false, rayTracing = false, help = false, edgeAA = true;
-    bool temporal = true;
-};
-
-unsigned Integer(std::string_view text, unsigned low, unsigned high) {
-    unsigned value = 0;
-    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || value < low ||
-        value > high)
-        throw std::runtime_error("Invalid numeric option: " + std::string(text));
-    return value;
-}
+constexpr unsigned WorldSeed = 4805;
+constexpr unsigned TreeCandidates = 1024;
+constexpr int StreamRadius = 2;
 
 std::filesystem::path PathFromUtf8(std::string_view text) {
     return std::filesystem::path(std::u8string(text.begin(), text.end()));
-}
-
-Options Parse(int argc, char** argv) {
-    Options options;
-    unsigned vegetation = 0;
-    bool resolution = false;
-    for (int i = 1; i < argc; ++i) {
-        const std::string_view arg = argv[i];
-        const auto next = [&]() -> std::string_view {
-            if (++i == argc)
-                throw std::runtime_error("Missing value for " + std::string(arg));
-            return argv[i];
-        };
-        if (arg == "--help")
-            options.help = true;
-        else if (arg == "--smoke-test")
-            options.smoke = true;
-        else if (arg == "--benchmark")
-            options.benchmark = true;
-        else if (arg == "--rt")
-            options.rayTracing = true;
-        else if (arg == "--no-taa")
-            options.temporal = false;
-        else if (arg == "--no-edge-aa")
-            options.edgeAA = false;
-        else if (arg == "--output")
-            options.output = PathFromUtf8(next());
-        else if (arg == "--capture")
-            options.capture = PathFromUtf8(next());
-        else if (arg == "--seed")
-            options.seed = Integer(next(), 0, 0xffffffff);
-        else if (arg == "--day-seconds")
-            options.daySeconds = Integer(next(), 60, 864000);
-        else if (arg == "--vegetation")
-            vegetation = Integer(next(), 1, 4096);
-        else if (arg == "--warmup")
-            options.warmup = Integer(next(), 1, 1000000);
-        else if (arg == "--frames")
-            options.frames = Integer(next(), 1, 1000000);
-        else if (arg == "--scenario") {
-            options.scenario = next();
-            if (std::ranges::find(Scenarios, options.scenario) == Scenarios.end())
-                throw std::runtime_error("Unknown scenario");
-        } else if (arg == "--preset") {
-            const auto value = next();
-            const auto preset = std::ranges::find(Qualities, value, &Quality::name);
-            if (preset == Qualities.end())
-                throw std::runtime_error("Unknown graphics preset");
-            options.quality = *preset;
-        } else if (arg == "--resolution") {
-            const auto value = next();
-            const auto split = value.find('x');
-            if (split == std::string_view::npos)
-                throw std::runtime_error("Expected WIDTHxHEIGHT");
-            options.width = Integer(value.substr(0, split), 640, 7680);
-            options.height = Integer(value.substr(split + 1), 360, 4320);
-            resolution = true;
-        } else {
-            throw std::runtime_error("Unknown option: " + std::string(arg));
-        }
-    }
-    if (options.smoke && (options.benchmark || !options.capture.empty()))
-        throw std::runtime_error("Choose one automated mode");
-    if (options.smoke)
-        options.scenario = "town";
-    if (!resolution && options.smoke) {
-        options.width = 640;
-        options.height = 360;
-    } else if (!resolution && options.benchmark) {
-        options.width = 1920;
-        options.height = 1080;
-    }
-    if (vegetation)
-        options.quality.trees = vegetation;
-    return options;
 }
 
 std::string Utf8Path(const std::filesystem::path& path) {
@@ -161,38 +55,24 @@ bool CoverTerrainReady(const World& world, ChunkKey tile) {
 
 class FrontierApp final : public Application {
 public:
-    explicit FrontierApp(Options options)
-        : Application({"Frontier County", options.width, options.height,
-                       !options.benchmark && !options.smoke && options.capture.empty()}),
-          options_(std::move(options)), game_(options_.seed, options_.daySeconds),
-          recorder_(options_.warmup, options_.benchmark ? options_.frames : 0) {}
-
-    int Run() {
-        const int result = Application::Run();
-        return result == 0 && (options_.smoke || options_.benchmark || !options_.capture.empty()) &&
-                       !done_
-                   ? 1
-                   : result;
-    }
+    FrontierApp() : Application({"Frontier County", 1280, 720, true}), game_(WorldSeed, 3600) {}
 
 private:
     void OnInit() override;
+    void OnEvent(Event& event) override;
     void OnUpdate(double dt) override;
     void OnRender(float) override;
     void OnFramePresented() override;
     void OnShutdown() override;
     void Step(const Controls& controls, double dt);
-    void SmokeStep();
     void UpdateLight();
     void DrawActors(const TransformComponent& truckPose);
-    void DrawVegetation(Vec3 eye, bool allowUploads, FrameSample& sample);
+    void DrawVegetation(Vec3 eye, bool allowUploads);
     void DrawHud();
-    Vec2 ScenarioStart() const;
+    void SetRenderPanelOpen(bool open);
 
-    Options options_;
     Game game_;
     World world_;
-    Benchmark recorder_;
     Renderer3D::Context renderer_;
     WaterSurface lake_;
     PropModels props_;
@@ -212,30 +92,17 @@ private:
     std::vector<Plant> nearTrees_;
     Characters characters_;
     Material3D ground_, scenery_, foliage_, road_;
+    SurfaceMarks surfaceMarks_;
     Render3DSettings settings_;
     std::unique_ptr<LuxSamples::Artwork> artwork_;
     std::filesystem::path assets_;
-    std::chrono::steady_clock::time_point automationDeadline_, lastRender_;
-    Vec3 driveStart_;
-    double time_ = 0, updateMs_ = 0;
-    unsigned smokeStage_ = 0, frameWidth_ = 0, frameHeight_ = 0;
-    unsigned groundCoverPending_ = 0;
+    std::chrono::steady_clock::time_point lastRender_, lastPresent_;
+    RenderDebugPanel renderPanel_;
+    double time_ = 0, lastWake_ = -1, presentMs_ = 0;
+    unsigned frameWidth_ = 0, frameHeight_ = 0;
     bool terrainUploaded_ = false, coverUploadReady_ = false;
-    bool sampledTemporalHistory_ = false;
-    bool sceneReady_ = false, benchmarkReady_ = false;
-    bool rt_ = false, controlsVisible_ = false, showStats_ = false, done_ = false,
-         capturePending_ = false;
+    bool rt_ = false, controlsVisible_ = false, showStats_ = false, renderPanelOpen_ = true;
 };
-
-Vec2 FrontierApp::ScenarioStart() const {
-    if (options_.scenario == "forest")
-        return {-587, -128};
-    if (options_.scenario == "water")
-        return {225, 326};
-    if (options_.scenario == "drive")
-        return {237, 1.85};
-    return Spawn;
-}
 
 void FrontierApp::OnInit() {
     auto& gpu = GetGpuDevice();
@@ -245,47 +112,28 @@ void FrontierApp::OnInit() {
     assets_ = PathFromUtf8(base) / "assets";
     artwork_ = std::make_unique<LuxSamples::Artwork>(gpu, assets_);
     renderer_.Init(&gpu);
-    if (options_.benchmark && !gpu.SetVSync(false))
-        throw std::runtime_error("Cannot disable VSync for benchmark");
-    const auto initial = ScenarioStart();
-    world_.Start(options_.seed, options_.quality.trees, options_.quality.radius, initial, gpu);
+    const Vec2 initial{225, 326};
+    world_.Start(WorldSeed, TreeCandidates, StreamRadius, initial, gpu);
     game_.Start(world_);
-    game_.StartAt(initial, options_.scenario == "drive");
-    if (options_.scenario == "water")
-        game_.Face(LakeCenter);
-    else if (options_.scenario == "forest")
-        game_.Face(Regions[1].center);
-    if (options_.scenario == "weather")
-        game_.SetWeather(Weather::Thunder);
+    game_.StartAt(initial, false);
+    game_.Face(LakeCenter);
     const std::array waves{
-        WaterWave{{1, -.4}, .094, 27.0, 2.9, .15, .46},
-        WaterWave{{-.34, .92}, .046, 16.0, 2.05, 1.2, .4},
-        WaterWave{{.74, .18}, .020, 10.0, 1.4, .9, .25},
+        WaterWave{{.63, -.78}, .045, 17.7, 2.6, .15, .42},
+        WaterWave{{-.94, .38}, .032, 11.7, 2.05, 1.2, .4},
+        WaterWave{{.39, .92}, .019, 7.4, 1.8, .9, .25},
+        WaterWave{{-.44, -.90}, .009, 4.7, 1.2, .56, .29},
     };
-    if (!lake_.Configure({LakeSize, 64, 56, 0}, waves))
+    if (!lake_.Configure({LakeSize, 128, 106, 0}, waves))
         throw std::runtime_error("Cannot initialize Silverlake waves");
     props_.Load(gpu, assets_);
     characters_.Load(assets_);
-    if (options_.smoke && !characters_.VerifyClips())
-        throw std::runtime_error("Character mesh did not deform during a motion clip");
-
-    const auto texture = [&](const char* name) {
-        const auto path = assets_ / "FrontierCounty" / name;
-        if (!std::filesystem::is_regular_file(path))
-            throw std::runtime_error("Required texture missing: " + Utf8Path(path));
-        return Utf8Path(path);
-    };
     ground_.alphaMode = MaterialAlphaMode::Opaque;
-    ground_.baseColorTexture = texture("gravel_albedo.jpg");
-    ground_.normalTexture = texture("gravel_normal.png");
-    ground_.heightTexture = texture("gravel_height.png");
-    ground_.parallaxDepth = options_.quality.radius > 1 ? .035f : 0.f;
-    ground_.roughnessTexture = texture("gravel_roughness.png");
+    ground_.textureSampling.anisotropic = true;
+    ground_.parallaxDepth = .036f;
     scenery_.alphaMode = MaterialAlphaMode::Opaque;
-    const auto meadow = assets_ / "FrontierMeadow";
-    ground_.terrainLayer =
-        TerrainLayer3D{Utf8Path(meadow / "albedo.jpg"), Utf8Path(meadow / "normal.png"),
-                       Utf8Path(meadow / "roughness.png"), Utf8Path(meadow / "height.png"), .8f};
+    const auto palette = assets_ / "FrontierTerrain";
+    ground_.terrainLayer = TerrainLayer3D{
+        Utf8Path(palette / "albedo.jpg"), "", Utf8Path(palette / "surface.png"), "", .8f, true};
     scenery_.roughness = .78f;
     const auto asphalt = assets_ / "FrontierAsphalt";
     road_.alphaMode = MaterialAlphaMode::Opaque;
@@ -293,61 +141,80 @@ void FrontierApp::OnInit() {
     road_.baseColorTexture = Utf8Path(asphalt / "albedo.jpg");
     road_.normalTexture = Utf8Path(asphalt / "normal.png");
     road_.roughnessTexture = Utf8Path(asphalt / "roughness.png");
-    foliage_.baseColorTexture = Utf8Path(assets_ / "FrontierFoliage" / "spruce.png");
+    const auto spruce = assets_ / "FrontierVegetation" / "norway-spruce";
+    foliage_.baseColorTexture = Utf8Path(spruce / "spruce-views-color.png");
+    foliage_.normalTexture = Utf8Path(spruce / "spruce-views-normal-depth.png");
     foliage_.alphaMode = MaterialAlphaMode::Mask;
     foliage_.alphaCutoff = .42f;
     foliage_.roughness = .92f;
     foliage_.textureSampling = {true, TextureAddressMode::Clamp, true, false};
     settings_.showSkybox = true;
-    settings_.temporalAntialiasing = options_.quality.radius > 1 && options_.temporal;
-    settings_.screenSpaceAntialiasing = !settings_.temporalAntialiasing && options_.edgeAA;
+    surfaceMarks_.Initialize(assets_);
+    settings_.temporalAntialiasing = true;
     settings_.environmentPath = Utf8Path(assets_ / "LakesideOcean" / "lakeside_physical_noon.hdr");
-    settings_.shadowResolution = options_.quality.shadow;
-    const bool high = options_.quality.radius > 1;
-    const bool cinematic =
-        options_.quality.name == "cinematic" || options_.quality.name == "extreme";
-    settings_.gtaoRadius = high ? 1.25f : 0.f;
-    settings_.contactShadowDistance = high ? .6f : 0.f;
-    settings_.shadowLightAngularRadius = high ? .00465f : 0.f;
-    settings_.hierarchicalReflections = high;
+    settings_.shadowResolution = 1024;
+    settings_.gtaoRadius = 1.25f;
+    settings_.contactShadowDistance = .6f;
+    settings_.shadowLightAngularRadius = .00465f;
+    settings_.hierarchicalReflections = true;
     settings_.dynamicAtmosphere = true;
-    settings_.bloomIntensity = high ? .12f : 0.f;
-    settings_.physicallyBasedBloom = high;
-    settings_.autoExposure = high;
-    settings_.localExposure = high ? .25f : 0.f;
-    settings_.physicalCamera.exposure = high;
-    settings_.physicalCamera.depthOfField = cinematic;
+    settings_.dynamicSkyLighting = true;
+    settings_.cloudShadowStrength = 1.f;
+    settings_.bloomIntensity = .12f;
+    settings_.physicallyBasedBloom = true;
+    settings_.autoExposure = true;
+    settings_.localExposure = .25f;
+    // Scene-linear units are scaled to keep daylight radiances inside the FP16 scene buffer.
+    settings_.physicalCamera.exposure = true;
     settings_.physicalCamera.iso = 100;
-    settings_.physicalCamera.fNumber = cinematic ? 2.8f : 8.f;
-    settings_.physicalCamera.shutterSeconds = cinematic ? .001f : .008f;
+    settings_.physicalCamera.fNumber = 16.f;
+    settings_.physicalCamera.shutterSeconds = 1.f / 125.f;
     settings_.physicalCamera.sensorHeightMm = 24;
-    settings_.physicalCamera.luminanceScale = 9600;
-    settings_.apertureBlades = cinematic ? 7u : 0u;
-    settings_.focusDistance = 8.f;
-    if (cinematic) {
-        settings_.lensFlareStrength = .1f;
-        settings_.vignette = .15f;
-        settings_.filmGrain = .12f;
-        settings_.chromaticAberration = .6f;
-        settings_.lensDistortion = -.025f;
-    }
+    settings_.physicalCamera.luminanceScale = 25000; // cd/m² per scene-linear radiance unit.
+    settings_.metering.lowPercentile = .18f;
+    settings_.metering.highPercentile = .85f;
+    settings_.metering.minEV = -2.5f;
+    settings_.metering.maxEV = 10.f;
+    settings_.focusDistance = 30.f;
     settings_.colorGradingLut = Utf8Path(assets_ / "FrontierCounty" / "noon.cube");
-    settings_.colorGradingStrength = .55f;
+    settings_.colorGradingStrength = .25f;
+    {
+        // Ashford's workshop bay opens into the yard. Cross the covered threshold
+        // gradually as the camera passes the building's perimeter.
+        PostProcessVolume workshop;
+        workshop.center = {-57, Height({-57, -19}, WorldSeed) + 2.5, -19};
+        workshop.halfExtent = {10, 2.8, 6};
+        workshop.blendDistance = 3;
+        workshop.priority = 10;
+        workshop.compensationEV = .4f;
+        workshop.localExposure = .35f;
+        settings_.postVolumes.push_back(workshop);
+    }
     foliage_.windAmplitude = .32f;
     ground_.roughness = 1;
     ground_.wettingResponse = 1;
     road_.wettingResponse = .95f;
     foliage_.wettingResponse = .6f;
     foliage_.subsurfaceRadius = {.00035, .0009, .00022};
-    foliage_.subsurfaceThickness = .0007f;
+    foliage_.subsurfaceThickness = .00038f;
+    auto& needles = foliage_.surface.emplace();
+    needles.model = SurfaceModel::Foliage;
+    needles.impostorDepth = true;
+    needles.indexOfRefraction = 1.43f;
+    needles.transmission = .48f;
+    needles.anisotropy = .28f;
+    settings_.cascadedShadows = true;
     settings_.shadowRange = 120;
     settings_.shadowNormalBias = .049f;
-    settings_.virtualShadows = options_.quality.virtualShadows;
-    settings_.waterReflection = {
-        Utf8Path(assets_ / "LakesideSunrise" / "lakeside_sunrise_water.hdr"), -52, 1.9f, 128};
+    settings_.virtualShadows = false;
+    if (!settings_.dynamicSkyLighting)
+        settings_.waterReflection = {
+            Utf8Path(assets_ / "LakesideSunrise" / "lakeside_sunrise_water.hdr"), -52, 1.9f, 128};
     settings_.fog.heightFalloff = .095f;
-    settings_.fog.maxDistance = float(options_.quality.fog);
-    rt_ = options_.rayTracing && gpu.GetInfo().rayTracing;
+    settings_.fog.densityVariation = .4f;
+    settings_.fog.multipleScattering = .22f;
+    settings_.fog.historyWeight = .74f;
+    settings_.fog.maxDistance = 120.f;
     const std::array bindings{
         std::pair{"forward", LuxKey::W},     std::pair{"reverse", LuxKey::S},
         std::pair{"left", LuxKey::A},        std::pair{"right", LuxKey::D},
@@ -356,52 +223,59 @@ void FrontierApp::OnInit() {
         std::pair{"camera", LuxKey::V},      std::pair{"weather", LuxKey::T},
         std::pair{"controls", LuxKey::F1},   std::pair{"stats", LuxKey::F3},
 
-        std::pair{"ray", LuxKey::G},         std::pair{"aa", LuxKey::H},
+        std::pair{"ray", LuxKey::G},         std::pair{"render-panel", LuxKey::Tab},
         std::pair{"pause", LuxKey::P},       std::pair{"quit", LuxKey::Escape},
     };
     for (auto [action, key] : bindings)
         Input::BindAction(action, key);
-    if (!options_.smoke && !options_.benchmark && options_.capture.empty() &&
-        !GetWindow().SetRelativeMouseMode(true))
-        throw std::runtime_error("Cannot capture relative mouse input");
+    renderPanel_.Initialize(gpu, settings_);
+    SetRenderPanelOpen(true);
+}
+
+void FrontierApp::OnEvent(Event& event) {
+    Application::OnEvent(event);
+    if (renderPanelOpen_)
+        renderPanel_.FeedEvent(event);
+}
+
+void FrontierApp::SetRenderPanelOpen(bool open) {
+    renderPanelOpen_ = open;
+    if (!GetWindow().SetRelativeMouseMode(!open && !game_.Paused()))
+        throw std::runtime_error("Could not change mouse capture");
     Input::ConsumeMouseDelta();
-    automationDeadline_ = std::chrono::steady_clock::now() + AutomationTimeout;
 }
 
 void FrontierApp::Step(const Controls& controls, double dt) {
-    const auto start = std::chrono::steady_clock::now();
     game_.Step(controls, world_, dt);
     if (!game_.Paused())
         time_ += dt;
-    updateMs_ +=
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
 void FrontierApp::OnUpdate(double dt) {
-    if (options_.smoke || options_.benchmark || !options_.capture.empty()) {
-        if (std::chrono::steady_clock::now() >= automationDeadline_)
-            throw std::runtime_error(std::format(
-                "Automated run timed out in {} at smoke stage {} after {} presented frames "
-                "({} chunks loaded)",
-                options_.scenario, smokeStage_, recorder_.PresentedFrames(),
-                world_.GetStats().loaded));
+    if (Input::WasActionPressed("quit")) {
+        if (renderPanelOpen_)
+            SetRenderPanelOpen(false);
+        else
+            Close();
         return;
     }
-    if (Input::WasActionPressed("quit"))
-        Close();
+    if (Input::WasActionPressed("render-panel")) {
+        SetRenderPanelOpen(!renderPanelOpen_);
+        return;
+    }
     if (Input::WasActionPressed("pause")) {
         game_.TogglePause();
-        GetWindow().SetRelativeMouseMode(!game_.Paused());
+        GetWindow().SetRelativeMouseMode(!renderPanelOpen_ && !game_.Paused());
         Input::ConsumeMouseDelta();
+    }
+    if (renderPanelOpen_) {
+        Step({}, dt);
+        return;
     }
     if (Input::WasActionPressed("controls"))
         controlsVisible_ = !controlsVisible_;
     if (Input::WasActionPressed("stats"))
         showStats_ = !showStats_;
-    if (Input::WasActionPressed("aa")) {
-        settings_.temporalAntialiasing = !settings_.temporalAntialiasing;
-        settings_.screenSpaceAntialiasing = !settings_.temporalAntialiasing && options_.edgeAA;
-    }
     if (Input::WasActionPressed("ray")) {
         if (GetGpuDevice().GetInfo().rayTracing)
             rt_ = !rt_;
@@ -419,56 +293,6 @@ void FrontierApp::OnUpdate(double dt) {
          dt);
 }
 
-void FrontierApp::SmokeStep() {
-    constexpr double dt = 1. / 60;
-    if (smokeStage_ == 0) {
-        game_.StartAt({10, 4.7}, false);
-        game_.Face({10, -100});
-        const auto baseline = game_.Look();
-        Step({.mouseX = 30}, dt);
-        const auto right = game_.Look();
-        Step({.mouseY = -30}, dt);
-        const auto up = game_.Look();
-        if (right.x <= baseline.x || std::abs(right.y - baseline.y) > 1e-8 || up.y <= right.y ||
-            std::abs(up.x / up.z - right.x / right.z) > 1e-8)
-            throw std::runtime_error("Mouse axes are swapped or inverted");
-        Step({.interact = true}, dt);
-        if (!game_.Driving())
-            throw std::runtime_error("Pickup entry failed");
-        driveStart_ = game_.Truck();
-        ++smokeStage_;
-    }
-    if (smokeStage_ != 1)
-        return;
-    for (int i = 0; i < 12; ++i)
-        Step({.throttle = 1}, dt);
-    if (Distance(Horizontal(driveStart_), Horizontal(game_.Truck())) <= 4)
-        return;
-    const auto previous = game_.GetRenderView(0, 0);
-    const auto middle = game_.GetRenderView(0, .5);
-    const auto current = game_.GetRenderView(0, 1);
-    const auto motion = current.truck.position - previous.truck.position;
-    const auto truckError = middle.truck.position - (previous.truck.position + motion * .5);
-    const auto cameraError = middle.cameraTarget - (previous.cameraTarget + motion * .5);
-    if (motion.Dot(motion) < 1e-8 || truckError.Dot(truckError) > 1e-12 ||
-        cameraError.Dot(cameraError) > 1e-12)
-        throw std::runtime_error("Truck and camera must share the interpolated motion");
-    constexpr Vec2 west{767.5, 24.6};
-    game_.StartAt(west, false);
-    game_.Face({800, west.y});
-    Step({}, dt);
-    if (!game_.HasTerrainAt({766.3, 25.8}) || !game_.HasTerrainAt({769.15, 25.8}))
-        throw std::runtime_error(
-            "Terrain collision must match render heights across the chunk edge");
-    for (int i = 0; i < 40; ++i)
-        Step({.throttle = 1}, dt);
-    const auto walker = game_.Player();
-    if (walker.x <= 768.15 || std::abs(walker.y - Height(Horizontal(walker), options_.seed)) > .15)
-        throw std::runtime_error(
-            "The terrain walker must cross and stay grounded at the chunk edge");
-    ++smokeStage_;
-}
-
 void FrontierApp::UpdateLight() {
     const double angle = Tau * (game_.Hour() - 6) / 24;
     const double height = std::sin(angle);
@@ -477,17 +301,26 @@ void FrontierApp::UpdateLight() {
     const float clouds = game_.CloudCover();
     settings_.weatherTime = time_;
     settings_.aerosolDensity = .85f + clouds * 1.4f;
-    settings_.cloudCoverage = options_.quality.radius > 1 ? .25f + .68f * clouds : 0.f;
+    settings_.cloudCoverage = .25f + .68f * clouds;
     settings_.windVelocity = {2.5 + 7. * clouds, 1.2 + 3. * clouds};
     settings_.sun.direction = Vec3{-.78 * std::cos(angle) - .29, -height, -.64}.Normalized();
-    settings_.sun.color = {1, .95 - .3 * dusk, .89 - .48 * dusk};
+    const Vec3 solarColor{1, .97 - .32 * dusk, .93 - .5 * dusk};
+    settings_.sun.color = solarColor * (1. / solarColor.Dot({.2126, .7152, .0722}));
+    // Authored clear-sky direct-normal illuminance is 100 klx at noon. Camera scaling
+    // converts reflected radiance back to cd/m² once, after integration in the BRDF.
+    const double airMass = std::clamp(1. / std::max(.04, height), 1., 25.);
+    settings_.atmosphereSolarIrradiance = float(118000. / settings_.physicalCamera.luminanceScale);
+    const double directLux = height > 0 ? 100000. * std::exp(-.16 * (airMass - 1.)) : 0.;
     settings_.sun.intensity =
-        float(daylight * (2.9 - 2.3 * clouds) + .035 + game_.StormFlash() * 6);
+        float((directLux * (1. - .88 * clouds) + game_.StormFlash() * 65000.) /
+              settings_.physicalCamera.luminanceScale);
+    settings_.colorGrade.temperatureK = float(6500. + 160. * dusk - 180. * clouds);
+    settings_.colorGrade.vibrance = float(.025 * daylight * (1 - clouds));
     settings_.environmentColor = {.115 + daylight * .24, .143 + daylight * .24,
                                   .22 + daylight * .27};
     settings_.environmentIntensity = float(.24 + daylight * (.7 - clouds * .27));
     settings_.fog.color = {.47 + daylight * .30, .59 + daylight * .23, .78 + daylight * .14};
-    settings_.fog.baseHeight = game_.Player().y - .9;
+    settings_.fog.baseHeight = LakeLevel;
     settings_.fog.density = game_.Fog();
     settings_.fog.rayTracedShadows = rt_;
     settings_.waterReflection.intensity = float(.14 + 1.76 * daylight);
@@ -498,20 +331,21 @@ void FrontierApp::UpdateLight() {
     settings_.rayTracing.restirDirect = rt_;
     settings_.rayTracing.restirIndirect = rt_;
     settings_.rayTracing.denoiser = rt_;
-    settings_.hierarchicalReflections = options_.quality.radius > 1 && !rt_;
+    settings_.hierarchicalReflections = !rt_;
     settings_.rayTracing.maxDistance = 95;
     settings_.rayTracing.maxBounces = 2;
+    settings_.rainfall = static_cast<float>(game_.Wetness());
     settings_.surfaceWetness = static_cast<float>(game_.SurfaceWetness());
 }
 
-void FrontierApp::DrawVegetation(Vec3 eye, bool allowUploads, FrameSample& sample) {
+void FrontierApp::DrawVegetation(Vec3 eye, bool allowUploads) {
     for (const auto& tree : nearTrees_)
-        props_.Draw(renderer_, "norway-spruce", tree.ground, tree.dimensions, tree.yaw);
+        props_.Draw(renderer_, "norway-spruce", tree.ground, tree.dimensions, tree.yaw,
+                    tree.lodTransition);
 
-    const auto streamStart = std::chrono::steady_clock::now();
     const ChunkKey center{int(std::floor(eye.x / CoverTileSize)),
                           int(std::floor(eye.z / CoverTileSize))};
-    const int radius = options_.quality.radius > 1 ? 2 : 1;
+    const int radius = StreamRadius;
     const auto away = [&](ChunkKey tile) {
         return std::max(std::abs(tile.x - center.x), std::abs(tile.z - center.z));
     };
@@ -528,8 +362,6 @@ void FrontierApp::DrawVegetation(Vec3 eye, bool allowUploads, FrameSample& sampl
         if (away(tile) <= radius && CoverTerrainReady(world_, tile))
             groundCover_.try_emplace(tile, CoverTile{std::move(geometry), {}});
     }
-    groundCoverPending_ = 0;
-    sample.groundCoverBatches = 0;
     unsigned drafts = 0;
     std::optional<ChunkKey> prepare;
     for (int ring = 0; ring <= radius; ++ring)
@@ -543,7 +375,6 @@ void FrontierApp::DrawVegetation(Vec3 eye, bool allowUploads, FrameSample& sampl
                     if (CoverTerrainReady(world_, tile)) {
                         if (!prepare)
                             prepare = tile;
-                        ++groundCoverPending_;
                     }
                     continue;
                 }
@@ -556,7 +387,6 @@ void FrontierApp::DrawVegetation(Vec3 eye, bool allowUploads, FrameSample& sampl
                     geometry.mesh.Upload(GetGpuDevice(), *mesh);
                     cover.parts.push_back({std::move(mesh), std::move(geometry.material)});
                     cover.pending.pop_front();
-                    ++sample.groundCoverBatches;
                     allowUploads = false;
                 }
                 drafts += unsigned(!cover.pending.empty());
@@ -564,13 +394,8 @@ void FrontierApp::DrawVegetation(Vec3 eye, bool allowUploads, FrameSample& sampl
     if (prepare && !coverBuild_ && drafts < 2)
         coverBuild_.emplace(
             CoverBuild{*prepare, std::async(std::launch::async, &PropModels::BuildGroundCover,
-                                            &props_, *prepare, options_.seed)});
+                                            &props_, *prepare, WorldSeed)});
     coverUploadReady_ = drafts != 0;
-    groundCoverPending_ += drafts;
-    sample.groundCoverPending = groundCoverPending_;
-    sample.groundCoverStreamMs =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - streamStart)
-            .count();
     for (const auto& [tile, cover] : groundCover_) {
         if (away(tile) > radius)
             continue;
@@ -592,7 +417,7 @@ void FrontierApp::DrawActors(const TransformComponent& truckPose) {
         props_.Draw(renderer_, "pickup-truck", placement, {1.9, 1.77, 4.53}, 0x10000u);
     }
     for (const auto& structure : Structures()) {
-        const auto base = OnGround(structure.position, options_.seed, -.07);
+        const auto base = OnGround(structure.position, WorldSeed, -.07);
         if (nearby(base, 550) && world_.HasChunk(ChunkAt(structure.position)))
             props_.Draw(renderer_, structure.model, base, structure.size, structure.yaw);
     }
@@ -627,7 +452,7 @@ void FrontierApp::DrawHud() {
         artwork_->Text(value, at + Vec2{.012, -.015}, size, shadow);
         artwork_->Text(value, at, size, color);
     };
-    if (!options_.benchmark && options_.capture.empty()) {
+    {
         if (controlsVisible_) {
             const auto point = Horizontal(game_.Player());
             const unsigned minutes = unsigned(game_.Hour() * 60);
@@ -637,8 +462,8 @@ void FrontierApp::DrawHud() {
                            {left, 5.26}, .048f, paper);
             artwork_->Text("WASD move / drive    Mouse look    E enter / exit", {left, 4.56}, .035f,
                            subtle);
-            artwork_->Text("V camera    T weather    G ray tracing    H TAA", {left, 4.02}, .035f,
-                           subtle);
+            artwork_->Text("V camera    T weather    G ray tracing    Tab render debug",
+                           {left, 4.02}, .035f, subtle);
             artwork_->Text("F3 diagnostics    F1 close    Esc quit", {left, 3.45}, .035f, subtle);
         }
         if (game_.Paused())
@@ -651,7 +476,7 @@ void FrontierApp::DrawHud() {
         const double top = controlsVisible_ ? 1.9 : 5.2;
         artwork_->Quad({left + 4.05, top - .55}, {8.7, 1.63}, {.023f, .029f, .027f, .88f});
         artwork_->Text(std::format("{:.1f} ms present   {} draws   {} dispatches   {} bodies",
-                                   recorder_.LastIntervalMs(), gpu.drawCalls, gpu.computeDispatches,
+                                   presentMs_, gpu.drawCalls, gpu.computeDispatches,
                                    game_.Bodies()),
                        {left, top}, .036f, paper);
         artwork_->Text(std::format("Chunks {} + {} pending   Trees {}   GPU {:.0f} MiB",
@@ -666,24 +491,12 @@ void FrontierApp::DrawHud() {
 
 void FrontierApp::OnRender(float) {
     auto& gpu = GetGpuDevice();
-    auto& sample = recorder_.BeginFrame();
-    if (options_.smoke)
-        SmokeStep();
-    if (options_.benchmark && benchmarkReady_)
-        Step({.throttle = options_.scenario == "drive" ? 1. : 0.}, GetFixedUpdateStep());
-    const auto streamStart = std::chrono::steady_clock::now();
     const bool reserveCover =
         terrainUploaded_ &&
         (coverUploadReady_ || (coverBuild_ && coverBuild_->result.wait_for(std::chrono::seconds(
                                                   0)) == std::future_status::ready));
     world_.Stream(Horizontal(game_.Player()), game_.Velocity(), gpu, !reserveCover);
-    sample.worldStreamMs =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - streamStart)
-            .count();
-    sample.chunks = world_.GetStats();
-    terrainUploaded_ = sample.chunks.uploadedMeshes != 0;
-    sample.physicsAndGameMs = std::exchange(updateMs_, 0);
-    sample.bodies = game_.Bodies();
+    terrainUploaded_ = world_.GetStats().uploadedMeshes != 0;
 
     GetWindow().GetFramebufferSize(frameWidth_, frameHeight_);
     PerspectiveCamera camera(ToRadians(game_.Driving() ? 62 : 56),
@@ -691,110 +504,72 @@ void FrontierApp::OnRender(float) {
                              1400);
     const auto now = std::chrono::steady_clock::now();
     const double cameraDt =
-        lastRender_ == std::chrono::steady_clock::time_point{} || options_.benchmark ||
-                options_.smoke
+        lastRender_ == std::chrono::steady_clock::time_point{}
             ? GetFixedUpdateStep()
             : std::clamp(std::chrono::duration<double>(now - lastRender_).count(), .001, .12);
     lastRender_ = now;
-    if (settings_.physicalCamera.depthOfField)
-        settings_.motionBlurShutter = static_cast<float>(
-            std::clamp(settings_.physicalCamera.shutterSeconds / cameraDt, 0., 1.));
-    const bool automated = options_.benchmark || options_.smoke || !options_.capture.empty();
-    const auto view = game_.GetRenderView(cameraDt, automated ? 1 : GetRenderInterpolationAlpha());
+    const auto view = game_.GetRenderView(cameraDt, GetRenderInterpolationAlpha());
     camera.SetPosition(view.cameraPosition);
     camera.SetTarget(view.cameraTarget);
-    const bool fixedView = options_.benchmark || !options_.capture.empty();
-    if (fixedView && options_.scenario == "water") {
-        camera.SetPosition({222, 19.8, 310});
-        camera.SetTarget({389, LakeLevel + 3.2, 449});
-    } else if (fixedView && options_.scenario == "forest") {
-        camera.SetPosition({-587, Height({-587, -128}, options_.seed) + 6, -128});
-        camera.SetTarget({-735, Height({-735, -208}, options_.seed) + 8, -208});
-    }
-
     UpdateLight();
     if (!gpu.Clear(.22f, .35f, .49f, 1))
         throw std::runtime_error(gpu.GetLastError());
     const bool drawWater = Distance(Horizontal(camera.GetPosition()), LakeCenter) < 390;
+    const auto contact = game_.Driving() ? game_.Truck() : game_.Player();
+    const auto contactXZ = Horizontal(contact);
+    if (drawWater && InLake(contactXZ) && contact.y < LakeLevel + 1.2 && time_ - lastWake_ >= .32 &&
+        std::hypot(game_.Velocity().x, game_.Velocity().y) > .15) {
+        lake_.AddDisturbance(contactXZ - LakeCenter, time_, game_.Driving() ? .18 : .055,
+                             game_.Driving() ? 7.5 : 3.8);
+        lastWake_ = time_;
+    }
     if (drawWater && (!lake_.SetTime(time_) || !lake_.SyncGpu(gpu)))
         throw std::runtime_error("Silverlake GPU upload failed: " + gpu.GetLastError());
     const auto hour = game_.Hour();
     const float lamp = float(42 * std::clamp((std::abs(hour - 12) - 5.) / 2., 0., 1.));
-    const std::array lights{PointLight{OnGround(Depot, options_.seed, 5), {1, .69, .42}, lamp, 26}};
-    renderer_.BeginScene(camera, settings_, .98f, lights);
+    const std::array lights{PointLight{OnGround(Depot, WorldSeed, 5), {1, .69, .42}, lamp, 26}};
+    const auto pedestrian = game_.Player(), truck = game_.Truck();
+    settings_.foliageInteractions = {
+        FoliageInteraction{{pedestrian.x, pedestrian.z}, .60f, game_.Driving() ? 0.f : .9f},
+        FoliageInteraction{{truck.x, truck.z}, 2.0f, 1.f}};
+    surfaceMarks_.Update(gpu, camera.GetPosition(),
+                         game_.Driving() ? game_.Truck() : game_.Player(), game_.Driving(),
+                         game_.SurfaceWetness(), WorldSeed);
+    auto renderSettings = settings_;
+    renderPanel_.Apply(renderSettings);
+    renderer_.BeginScene(camera, renderSettings, 1.f, lights);
     nearTrees_.clear();
     world_.Draw(renderer_, ground_, scenery_, foliage_, road_, camera.GetPosition(), nearTrees_);
-    DrawVegetation(camera.GetPosition(), !terrainUploaded_, sample);
+    DrawVegetation(camera.GetPosition(), !terrainUploaded_);
     DrawActors(view.truck);
+    surfaceMarks_.Draw(renderer_);
     if (drawWater) {
         auto water = WaterSurface::MakeMaterial();
         water.roughness = float(.07 + .12 * game_.Wetness());
         water.water->absorption = {.42, .18, .097};
-        water.water->rippleStrength = options_.quality.radius > 1 ? .8f : 0.f;
+        water.water->rippleStrength = .8f;
         renderer_.DrawMesh(lake_.GetMesh(),
                            Mat4::Translate({LakeCenter.x, LakeLevel, LakeCenter.y}), water);
     }
     renderer_.EndScene();
     DrawHud();
-    const bool checkingReadiness =
-        (options_.benchmark && !benchmarkReady_) || !options_.capture.empty();
-    sceneReady_ = checkingReadiness && sample.chunks.pending == 0 && groundCoverPending_ == 0 &&
-                  renderer_.IsEnvironmentReady() &&
-                  (!drawWater || gpu.GetFrameStats().waterReflectionPasses > 0);
-    if (!options_.capture.empty() && !capturePending_ && sceneReady_ &&
-        (options_.benchmark || recorder_.PresentedFrames() > 10)) {
-        if (!gpu.RequestFrameCapture())
-            throw std::runtime_error("Could not start frame capture");
-        capturePending_ = true;
-    }
+    if (renderPanel_.Draw(GetWindow(), GetGpuDevice(), renderPanelOpen_, game_.Paused(), cameraDt))
+        SetRenderPanelOpen(!renderPanelOpen_);
 }
 
 void FrontierApp::OnFramePresented() {
-    const auto& gpu = GetGpuDevice();
-    const bool finished = recorder_.EndFrame(gpu, frameWidth_, frameHeight_, benchmarkReady_);
-    benchmarkReady_ |= options_.benchmark && sceneReady_;
-    if (benchmarkReady_)
-        automationDeadline_ = std::chrono::steady_clock::now() + AutomationTimeout;
-    sampledTemporalHistory_ |= gpu.GetFrameStats().temporalHistoryPasses != 0;
-    if (options_.benchmark || options_.smoke || !options_.capture.empty()) {
-        if (gpu.GetCounters().validationErrors)
-            throw std::runtime_error("GPU validation reported errors");
-        if (!renderer_.GetLastAssetError().empty())
-            throw std::runtime_error(renderer_.GetLastAssetError());
-    }
-    if (capturePending_) {
-        if (!options_.capture.parent_path().empty())
-            std::filesystem::create_directories(options_.capture.parent_path());
-        LuxSamples::WritePpmCapture(GetGpuDevice(), options_.capture);
-        if (!options_.benchmark) {
-            done_ = true;
-            Close();
-            return;
-        }
-        capturePending_ = false;
-        options_.capture.clear();
-    }
-    if (options_.smoke && smokeStage_ == 2 &&
-        world_.HasChunk(ChunkAt(Horizontal(game_.Player()))) && world_.GetStats().evicted > 0 &&
-        gpu.GetFrameStats().drawCalls > 0 &&
-        (!settings_.temporalAntialiasing || sampledTemporalHistory_)) {
-        std::cout << "Frontier County smoke passed: FBX motion, Jolt drive and terrain crossing, "
-                     "chunk eviction and GPU draw\n";
-        done_ = true;
-        Close();
-    }
-    if (finished) {
-        recorder_.Write(options_.output, options_.scenario, gpu.GetInfo(), options_.quality.name,
-                        options_.seed);
-        done_ = options_.capture.empty();
-        Close();
-    }
+    const auto now = std::chrono::steady_clock::now();
+    if (lastPresent_ != std::chrono::steady_clock::time_point{})
+        presentMs_ = std::chrono::duration<double, std::milli>(now - lastPresent_).count();
+    lastPresent_ = now;
 }
 
 void FrontierApp::OnShutdown() {
     coverBuild_.reset();
     world_.Stop();
     artwork_.reset();
+    surfaceMarks_.Release();
+    renderPanel_.Shutdown();
     lake_.ReleaseGpu();
     groundCover_.clear();
     props_.Release();
@@ -803,23 +578,9 @@ void FrontierApp::OnShutdown() {
 } // namespace
 } // namespace Frontier
 
-int RunFrontier(int argc, char** argv) {
+int RunFrontier(int, char**) {
     try {
-        auto options = Frontier::Parse(argc, argv);
-        if (options.help) {
-            std::cout
-                << "Frontier County\n"
-                   "  WASD move/drive  mouse look  Shift jog/brake  Space jump  C crouch\n"
-                   "  E enter/exit  V camera  T weather  F1 "
-                   "controls\n"
-                   "  G hardware RT  H TAA  P pause  F3 stats  Esc exit\n"
-                   "  --preset low|medium|high|ultra|cinematic|extreme  --resolution WIDTHxHEIGHT\n"
-                   "  --seed N  --day-seconds N  --vegetation N  --rt  --no-taa  --no-edge-aa\n"
-                   "  --smoke-test | --benchmark [--scenario town|drive|forest|water|weather]\n"
-                   "  --warmup N  --frames N  --output PREFIX  --capture FRAME.ppm\n";
-            return 0;
-        }
-        Frontier::FrontierApp app(std::move(options));
+        Frontier::FrontierApp app;
         return app.Initialize() ? app.Run() : 1;
     } catch (const std::exception& error) {
         std::cerr << "Frontier County: " << error.what() << '\n';

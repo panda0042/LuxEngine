@@ -45,6 +45,9 @@ public:
     bool Configure(const WaterSurfaceDesc& desc, std::span<const WaterWave> waves,
                    std::span<const double> rowCenters = {});
     bool SetTime(double seconds);
+    // Inject a local, outward-travelling gravity-wave packet, in grid metres and simulation
+    // seconds. A moving hull or swimmer can emit a sequence along its actual trajectory.
+    bool AddDisturbance(Vec2 center, double startSeconds, double amplitude, double wavelength);
     // Finds the displaced local XZ point inside the water grid. Values come from the
     // analytic waves, so the triangle approximation can differ between vertices.
     std::optional<WaterSample> Sample(double x, double z) const;
@@ -76,7 +79,14 @@ private:
         WaterSample sample;
     };
 
-    Evaluation Evaluate(const std::array<Vec2, MaxWaves>& spatial) const;
+    struct Disturbance {
+        Vec2 center;
+        double start, amplitude, wavelength;
+    };
+
+    std::vector<Disturbance> disturbances_;
+    bool disturbancesChanged_ = false;
+    Evaluation Evaluate(const std::array<Vec2, MaxWaves>& spatial, Vec2 position) const;
     std::array<Wave, MaxWaves> waves_{};
     std::array<Vec2, MaxWaves> temporal_{};
     size_t waveCount_ = 0;

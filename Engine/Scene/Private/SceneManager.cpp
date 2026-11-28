@@ -209,6 +209,42 @@ SceneSettings InheritedSettings(const SceneSettings& current, const SceneSetting
     inherit(render.physicallyBasedBloom, oldRender.physicallyBasedBloom,
             newRender.physicallyBasedBloom);
     inherit(render.localExposure, oldRender.localExposure, newRender.localExposure);
+    inherit(render.metering.lowPercentile, oldRender.metering.lowPercentile,
+            newRender.metering.lowPercentile);
+    inherit(render.metering.highPercentile, oldRender.metering.highPercentile,
+            newRender.metering.highPercentile);
+    inherit(render.metering.minEV, oldRender.metering.minEV, newRender.metering.minEV);
+    inherit(render.metering.maxEV, oldRender.metering.maxEV, newRender.metering.maxEV);
+    inherit(render.metering.brightenSpeed, oldRender.metering.brightenSpeed,
+            newRender.metering.brightenSpeed);
+    inherit(render.metering.darkenSpeed, oldRender.metering.darkenSpeed,
+            newRender.metering.darkenSpeed);
+    inherit(render.metering.compensationEV, oldRender.metering.compensationEV,
+            newRender.metering.compensationEV);
+    inherit(render.colorGrade.temperatureK, oldRender.colorGrade.temperatureK,
+            newRender.colorGrade.temperatureK);
+    inherit(render.colorGrade.tint, oldRender.colorGrade.tint, newRender.colorGrade.tint);
+    inherit(render.colorGrade.saturation, oldRender.colorGrade.saturation,
+            newRender.colorGrade.saturation);
+    inherit(render.colorGrade.vibrance, oldRender.colorGrade.vibrance,
+            newRender.colorGrade.vibrance);
+    inherit(render.colorGrade.contrast, oldRender.colorGrade.contrast,
+            newRender.colorGrade.contrast);
+    inherit(render.colorGrade.lift, oldRender.colorGrade.lift, newRender.colorGrade.lift);
+    inherit(render.colorGrade.gamma, oldRender.colorGrade.gamma, newRender.colorGrade.gamma);
+    inherit(render.colorGrade.gain, oldRender.colorGrade.gain, newRender.colorGrade.gain);
+    inherit(render.colorGrade.shadows, oldRender.colorGrade.shadows, newRender.colorGrade.shadows);
+    inherit(render.colorGrade.midtones, oldRender.colorGrade.midtones,
+            newRender.colorGrade.midtones);
+    inherit(render.colorGrade.highlights, oldRender.colorGrade.highlights,
+            newRender.colorGrade.highlights);
+    inherit(render.bloomRadius, oldRender.bloomRadius, newRender.bloomRadius);
+    inherit(render.bloomScatter, oldRender.bloomScatter, newRender.bloomScatter);
+    inherit(render.textureLodBias, oldRender.textureLodBias, newRender.textureLodBias);
+    inherit(render.postDebugView, oldRender.postDebugView, newRender.postDebugView);
+    inherit(render.postVolumes, oldRender.postVolumes, newRender.postVolumes);
+    inherit(render.physicalCamera.autofocusSpeed, oldRender.physicalCamera.autofocusSpeed,
+            newRender.physicalCamera.autofocusSpeed);
     inherit(render.physicalCamera.exposure, oldRender.physicalCamera.exposure,
             newRender.physicalCamera.exposure);
     inherit(render.physicalCamera.depthOfField, oldRender.physicalCamera.depthOfField,
@@ -226,10 +262,20 @@ SceneSettings InheritedSettings(const SceneSettings& current, const SceneSetting
     inherit(render.autoExposure, oldRender.autoExposure, newRender.autoExposure);
     inherit(render.depthOfFieldRadius, oldRender.depthOfFieldRadius, newRender.depthOfFieldRadius);
     inherit(render.focusDistance, oldRender.focusDistance, newRender.focusDistance);
+    inherit(render.bloomFireflySuppression, oldRender.bloomFireflySuppression,
+            newRender.bloomFireflySuppression);
+    inherit(render.colorGradingMix, oldRender.colorGradingMix, newRender.colorGradingMix);
+    inherit(render.secondaryColorGradingLut, oldRender.secondaryColorGradingLut,
+            newRender.secondaryColorGradingLut);
     inherit(render.colorGradingLut, oldRender.colorGradingLut, newRender.colorGradingLut);
     inherit(render.colorGradingStrength, oldRender.colorGradingStrength,
             newRender.colorGradingStrength);
+    inherit(render.dynamicSkyLighting, oldRender.dynamicSkyLighting, newRender.dynamicSkyLighting);
+    inherit(render.cloudShadowStrength, oldRender.cloudShadowStrength,
+            newRender.cloudShadowStrength);
     inherit(render.dynamicAtmosphere, oldRender.dynamicAtmosphere, newRender.dynamicAtmosphere);
+    inherit(render.atmosphereSolarIrradiance, oldRender.atmosphereSolarIrradiance,
+            newRender.atmosphereSolarIrradiance);
     inherit(render.aerosolDensity, oldRender.aerosolDensity, newRender.aerosolDensity);
     inherit(render.vignette, oldRender.vignette, newRender.vignette);
     inherit(render.filmGrain, oldRender.filmGrain, newRender.filmGrain);
@@ -238,6 +284,7 @@ SceneSettings InheritedSettings(const SceneSettings& current, const SceneSetting
     inherit(render.lensDistortion, oldRender.lensDistortion, newRender.lensDistortion);
     inherit(render.lensFlareStrength, oldRender.lensFlareStrength, newRender.lensFlareStrength);
     inherit(render.cloudCoverage, oldRender.cloudCoverage, newRender.cloudCoverage);
+    inherit(render.rainfall, oldRender.rainfall, newRender.rainfall);
     inherit(render.surfaceWetness, oldRender.surfaceWetness, newRender.surfaceWetness);
     inherit(render.weatherTime, oldRender.weatherTime, newRender.weatherTime);
     inherit(render.windVelocity.x, oldRender.windVelocity.x, newRender.windVelocity.x);
@@ -396,7 +443,7 @@ void RewritePaths(Scene& scene, const fs::path& owner, const fs::path* destinati
     bool changed = false;
     for (auto* path :
          {&settings.render3D.environmentPath, &settings.render3D.waterReflection.environmentPath,
-          &settings.render3D.colorGradingLut}) {
+          &settings.render3D.colorGradingLut, &settings.render3D.secondaryColorGradingLut}) {
         if (path->empty())
             continue;
         const auto absolute = Canonical(Path(*path), owner);

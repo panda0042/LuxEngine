@@ -11,6 +11,10 @@ struct LuxForgeFog {
     DescriptorSet* compositeSet = nullptr;
     Buffer* constants = nullptr;
     Buffer* volume = nullptr;
+    Buffer* history = nullptr;
+    uint64_t lastFrame = 0, lastView = 0;
+    double origin[3] = {};
+    float projection[16] = {}, forward[3] = {}, maxDistance = 0;
     bool ready = false;
 #if defined(VULKAN) && defined(ENABLE_RAYTRACING)
     Shader* rayShader = nullptr;

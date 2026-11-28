@@ -77,17 +77,17 @@
       "name": "FrontierCounty",
       "source": "https://polyhaven.com/a/rocky_gravel",
       "license": "CC0-1.0",
-      "files": 4,
+      "files": 5,
       "version": "8K gravel sources",
-      "manifest_sha256": "86da7aa362cf55731adb82b637af3be3da55feaafc7b0cdc4bf503a4660ad6d1"
+      "manifest_sha256": "8e69e9f7fac506c8953210b34249cdb07c9d6d16b3eb3c7874254806643f0b39"
     },
     {
       "name": "FrontierPeople",
       "source": "https://tevy.dev/models",
       "license": "CC0-1.0",
-      "files": 14,
+      "files": 17,
       "version": "tevy character model v1",
-      "manifest_sha256": "52ce281b9a9d0fbbf1ba3159e501d85cf662d0d3a5bfa2b38bad75fd03bc5136"
+      "manifest_sha256": "a6d39b992c26c3719c3c72b15eff077271584dedf86264a3763d7047152f20cd"
     },
     {
       "name": "FrontierFoliage",
@@ -117,17 +117,33 @@
       "name": "FrontierVegetation",
       "source": "https://tevy.dev/models",
       "license": "CC0-1.0",
-      "files": 17,
+      "files": 19,
       "version": "tevy 3D vegetation v1",
-      "manifest_sha256": "f7880cc38ac87aa64e6a18d9e26c0cf572c7a21a4d9d24cf2fa683a7ac38f1b9"
+      "manifest_sha256": "1d5829668055fa5df6e1bbece92c5e36c208b4e6452bf632e6762961d42aa764"
     },
     {
       "name": "FrontierMeadow",
       "source": "https://polyhaven.com/a/leafy_grass",
       "license": "CC0-1.0",
-      "files": 4,
+      "files": 5,
       "version": "8K Leafy Grass",
-      "manifest_sha256": "101036dbfed74571d7478c093f16f7c23bcb959016f6228dbcc3f557918b2288"
+      "manifest_sha256": "f87fe8d18316b2153f6aeef49bec137d825f78be375600eea866a0204e2ac405"
+    },
+    {
+      "name": "FrontierTerrain",
+      "source": "https://polyhaven.com/textures",
+      "license": "CC0-1.0",
+      "version": "1.0",
+      "files": 3,
+      "manifest_sha256": "b9a5155d954404eb0cee50498a4236c7a5b1af3553d414ab6777e3627c0e178f"
+    },
+    {
+      "name": "FrontierFlowers",
+      "source": "https://polyhaven.com/a/dandelion_01",
+      "license": "CC0-1.0",
+      "files": 5,
+      "version": "Poly Haven glTF 2.0 / 8k",
+      "manifest_sha256": "dab6e796670f71b7ff438cccac7d4cc5796cbff6d502f21c80899de41e13def4"
     }
   ],
   "admission": "Existing CC0 graphics/audio plus the official Public Domain DungGeunMo Korean font; source grants, archive CRC/SHA-256 and copied-byte roster verified manually."
