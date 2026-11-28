@@ -109,23 +109,24 @@ bool ValidColliderDimensions(const PhysicsBodyDescription& body) {
            body.size.y >= minExtent && body.size.z >= minExtent;
 }
 
-bool SameColliderDimensions(const PhysicsBodyDescription& first,
-                            const PhysicsBodyDescription& second) {
-    if (first.shape != second.shape)
-        return false;
-    if (first.shape == ColliderShape3D::Capsule)
-        return first.radius == second.radius && first.halfHeight == second.halfHeight;
-    if (first.shape == ColliderShape3D::TriangleMesh)
-        return first.mesh == second.mesh && Same(first.size, second.size);
-    return Same(first.size, second.size);
-}
-
 JPH::Vec3 Vector(Vec3 v) {
     return {static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)};
 }
 
 Vec3 Vector(JPH::Vec3Arg v) {
     return {v.GetX(), v.GetY(), v.GetZ()};
+}
+
+bool SameColliderDimensions(const PhysicsBodyDescription& first,
+                            const PhysicsBodyDescription& second) {
+    if (first.shape != second.shape)
+        return false;
+    if (first.shape == ColliderShape3D::Capsule)
+        return static_cast<float>(first.radius) == static_cast<float>(second.radius) &&
+               static_cast<float>(first.halfHeight) == static_cast<float>(second.halfHeight);
+    if (first.shape == ColliderShape3D::TriangleMesh)
+        return first.mesh == second.mesh && Same(first.size, second.size);
+    return Vector(first.size * .5) == Vector(second.size * .5);
 }
 
 struct MeshBounds {
@@ -416,7 +417,7 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input, do
         if (found != impl_->entries.end()) {
             const auto& old = found->second.description;
             if (old.type != description.type || !SameColliderDimensions(old, description) ||
-                !Same(old.offset, description.offset) || old.mass != description.mass ||
+                Vector(old.offset) != Vector(description.offset) || old.mass != description.mass ||
                 old.trigger != description.trigger) {
                 impl_->Remove(id, true);
                 found = impl_->entries.end();
@@ -439,9 +440,9 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input, do
                 shape = new JPH::BoxShape(
                     half, std::min(.02f, .2f * std::min({half.GetX(), half.GetY(), half.GetZ()})));
             }
-            if (!Same(description.offset, {}))
-                shape = new JPH::RotatedTranslatedShape(Vector(description.offset),
-                                                        JPH::Quat::sIdentity(), shape);
+            const auto offset = Vector(description.offset);
+            if (offset != JPH::Vec3::sZero())
+                shape = new JPH::RotatedTranslatedShape(offset, JPH::Quat::sIdentity(), shape);
             const auto motion = description.type == BodyType::Static ? JPH::EMotionType::Static
                                 : description.type == BodyType::Dynamic
                                     ? JPH::EMotionType::Dynamic

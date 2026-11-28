@@ -45,6 +45,25 @@ bool SameCoordinates(const Vec3& a, const Vec3& b) {
 
 ScenePhysicsWorld::ScenePhysicsWorld(bool planar) : planar_(planar), world_(planar) {}
 
+Vec3 ScenePhysicsWorld::LocalKinematicMotion::StepVelocity(const Vec3& worldPoint, double dt,
+                                                           uint32 index, uint32 count) const {
+    const auto travel = targetPosition - startPosition;
+    const double fraction = 1.0 / count;
+    auto displacement = travel * fraction;
+    if (!SameCoordinates(startRotation, targetRotation)) {
+        const double start = index * fraction;
+        TransformComponent before, after;
+        before.rotation = SlerpRotation(startRotation, targetRotation, start);
+        after.rotation = SlerpRotation(startRotation, targetRotation, (index + 1) * fraction);
+        const auto localPoint =
+            inverseParentWorld.TransformDirection(worldPoint - parentWorld.TransformPoint({}));
+        const auto offset = localPoint - (startPosition + travel * start);
+        const auto localRotation = after.GetTransform() * before.GetTransform().InverseAffine();
+        displacement += localRotation.TransformDirection(offset) - offset;
+    }
+    return parentWorld.TransformDirection(displacement) * (1.0 / dt);
+}
+
 void ScenePhysicsWorld::Remove(uint32 entity) {
     world_.Remove(entity);
     if (!planar_)
@@ -199,18 +218,25 @@ void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, dou
                 if (SameCoordinates(local.position, previous->second.position) &&
                     SameCoordinates(local.rotation, previous->second.rotation)) {
                     inheritedKinematicMotion_.emplace(id, InheritedKinematicMotion{parent, {}});
-                } else if (!scene.GetParent(parent) &&
-                           scene.GetPhysicsCollider(parent) == Scene::PhysicsCollider::None) {
+                } else {
+                    bool authoredHierarchy = true;
+                    for (auto ancestor = parent; ancestor && authoredHierarchy;
+                         ancestor = scene.GetParent(ancestor))
+                        authoredHierarchy =
+                            scene.GetPhysicsCollider(ancestor) == Scene::PhysicsCollider::None;
                     const auto parentWorld = scene.GetWorldMatrix(parent);
-                    const auto* current = parentWorld.elements;
-                    const auto* last = previous->second.parentWorld.elements;
-                    const Vec3 move{current[12] - last[12], 0, current[14] - last[14]};
-                    const auto velocity = move * (1 / (dt * count));
-                    if (FiniteMatrix(parentWorld) && std::equal(current, current + 12, last) &&
-                        current[13] == last[13] && !SameCoordinates(move, {}) &&
-                        std::hypot(velocity.x, velocity.z) <= PhysicsWorld::MaxLinearVelocity) {
-                        inheritedKinematicMotion_.emplace(
-                            id, InheritedKinematicMotion{parent, velocity});
+                    if (authoredHierarchy && FiniteMatrix(parentWorld) &&
+                        !std::ranges::equal(parentWorld.elements,
+                                            previous->second.parentWorld.elements)) {
+                        try {
+                            inheritedKinematicMotion_.emplace(
+                                id, InheritedKinematicMotion{
+                                        parent, LocalKinematicMotion{
+                                                    previous->second.position, local.position,
+                                                    previous->second.rotation, local.rotation,
+                                                    parentWorld, parentWorld.InverseAffine()}});
+                        } catch (const std::invalid_argument&) {
+                        }
                     }
                 }
             }
@@ -251,7 +277,7 @@ void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, dou
         error_ = world_.GetLastError();
     if (!characters.empty()) {
         try {
-            StepCharacters(scene, characters, dt, count, rootMotion, gravity);
+            StepCharacters(scene, characters, dt, index, count, rootMotion, gravity);
         } catch (...) {
             world_.RestoreKinematicVelocities();
             throw;
@@ -308,7 +334,7 @@ void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, dou
 }
 
 void ScenePhysicsWorld::StepCharacters(Scene& scene, std::span<const uint32> characters, double dt,
-                                       uint32 count,
+                                       uint32 index, uint32 count,
                                        const std::unordered_map<uint32, Vec3>& rootMotion,
                                        const Vec3& gravity) {
     std::vector<uint32> ancestors;
@@ -365,15 +391,22 @@ void ScenePhysicsWorld::StepCharacters(Scene& scene, std::span<const uint32> cha
         ancestors.clear();
         for (auto parent = directParent; parent; parent = scene.GetParent(parent))
             ancestors.push_back(parent);
-        const auto supportMotionFilter = [this, &ancestors](uint32 platform, const Vec3& velocity) {
+        const auto supportMotionFilter = [this, &ancestors, &pose, dt, index,
+                                          count](uint32 platform, const Vec3& velocity) {
             if (std::ranges::find(ancestors, platform) != ancestors.end())
                 return Vec3{};
             const auto inherited = inheritedKinematicMotion_.find(platform);
             if (inherited == inheritedKinematicMotion_.end() ||
                 std::ranges::find(ancestors, inherited->second.parent) == ancestors.end())
                 return velocity;
-            const auto& shared = inherited->second.sharedVelocity;
-            return shared ? velocity - *shared : Vec3{};
+            const auto& localMotion = inherited->second.localMotion;
+            if (!localMotion)
+                return Vec3{};
+            const auto localVelocity = localMotion->StepVelocity(pose.position, dt, index, count);
+            return std::hypot(localVelocity.x, localVelocity.y, localVelocity.z) <=
+                           PhysicsWorld::MaxLinearVelocity
+                       ? localVelocity
+                       : velocity;
         };
         if (world_.MoveCharacter(id, settings, pose.position, velocity, jump, dt, gravity, state,
                                  supportMotionFilter, preserveVerticalVelocity))
