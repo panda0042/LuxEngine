@@ -6,6 +6,7 @@
 #include <LuxEditor/Viewport/SceneViewport3D.hpp>
 #include <LuxEditor/Viewport/ViewportCamera3D.hpp>
 #include <LuxEngine/Assets/AssetManager.hpp>
+#include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/ECS/ECS.hpp>
 #include <LuxUI/Widgets.hpp>
 #include <algorithm>
@@ -1001,7 +1002,7 @@ void SceneViewport3D::mousePressEvent(LuxUI::MouseEvent* event) {
         }
         auto distance =
             cameraOnly ? markerDistance
-            : mesh && mesh->modelSubmesh >= 0
+            : mesh && (mesh->modelSubmesh >= 0 || LuxEngine::ModelAsset::IsGltfPath(mesh->meshPath))
                 ? IntersectModelViewport(*ray, entity)
                 : IntersectViewportBox(
                       *ray, BoundsModel(entity, engineFrame_ ? engineRenderer_.get() : nullptr));

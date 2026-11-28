@@ -717,7 +717,7 @@ Ref<ModelAsset> ModelAsset::ReadGltf(const std::string& filepath, std::string& e
                 "glTF 가져오기 중 파일이 변경되었습니다.");
         model->sourceDependencies.reserve(files.stamps.size() - 1);
         for (size_t index = 1; index < files.stamps.size(); ++index)
-            model->sourceDependencies.push_back(Utf8(files.stamps[index].resolved));
+            model->sourceDependencies.push_back(Utf8(files.stamps[index].requested));
         {
             const std::lock_guard lock(cacheMutex);
             const auto found = cache.find(key);

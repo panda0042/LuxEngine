@@ -1311,6 +1311,21 @@ bool Renderer3D::DrawGltfSubmesh(const std::string& path, const Mat4& transform,
     return draw(DefaultContext3D());
 }
 
+void Renderer3D::DrawGltfAsset(const std::string& path, const Mat4& transform,
+                               const Material3D& material, int32 modelSubmesh,
+                               const Ref<ModelAsset>& model, const std::string& loadError) {
+    if (modelSubmesh >= 0 || !model || model->submeshes.empty()) {
+        DrawGltfSubmesh(path, transform, material, std::max(0, modelSubmesh), model, loadError);
+        return;
+    }
+    for (size_t index = 0; index < model->submeshes.size(); ++index) {
+        const auto node = model->submeshes[index].node;
+        if (node < model->nodes.size())
+            DrawGltfSubmesh(path, transform * model->nodes[node].worldTransform, material,
+                            static_cast<int32>(index), model, loadError);
+    }
+}
+
 void Renderer3D::DrawCube(const Vec3& p, const Vec3& scale, const Material3D& material) {
     if (t_ActiveContext3D) {
         t_ActiveContext3D->DrawCube(p, scale, material);

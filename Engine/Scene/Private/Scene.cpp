@@ -621,22 +621,8 @@ void Scene::OnRender3D() {
                     auto& [model, error] = entry->second;
                     if (inserted)
                         model = ModelAsset::Load(path, error);
-                    if (meshComp.modelSubmesh >= 0) {
-                        Renderer3D::DrawGltfSubmesh(path, world, material, meshComp.modelSubmesh,
-                                                    model, error);
-                        continue;
-                    }
-                    if (!model || model->submeshes.empty()) {
-                        Renderer3D::DrawGltfSubmesh(path, world, material, 0, model, error);
-                        continue;
-                    }
-                    for (size_t index = 0; index < model->submeshes.size(); ++index) {
-                        const auto node = model->submeshes[index].node;
-                        if (node < model->nodes.size())
-                            Renderer3D::DrawGltfSubmesh(
-                                path, world * model->nodes[node].worldTransform, material,
-                                static_cast<int32>(index), model, error);
-                    }
+                    Renderer3D::DrawGltfAsset(path, world, material, meshComp.modelSubmesh, model,
+                                              error);
                     continue;
                 }
                 const auto* animation = entity.TryGetComponent<ModelAnimationComponent>();
