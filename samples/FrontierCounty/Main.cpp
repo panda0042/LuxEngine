@@ -414,7 +414,19 @@ void FrontierApp::SmokeStep() {
     if (motion.Dot(motion) < 1e-8 || truckError.Dot(truckError) > 1e-12 ||
         cameraError.Dot(cameraError) > 1e-12)
         throw std::runtime_error("Truck and camera must share the interpolated motion");
-    game_.StartAt({820, 24}, false);
+    constexpr Vec2 west{767.5, 24.6};
+    game_.StartAt(west, false);
+    game_.Face({800, west.y});
+    Step({}, dt);
+    if (!game_.HasTerrainAt({766.3, 25.8}) || !game_.HasTerrainAt({769.15, 25.8}))
+        throw std::runtime_error(
+            "Terrain collision must match render heights across the chunk edge");
+    for (int i = 0; i < 40; ++i)
+        Step({.throttle = 1}, dt);
+    const auto walker = game_.Player();
+    if (walker.x <= 768.15 || std::abs(walker.y - Height(Horizontal(walker), options_.seed)) > .15)
+        throw std::runtime_error(
+            "The terrain walker must cross and stay grounded at the chunk edge");
     ++smokeStage_;
 }
 
@@ -716,8 +728,8 @@ void FrontierApp::OnFramePresented() {
         world_.HasChunk(ChunkAt(Horizontal(game_.Player()))) && world_.GetStats().evicted > 0 &&
         gpu.GetFrameStats().drawCalls > 0 &&
         (!settings_.temporalAntialiasing || sampledTemporalHistory_)) {
-        std::cout << "Frontier County smoke passed: FBX motion, Jolt drive, chunk eviction and GPU "
-                     "draw\n";
+        std::cout << "Frontier County smoke passed: FBX motion, Jolt drive and terrain crossing, "
+                     "chunk eviction and GPU draw\n";
         done_ = true;
         Close();
     }

@@ -24,6 +24,29 @@ public sealed class Mover : EntityScript {
     }
 }
 
+public sealed class PhysicsProbe : EntityScript {
+    public Entity? Floor;
+    public Entity? Sensor;
+    public Entity? Body;
+
+    protected override void OnCreate() {
+        var origin = new Vector3d(0, 4, 0);
+        var down = new Vector3d(0, -1, 0);
+        if (Floor is null || Sensor is null || Body is null ||
+            !Entity.TryGetCharacterState3D(out var state) || !state.Grounded ||
+            !Entity.IsGrounded3D || state.GroundNormal.Y < .99 ||
+            !Entity.Raycast3D(origin, down, 5, out var floorHit) || floorHit.EntityId != Floor.Id ||
+            Math.Abs(floorHit.Distance - 4) > .01 ||
+            !Entity.Raycast3D(origin, down, 5, out var sensorHit, includeTriggers: true) ||
+            sensorHit.EntityId != Sensor.Id || Entity.Raycast3D(origin, down, 0, out var missed) ||
+            missed.EntityId != 0 || Floor.SetVelocity3D(new(1, 0, 0)) ||
+            Body.SetCharacterMotion3D(default) || !Body.SetVelocity3D(new(1, 0, 0)) ||
+            !Body.AddImpulse3D(new(4, 0, 0)) || !Body.TryGetVelocity3D(out var velocity) ||
+            Math.Abs(velocity.X - 3) > .001 || !Entity.SetCharacterMotion3D(new(2, 0, 0), 5))
+            throw new InvalidOperationException("The scene physics bridge returned unexpected data.");
+    }
+}
+
 public sealed class Fields : EntityScript {
     public int Health = 5;
     public float Speed = 1;

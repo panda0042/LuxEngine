@@ -67,7 +67,7 @@ set_tests_properties(Engine_longrun PROPERTIES TIMEOUT 600 LABELS "gpu;long" SKI
 
 # Runtime: LuxPlayer argument parsing and view fitting, then a real LuxPlayer run.
 add_executable(LuxRuntimeTests RuntimeTest.cpp)
-target_link_libraries(LuxRuntimeTests PRIVATE LuxEngine::Runtime)
+target_link_libraries(LuxRuntimeTests PRIVATE LuxEngine::Runtime nlohmann_json::nlohmann_json)
 lux_set_target_warnings(LuxRuntimeTests)
 if(MSVC)
     target_compile_options(LuxRuntimeTests PRIVATE /utf-8)
@@ -76,10 +76,13 @@ lux_copy_runtime(LuxRuntimeTests)
 add_test(NAME Runtime_scene_management_gpu COMMAND LuxRuntimeTests scene-management-gpu)
 set_tests_properties(Runtime_scene_management_gpu PROPERTIES LABELS "gpu;scene" TIMEOUT 90 SKIP_RETURN_CODE 77
     ENVIRONMENT "${LUX_GPU_TEST_ENVIRONMENT}" WORKING_DIRECTORY "$<TARGET_FILE_DIR:LuxRuntimeTests>")
-foreach(suite parse fit)
+foreach(suite parse fit gltf)
     add_test(NAME Runtime_${suite} COMMAND LuxRuntimeTests ${suite})
     set_tests_properties(Runtime_${suite} PROPERTIES TIMEOUT 30 LABELS headless)
 endforeach()
+add_test(NAME Runtime_gltf_gpu COMMAND LuxRuntimeTests gltf-gpu)
+set_tests_properties(Runtime_gltf_gpu PROPERTIES LABELS "gpu;assets;scene" TIMEOUT 60
+    ENVIRONMENT "${LUX_GPU_TEST_ENVIRONMENT}" WORKING_DIRECTORY "$<TARGET_FILE_DIR:LuxRuntimeTests>")
 add_test(NAME Runtime_player_scene
     COMMAND LuxRuntimeTests write-scene "${CMAKE_CURRENT_BINARY_DIR}/PlayerSmoke.lux")
 set_tests_properties(Runtime_player_scene PROPERTIES FIXTURES_SETUP lux_player_scene LABELS gpu)

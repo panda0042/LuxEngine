@@ -112,8 +112,10 @@ bool InverseAffine(const Mat4& input, Mat4& result) {
 using AuthoredComponents =
     std::tuple<TagComponent, TransformComponent, SpriteRendererComponent, MeshRendererComponent,
                CameraComponent, Rigidbody2DComponent, BoxCollider2DComponent, Rigidbody3DComponent,
-               BoxCollider3DComponent, TilemapComponent, AnimationComponent, AnimatorComponent,
-               ModelAnimationComponent, ScriptComponent, SceneReferenceComponent>;
+               BoxCollider3DComponent, CapsuleCollider3DComponent, TriangleMeshCollider3DComponent,
+               CharacterController3DComponent, TilemapComponent, AnimationComponent,
+               AnimatorComponent, ModelAnimationComponent, ScriptComponent,
+               SceneReferenceComponent>;
 
 using SceneComponents = decltype(std::tuple_cat(
     AuthoredComponents{}, std::tuple<HierarchyComponent, InstanceSourceComponent>{}));
@@ -444,6 +446,16 @@ bool Scene::ApplyState(Scene& prepared) {
     return ApplyState(prepared, false);
 }
 
+bool Scene::CanKeepPhysicsBody(const Scene& replacement, uint32 id) const {
+    const auto collider = replacement.GetPhysicsCollider(id);
+    if (!replacement.HasComponent<TransformComponent>(id) || collider == PhysicsCollider::None ||
+        GetPhysicsCollider(id) != collider)
+        return false;
+    return collider != PhysicsCollider::TriangleMesh ||
+           GetComponent<TriangleMeshCollider3DComponent>(id).mesh ==
+               replacement.GetComponent<TriangleMeshCollider3DComponent>(id).mesh;
+}
+
 bool Scene::ApplyState(Scene& prepared, bool preserveScriptRuntime) {
     if (&prepared == this)
         return true;
@@ -461,14 +473,7 @@ bool Scene::ApplyState(Scene& prepared, bool preserveScriptRuntime) {
         preparedScriptLifetime = std::make_shared<int>(0);
         removedBodies.reserve(entities_.size());
         for (const auto id : entities_) {
-            const bool had2D = HasComponent<BoxCollider2DComponent>(id) &&
-                               (HasComponent<Rigidbody2DComponent>(id) ||
-                                !HasComponent<BoxCollider3DComponent>(id));
-            const bool has2D = prepared.HasComponent<BoxCollider2DComponent>(id) &&
-                               (prepared.HasComponent<Rigidbody2DComponent>(id) ||
-                                !prepared.HasComponent<BoxCollider3DComponent>(id));
-            if (!prepared.HasComponent<TransformComponent>(id) || had2D != has2D ||
-                (!has2D && !prepared.HasComponent<BoxCollider3DComponent>(id)))
+            if (!CanKeepPhysicsBody(prepared, id))
                 removedBodies.push_back(id);
         }
     } catch (...) {
@@ -505,6 +510,7 @@ bool Scene::ApplyState(Scene& prepared, bool preserveScriptRuntime) {
     prepared.modelAssets_.clear();
     prepared.physics2D_.reset();
     prepared.physics3D_.reset();
+    prepared.characterMotions_.clear();
     prepared.ResetPhysicsTiming();
     prepared.collisionEvents2D_.clear();
     prepared.collisionEvents3D_.clear();
@@ -705,13 +711,7 @@ bool Scene::CommitRegion(Scene& staged, const std::unordered_set<uint32>& anchor
                 pool->Erase(id);
             entities_.erase(id);
         } else {
-            const auto uses2D = [id](const Scene& scene) {
-                return scene.HasComponent<BoxCollider2DComponent>(id) &&
-                       (scene.HasComponent<Rigidbody2DComponent>(id) ||
-                        !scene.HasComponent<BoxCollider3DComponent>(id));
-            };
-            if (!staged.HasComponent<TransformComponent>(id) || uses2D(*this) != uses2D(staged) ||
-                (!uses2D(staged) && !staged.HasComponent<BoxCollider3DComponent>(id))) {
+            if (!CanKeepPhysicsBody(staged, id)) {
                 RemovePhysicsBody(id);
                 if (auto* body = staged.TryGetComponent<Rigidbody2DComponent>(id))
                     body->isGrounded = false;

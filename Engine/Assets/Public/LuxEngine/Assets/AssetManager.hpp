@@ -4,6 +4,7 @@
 #include <LuxEngine/Core/Math.hpp>
 #include <LuxEngine/Renderer/RHI/Texture.hpp>
 #include <cstddef>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -38,6 +39,8 @@ public:
 
     // Decodes valid texture pixels to RGBA buffer on CPU without requiring a GPU device.
     static bool DecodeTextureCpu(const std::string& filepath, int& outWidth, int& outHeight,
+                                 std::vector<uint8>& outRgbaPixels);
+    static bool DecodeTextureCpu(std::span<const uint8> encoded, int& outWidth, int& outHeight,
                                  std::vector<uint8>& outRgbaPixels);
 
     static bool LoadShaderBytes(const std::string& filepath, std::vector<uint8>& outBytes);

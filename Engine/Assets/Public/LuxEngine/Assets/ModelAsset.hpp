@@ -66,6 +66,8 @@ struct ModelTexture {
     std::vector<uint8> embedded{};
 };
 
+enum class ModelAlphaMode { Opaque, Mask, Blend };
+
 struct ModelMaterial {
     std::string name{};
     Vec4 baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -79,6 +81,10 @@ struct ModelMaterial {
     int32 emissiveTexture = -1;
     int32 occlusionTexture = -1;
     bool doubleSided = false;
+    ModelAlphaMode alphaMode = ModelAlphaMode::Opaque;
+    float alphaCutoff = .5f;
+    float normalScale = 1.f;
+    float occlusionStrength = 1.f;
 };
 
 struct ModelAnimation {
@@ -111,6 +117,8 @@ struct ModelPoseLayer {
 
 class LUX_API ModelAsset {
 public:
+    static bool IsGltfPath(const std::string& filepath);
+    static Ref<ModelAsset> Load(const std::string& filepath, std::string& error);
     static Ref<ModelAsset> LoadFbx(const std::string& filepath, std::string& error);
     // Load a clip-only FBX as an animation source. A normal FBX model may also supply clips.
     static Ref<ModelAsset> LoadFbxAnimation(const std::string& filepath, std::string& error);
@@ -131,6 +139,7 @@ public:
                   const std::vector<ModelPoseOverride>& overrides = {}) const;
 
     std::string sourcePath{};
+    std::vector<std::string> sourceDependencies{};
     double sourceUnitMeters = 1.0;
     double framesPerSecond = 30.0;
     std::vector<ModelNode> nodes{};
@@ -146,9 +155,11 @@ private:
     static Ref<ModelAsset> ReadFbx(const std::string& filepath, std::string& error, bool reload,
                                    int32 requiredSubmesh, bool requireUv,
                                    bool allowAnimationOnly = false);
+    static Ref<ModelAsset> ReadGltf(const std::string& filepath, std::string& error);
     struct Impl;
     ModelAsset();
     std::shared_ptr<Impl> impl_;
+    bool staticGltf_ = false;
 };
 
 } // namespace LuxEngine

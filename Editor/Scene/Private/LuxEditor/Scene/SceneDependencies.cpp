@@ -143,15 +143,38 @@ private:
         return file;
     }
 
-    const LuxEngine::ModelAsset& LoadModel(const fs::path& file) {
+    const LuxEngine::ModelAsset& LoadModel(const fs::path& file, bool allowStaticGltf = false) {
+        const auto path = GenericPathUtf8(file);
+        const bool gltf = LuxEngine::ModelAsset::IsGltfPath(path);
+        if (gltf && !allowStaticGltf)
+            throw std::runtime_error("glTF 모델은 애니메이션 원본으로 사용할 수 없습니다: " + path);
         if (const auto found = models_.find(file); found != models_.end())
             return *found->second;
         if (meshFiles_.insert(file).second)
             Charge(fs::file_size(file));
         std::string error;
-        auto model = LuxEngine::ModelAsset::LoadFbx(GenericPathUtf8(file), error);
-        if (!model)
-            throw std::runtime_error("FBX 모델 파일이 올바르지 않습니다: " + error);
+        auto model = gltf ? LuxEngine::ModelAsset::Load(path, error)
+                          : LuxEngine::ModelAsset::LoadFbx(path, error);
+        if (!model || (gltf && !error.empty()))
+            throw std::runtime_error("모델 파일이 올바르지 않습니다: " + path + " (" + error + ")");
+        if (gltf) {
+            for (const auto& texture : model->textures) {
+                if (!texture.path.empty()) {
+                    ValidateImage(texture.path, file);
+                } else if (!texture.embedded.empty()) {
+                    int width = 0, height = 0;
+                    std::vector<LuxEngine::uint8> pixels;
+                    if (!LuxEngine::AssetManager::DecodeTextureCpu(texture.embedded, width, height,
+                                                                   pixels))
+                        throw std::runtime_error("glTF 내장 이미지를 읽지 못했습니다: " + path);
+                }
+            }
+            for (const auto& dependency : model->sourceDependencies) {
+                const auto resource = ResolveModel(dependency, file);
+                if (!textureFiles_.contains(resource) && meshFiles_.insert(resource).second)
+                    Charge(fs::file_size(resource));
+            }
+        }
         return *models_.emplace(file, std::move(model)).first->second;
     }
 
@@ -241,13 +264,19 @@ private:
                 mesh && !mesh->meshPath.empty()) {
                 const auto file = ResolveModel(mesh->meshPath, owner);
                 bool hasUvs = false;
-                if (mesh->modelSubmesh >= 0) {
-                    const auto& model = LoadModel(file);
-                    const auto index = static_cast<size_t>(mesh->modelSubmesh);
-                    if (index >= model.submeshes.size())
-                        throw std::runtime_error("FBX 하위 메시 번호가 올바르지 않습니다: " +
-                                                 mesh->meshPath);
-                    hasUvs = model.submeshes[index].hasTexCoords;
+                if (mesh->modelSubmesh >= 0 ||
+                    LuxEngine::ModelAsset::IsGltfPath(GenericPathUtf8(file))) {
+                    const auto& model = LoadModel(file, true);
+                    if (mesh->modelSubmesh >= 0) {
+                        const auto index = static_cast<size_t>(mesh->modelSubmesh);
+                        if (index >= model.submeshes.size())
+                            throw std::runtime_error("모델 하위 메시 번호가 올바르지 않습니다: " +
+                                                     mesh->meshPath);
+                        hasUvs = model.submeshes[index].hasTexCoords;
+                    } else {
+                        hasUvs = std::ranges::all_of(model.submeshes,
+                                                     &LuxEngine::ModelSubmesh::hasTexCoords);
+                    }
                 } else {
                     if (!meshHasUvs_.contains(file)) {
                         if (meshFiles_.insert(file).second)

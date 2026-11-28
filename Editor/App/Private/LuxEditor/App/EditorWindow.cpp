@@ -990,8 +990,10 @@ void EditorWindow::RefreshInspector() {
         tilemapWidth_->setEnabled(tiled);
         tilemapHeight_->setEnabled(tiled);
         tilemapSize_->setEnabled(tiled);
+        const bool character = selected.HasComponent<LuxEngine::CharacterController3DComponent>();
         const bool hasBody = selected.HasComponent<LuxEngine::Rigidbody2DComponent>();
         bodyEnabled_->setChecked(hasBody);
+        bodyEnabled_->setEnabled(!character);
         const LuxEngine::Rigidbody2DComponent body =
             hasBody ? selected.GetComponent<LuxEngine::Rigidbody2DComponent>()
                     : LuxEngine::Rigidbody2DComponent{};
@@ -1003,6 +1005,7 @@ void EditorWindow::RefreshInspector() {
         gravityScale_->setEnabled(hasBody);
         const bool hasCollider = selected.HasComponent<LuxEngine::BoxCollider2DComponent>();
         colliderEnabled_->setChecked(hasCollider);
+        colliderEnabled_->setEnabled(!character);
         const LuxEngine::BoxCollider2DComponent collider =
             hasCollider ? selected.GetComponent<LuxEngine::BoxCollider2DComponent>()
                         : LuxEngine::BoxCollider2DComponent{};
@@ -1313,6 +1316,11 @@ void EditorWindow::OnTilemapChanged(const LuxUI::Widget* field) {
 void EditorWindow::OnPhysicsChanged(const LuxUI::Widget* field) {
     if (refreshingInspector_ || !document_.GetSelected())
         return;
+    if ((field == bodyEnabled_ || field == colliderEnabled_) &&
+        document_.GetSelected().HasComponent<LuxEngine::CharacterController3DComponent>()) {
+        RefreshInspector();
+        return;
+    }
     RecordEdit(LUX_UI_TEXT("2D 물리 변경"), [this, field] {
         LuxEngine::Entity entity = document_.GetSelected();
         if (field == bodyEnabled_) {
@@ -1487,6 +1495,9 @@ void EditorWindow::CopyEntity() {
         needsFullAnimation || selected.HasComponent<LuxEngine::AnimatorComponent>() ||
         selected.HasComponent<LuxEngine::ModelAnimationComponent>() ||
         selected.HasComponent<LuxEngine::ScriptComponent>() ||
+        selected.HasComponent<LuxEngine::CapsuleCollider3DComponent>() ||
+        selected.HasComponent<LuxEngine::CharacterController3DComponent>() ||
+        selected.HasComponent<LuxEngine::TriangleMeshCollider3DComponent>() ||
         document_.GetScene().GetParent(selected.GetId()) ||
         !document_.GetScene().GetChildren(selected.GetId()).empty() ||
         selected.HasComponent<LuxEngine::SceneReferenceComponent>() ||

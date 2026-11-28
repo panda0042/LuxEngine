@@ -65,6 +65,20 @@ C# 예외는 네이티브 ABI 경계를 넘어 전파하지 않고 오류 문자
 
 현재 연결한 범위는 수명 콜백, 엔티티 유효성, 64비트 Transform, 키 입력 조회, Animator 제어·이벤트, 사용자 필드 Inspector 편집과 씬 직렬화다. 내장 소스 편집·명시적 빌드·진단 위치 이동은 [에디터 작업 공간](EditorWorkspace.md)에 정리했다. 언어 서버와 별도 게임 프로세스 중단점 디버거는 [스크립트 개발 도구](ScriptDevelopment.md)에 연결했다. 자동 컴파일·핫 리로드는 후속 개발 범위다. C++의 임의 ECS 컴포넌트와 템플릿 확장은 유지하고 필요한 구현만 `.inl`에 두었다.
 
+## 3D 게임플레이 물리
+
+`Entity.SetCharacterMotion3D`는 컨트롤러의 월드 XZ 이동 속도와 선택적인 점프 속도를 다음 물리 스텝에 전달한다. `TryGetCharacterState3D`로 마지막 물리 스텝의 위치·속도·바닥 법선·접지 여부를 읽을 수 있다. `Entity.IsGrounded3D`는 캐릭터 컨트롤러 또는 3D 강체의 접지 상태를 반환한다.
+
+3D 강체에는 `TryGetVelocity3D`, `SetVelocity3D`, `AddImpulse3D`를 사용한다. `Entity.Raycast3D`는 같은 씬에서 호출 엔티티를 제외하고 가장 가까운 충돌체를 찾는다. 결과에는 엔티티 ID, 월드 접점·법선·거리가 포함된다. `includeTriggers`는 기본적으로 꺼져 있다.
+
+```csharp
+protected override void OnUpdate(double deltaTime) {
+    double x = Input.IsKeyPressed(LuxKey.D) ? 2.5 : 0;
+    double jump = Entity.IsGrounded3D && Input.IsKeyPressed(LuxKey.Space) ? 5 : 0;
+    Entity.SetCharacterMotion3D(new Vector3d(x, 0, 0), jump);
+}
+```
+
 ## 회귀 테스트
 
 `Engine_csharp`은 실제 .NET 호스팅으로 관리 스크립트를 실행한다. 생성·업데이트·종료 콜백, Transform 변경, 활성 상태 변경, 엔티티 삭제, 예외 격리, 재시작, 씬 수명 종료, 잘못된 스레드 호출, ScriptComponent 저장·로드를 검사한다. `CMake_dotnet_host_discovery`는 배포판 RID와 플랫폼별 호스팅 팩 후보의 선택을 검사한다.

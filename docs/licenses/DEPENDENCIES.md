@@ -14,6 +14,7 @@ This document details all third-party software components bundled or linked with
 | **stb_image** | 2.30 | Public Domain / MIT | Header / Source | Texture Image Decoding (PNG, JPG) | See `LICENSE-stb_image.txt` |
 | **nlohmann/json** | 3.11+ | MIT | Header / Source | Scene and Project JSON | See `LICENSE-nlohmann-json.txt` |
 | **ufbx** | 0.23.1 | MIT (Alternative A) | Private C object in LuxEngine | ASCII / binary FBX mesh import | See `LICENSE-ufbx.txt`; pinned commit and hashes in `Engine/ThirdParty/ufbx/SourceManifest.json` |
+| **cgltf** | 1.15 | MIT | Private C object in LuxEngine | Static glTF 2.0 and GLB import | [Upstream v1.15](https://github.com/jkuhlmann/cgltf/releases/tag/v1.15), `LICENSE-cgltf.txt` |
 | **Kenney Prototype Kit** | 1.0 | CC0-1.0 | FBX / texture resources | Basic 3D model library | Original `License.txt` and source/file hashes in `Engine/Resources/Models/Primitives/KenneyPrototype/Provenance.json` |
 | **DirectX Shader Compiler (DXC)** | 1.8.x | Apache-2.0 with LLVM Exception | Build Tool | HLSL to SPIR-V Compilation | Build tool only (not bundled in runtime) |
 

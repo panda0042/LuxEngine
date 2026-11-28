@@ -104,6 +104,20 @@ function(lux_copy_runtime target)
             "${CMAKE_CURRENT_SOURCE_DIR}/*.[bB][mM][pP]"
             "${CMAKE_CURRENT_SOURCE_DIR}/*.[tT][gG][aA]"
             "${CMAKE_CURRENT_SOURCE_DIR}/*.[hH][dD][rR]")
+        file(GLOB_RECURSE _lux_gltf_files CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/*.[gG][lL][tT][fF]"
+            "${CMAKE_CURRENT_SOURCE_DIR}/*.[gG][lL][bB]")
+        list(FILTER _lux_gltf_files EXCLUDE REGEX "(^|/)(\\.git|\\.lux)(/|$)|^(build|out|cmake-build[^/]*)(/|$)")
+        if(_lux_gltf_files)
+            set(_lux_assets_root "${CMAKE_CURRENT_SOURCE_DIR}/Assets")
+            if(WIN32 OR APPLE)
+                set(_lux_assets_root "${CMAKE_CURRENT_SOURCE_DIR}/[aA][sS][sS][eE][tT][sS]")
+            endif()
+            file(GLOB_RECURSE _lux_gltf_sidecars CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+                "${_lux_assets_root}/*")
+            list(APPEND _lux_mesh_files ${_lux_gltf_files} ${_lux_gltf_sidecars})
+            list(REMOVE_DUPLICATES _lux_mesh_files)
+        endif()
         add_custom_target(${target}_LuxMeshContent)
         foreach(_mesh IN LISTS _lux_mesh_files)
             if(_mesh MATCHES "(^|/)(\\.git|\\.lux)(/|$)" OR

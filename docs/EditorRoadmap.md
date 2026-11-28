@@ -1131,7 +1131,7 @@ Qt 기반 LuxUI로 레벨·애니메이션·스크립트 작업 공간을 분리
 - [ ] 기본 프리미티브: 큐브·구·평면·캡슐·원기둥 (P0)
 - [x] CC0 기본 FBX 10종 카탈로그·프로젝트 내부 복사·배치·색상 텍스처 연결 (구·캡슐·토러스는 미포함)
 - [ ] 메시 버텍스·인덱스·노멀·탄젠트·UV 데이터 (P0)
-- [ ] glTF/GLB 모델 가져오기 (P0)
+- [ ] glTF/GLB 모델 가져오기 (P0, 정적 엔진 로더와 플레이어 실행 완료, 에디터 가져오기 후속)
 - [ ] 모델 크기·축·단위 변환 설정 (P0)
 - [ ] 모델 하위 노드와 메시 계층 보존 (P1)
 - [ ] 머티리얼·텍스처 참조 연결 (P1)
@@ -1219,7 +1219,7 @@ Qt 기반 LuxUI로 레벨·애니메이션·스크립트 작업 공간을 분리
 - [ ] 충돌체 경계와 접촉점 시각화 (P1)
 - [ ] Raycast·ShapeCast 디버그 (P2)
 - [ ] Convex Hull·메시 충돌체 (P2)
-- [ ] Character Controller와 경사·계단 설정 (P2)
+- [ ] Character Controller와 경사·계단 설정 (P2, 엔진 경사·계단 이동 및 C# 연결 완료)
 - [ ] 3D Joint·Constraint 편집 (P2)
 - [ ] Ragdoll 생성·시뮬레이션 (P3)
 - [ ] 물리 머티리얼과 고정 시간 간격 (P2)
@@ -1319,7 +1319,7 @@ Qt 기반 LuxUI로 레벨·애니메이션·스크립트 작업 공간을 분리
 - LuxUI의 Qt 헤더 경계·명령·콘솔·프로파일러·에셋 드래그 기반은 구현했다. Qt 기반 API이며 백엔드 독립 ABI를 제공하는 것은 아니다.
 - Scene/Game View를 분리하고 키보드·마우스 입력과 Jolt/C# 업데이트를 실행 복제본에 연결했다. 저작 씬을 플레이 상태로 덮어쓰지 않는다.
 - 애니메이션 작업공간의 `FBX 클립` 모드에서 클립·시간·속도·반복·재생을 제어한다. 본·모프는 CPU에서 평가하며 리타게팅·블렌드 트리는 남은 작업이다.
-- Jolt는 2D XY 제약과 3D 박스 바디에 연결했다. 다른 형상·조인트·캐릭터 컨트롤러까지 완료한 것은 아니다.
+- Jolt는 2D XY 박스, 3D 박스·캡슐, 정적 삼각형 메시 충돌체와 3D 캐릭터 컨트롤러를 지원한다. 새 물리 컴포넌트의 Inspector와 기즈모는 에디터 후속 작업이다.
 - 상세 API와 검증 범위는 `LuxUI.md`, `JoltPhysics.md`, `FbxModels.md`, `ViewportEditing.md`, `Modeling.md`에 기록했다.
 
 애니메이션 에셋·Animator의 현재 제작/실행 범위는 [AnimationWorkspace.md](AnimationWorkspace.md), 64비트 좌표와 ABI 변경은 [WorldCoordinates.md](WorldCoordinates.md)에 기록했다. IK·리타게팅·리깅 제작과 가중 Bezier는 완료 항목에 포함하지 않는다.

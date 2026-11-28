@@ -49,6 +49,17 @@ void EditorWindow::BuildPhysics3DDetails(LuxUI::VBoxLayout* layout) {
     const auto update = [this](const LuxUI::Widget* field) {
         if (refreshingInspector_)
             return;
+        const auto selected = document_.GetSelected();
+        const bool character = selected.HasComponent<LuxEngine::CharacterController3DComponent>();
+        const bool terrain = selected.HasComponent<LuxEngine::TriangleMeshCollider3DComponent>();
+        if ((field == body3DEnabled_ && (character || terrain)) ||
+            (field == body3DType_ && terrain) ||
+            (field == collider3DEnabled_ &&
+             (character || terrain ||
+              selected.HasComponent<LuxEngine::CapsuleCollider3DComponent>()))) {
+            RefreshPhysics3DDetails();
+            return;
+        }
         RecordEdit(LUX_UI_TEXT("Jolt 3D 물리 설정"), [this, field] {
             auto entity = document_.GetSelected();
             if (!entity)
@@ -111,15 +122,20 @@ void EditorWindow::RefreshPhysics3DDetails() {
     const auto entity = document_.GetSelected();
     const auto* body = entity.TryGetComponent<LuxEngine::Rigidbody3DComponent>();
     const auto* collider = entity.TryGetComponent<LuxEngine::BoxCollider3DComponent>();
+    const bool character = entity.HasComponent<LuxEngine::CharacterController3DComponent>();
+    const bool terrain = entity.HasComponent<LuxEngine::TriangleMeshCollider3DComponent>();
     const LuxUI::SignalBlocker b(body3DEnabled_), c(collider3DEnabled_), t(body3DType_),
         trigger(trigger3D_);
     body3DEnabled_->setChecked(body != nullptr);
+    body3DEnabled_->setEnabled(!character && !terrain);
     collider3DEnabled_->setChecked(collider != nullptr);
+    collider3DEnabled_->setEnabled(!character && !terrain &&
+                                   !entity.HasComponent<LuxEngine::CapsuleCollider3DComponent>());
     body3DType_->setCurrentIndex(body ? static_cast<int>(body->type) : 1);
     body3DMass_->setValue(body ? body->mass : 1);
     body3DGravity_->setValue(body ? body->gravityScale : 1);
     trigger3D_->setChecked(collider && collider->isTrigger);
-    body3DType_->setEnabled(body != nullptr);
+    body3DType_->setEnabled(body && !terrain);
     body3DMass_->setEnabled(body != nullptr);
     body3DGravity_->setEnabled(body != nullptr);
     trigger3D_->setEnabled(collider != nullptr);

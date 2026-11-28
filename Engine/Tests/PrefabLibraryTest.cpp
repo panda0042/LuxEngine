@@ -89,6 +89,40 @@ void ExportUnsavedScene(const fs::path& directory) {
           "the prefab resolves the asset from the original working directory");
 }
 
+void CapsuleInstance(const fs::path& directory) {
+    Scene source;
+    auto actor = source.CreateEntity("Capsule actor");
+    actor.AddComponent<CapsuleCollider3DComponent>().radius = .75;
+    const auto file = directory / "capsule.luxprefab";
+    std::string error;
+    Check(PrefabLibrary::Save(source, actor.GetId(), file, error), error);
+
+    Scene target;
+    const auto root = PrefabLibrary::Instantiate(target, file, error);
+    Check(root != 0, error);
+    const auto local = Local(target, root, actor.GetId());
+    Check(local != 0 && target.GetComponent<CapsuleCollider3DComponent>(local).radius == .75,
+          "prefab materializes the capsule collider");
+    target.OnUpdate(target.GetSettings().fixedStep);
+    RaycastHit3D hit;
+    Check(target.Raycast3D({-3, 0, 0}, {1, 0, 0}, 5, hit) && hit.entityId == local,
+          "prefab capsule enters the physical world");
+
+    actor.RemoveComponent<CapsuleCollider3DComponent>();
+    actor.AddComponent<BoxCollider3DComponent>().size = {4, 2, 2};
+    Check(PrefabLibrary::Save(source, actor.GetId(), file, error) &&
+              PrefabLibrary::Refresh(target, root, error),
+          error);
+    Check(target.HasComponent<BoxCollider3DComponent>(local) &&
+              !target.HasComponent<CapsuleCollider3DComponent>(local) &&
+              !target.Raycast3D({-3, 0, 0}, {1, 0, 0}, 5, hit),
+          "refresh discards the outgoing capsule body");
+    target.OnUpdate(target.GetSettings().fixedStep);
+    Check(target.Raycast3D({-3, 0, 0}, {1, 0, 0}, 5, hit) && hit.entityId == local &&
+              hit.distance < 1.05f,
+          "replacement prefab collider enters the physical world");
+}
+
 void RefreshKeepsAnimatorPlayback(const fs::path& directory) {
     std::string error;
     const auto clip = Utf8(directory / "Pose.luxanim");
@@ -373,6 +407,7 @@ int main() {
     try {
         Files files;
         ExportUnsavedScene(files.root);
+        CapsuleInstance(files.root);
         RefreshKeepsAnimatorPlayback(files.root);
         RefreshKeepsPlainAnimationPlayback(files.root);
         RoundTrip(files.root);

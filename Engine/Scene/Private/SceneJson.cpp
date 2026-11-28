@@ -464,6 +464,29 @@ bool Scene::SerializeToString(std::string& output) {
                 value["trigger"] = ToJson(component->isTrigger);
                 components["box_collider3d"] = std::move(value);
             }
+            if (const auto* component = TryGetComponent<CapsuleCollider3DComponent>(id)) {
+                Json value = Json::object();
+                value["radius"] = ToJson(component->radius);
+                value["half_height"] = ToJson(component->halfHeight);
+                value["offset"] = ToJson(component->offset);
+                value["trigger"] = ToJson(component->isTrigger);
+                components["capsule_collider3d"] = std::move(value);
+            }
+            if (const auto* component = TryGetComponent<CharacterController3DComponent>(id)) {
+                Json value = Json::object();
+                value["radius"] = ToJson(component->radius);
+                value["half_height"] = ToJson(component->halfHeight);
+                value["max_slope_radians"] = ToJson(component->maxSlopeRadians);
+                value["step_height"] = ToJson(component->stepHeight);
+                components["character_controller3d"] = std::move(value);
+            }
+            if (const auto* component = TryGetComponent<TriangleMeshCollider3DComponent>(id)) {
+                Json vertices = Json::array();
+                for (const auto& vertex : component->mesh->vertices)
+                    vertices.push_back(ToJson(vertex));
+                components["triangle_mesh_collider3d"] = {{"vertices", std::move(vertices)},
+                                                          {"indices", component->mesh->indices}};
+            }
             if (const auto* component = TryGetComponent<TilemapComponent>(id)) {
                 Json value = Json::object();
                 value["width"] = ToJson(component->width);
@@ -768,6 +791,38 @@ bool Scene::DeserializeJson(const std::string& data) {
                     ReadJsonValue(value.at("offset"), component.offset);
                     ReadJsonValue(value.at("trigger"), component.isTrigger);
                     entity.AddComponent<BoxCollider3DComponent>(std::move(component));
+                } else if (name == "capsule_collider3d") {
+                    CapsuleCollider3DComponent component;
+                    RequireValidScene(value.is_object());
+                    ReadJsonValue(value.at("radius"), component.radius);
+                    ReadJsonValue(value.at("half_height"), component.halfHeight);
+                    ReadJsonValue(value.at("offset"), component.offset);
+                    ReadJsonValue(value.at("trigger"), component.isTrigger);
+                    entity.AddComponent<CapsuleCollider3DComponent>(std::move(component));
+                } else if (name == "character_controller3d") {
+                    CharacterController3DComponent component;
+                    RequireValidScene(value.is_object());
+                    ReadJsonValue(value.at("radius"), component.radius);
+                    ReadJsonValue(value.at("half_height"), component.halfHeight);
+                    ReadJsonValue(value.at("max_slope_radians"), component.maxSlopeRadians);
+                    ReadJsonValue(value.at("step_height"), component.stepHeight);
+                    entity.AddComponent<CharacterController3DComponent>(std::move(component));
+                } else if (name == "triangle_mesh_collider3d") {
+                    const auto& vertices = value.at("vertices");
+                    const auto& indices = value.at("indices");
+                    RequireValidScene(vertices.is_array() && vertices.size() >= 3 &&
+                                      vertices.size() <= PhysicsWorld::MaxTriangleMeshVertices &&
+                                      indices.is_array() && indices.size() >= 3 &&
+                                      indices.size() <= PhysicsWorld::MaxTriangleMeshIndices &&
+                                      indices.size() % 3 == 0);
+                    auto mesh = std::make_shared<TriangleMeshCollider3DData>();
+                    mesh->vertices.resize(vertices.size());
+                    mesh->indices.resize(indices.size());
+                    for (size_t i = 0; i < vertices.size(); ++i)
+                        ReadJsonValue(vertices[i], mesh->vertices[i]);
+                    for (size_t i = 0; i < indices.size(); ++i)
+                        ReadJsonValue(indices[i], mesh->indices[i]);
+                    entity.AddComponent<TriangleMeshCollider3DComponent>(std::move(mesh));
                 } else if (name == "tilemap") {
                     TilemapComponent component;
                     RequireValidScene(value.is_object());

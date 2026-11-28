@@ -13,6 +13,11 @@ using namespace LuxEngine;
 constexpr Vec2 TruckSpawn{10, 1.85};
 constexpr Vec3 TruckSize{1.88, .70, 4.5};
 constexpr double PlayerClearance = .25;
+constexpr double PlayerHalfHeight = .55;
+constexpr double PlayerCenterHeight = PlayerClearance + PlayerHalfHeight;
+constexpr double DockTop = LakeLevel + .37;
+constexpr Vec3 DockSize{11.6, .16, 3.2};
+constexpr Vec3 DockCenter{Dock.x + 5.4, DockTop - DockSize.y * .5, Dock.y};
 constexpr std::array WeatherProfiles{
     std::array{0.f, .0015f, 0.f},  std::array{.31f, .002f, 0.f},  std::array{.72f, .003f, .04f},
     std::array{.58f, .034f, .03f}, std::array{.67f, .006f, .62f}, std::array{.84f, .016f, 1.f},
@@ -56,8 +61,9 @@ Vec3 Position(const Entity& entity) {
 }
 
 double Floor(Vec2 point, unsigned seed) {
-    if (point.x >= Dock.x - .4 && point.x <= Dock.x + 11.2 && std::abs(point.y - Dock.y) < 1.6)
-        return LakeLevel + .37;
+    if (std::abs(point.x - DockCenter.x) <= DockSize.x * .5 &&
+        std::abs(point.y - DockCenter.z) < DockSize.z * .5)
+        return DockTop;
     return Height(point, seed);
 }
 } // namespace
@@ -66,10 +72,13 @@ Game::Game(unsigned seed, double daySeconds) : seed_(seed), daySeconds_(daySecon
 
 void Game::Start(World& world) {
     fixed_.clear();
+    terrain_.clear();
+    terrainCenters_.reset();
     scene_ = std::make_unique<Scene>();
     ResetTruck(OnGround(TruckSpawn, seed_, .85), 0);
     StartAt(Spawn, false);
     ResetPhysics(world);
+    AddBox(*scene_, "Dock deck", DockCenter, DockSize, BodyType::Static, 1);
 }
 
 void Game::ResetTruck(Vec3 position, double heading) {
@@ -97,12 +106,62 @@ void Game::ResetPhysics(World& world) {
     collisionRevision_ = world.GetStats().built;
 }
 
+void Game::UpdateTerrain() {
+    const std::array centers{ChunkAt(Horizontal(Player())), ChunkAt(Horizontal(Truck()))};
+    if (terrainCenters_ == centers)
+        return;
+    const auto nearby = [centers](ChunkKey key) {
+        return std::ranges::any_of(centers, [key](ChunkKey center) {
+            return std::abs(key.x - center.x) <= 1 && std::abs(key.z - center.z) <= 1;
+        });
+    };
+    for (auto it = terrain_.begin(); it != terrain_.end();) {
+        if (nearby(it->first)) {
+            ++it;
+            continue;
+        }
+        scene_->DestroyEntity(it->second);
+        it = terrain_.erase(it);
+    }
+    for (const auto center : centers)
+        for (int z = center.z - 1; z <= center.z + 1; ++z)
+            for (int x = center.x - 1; x <= center.x + 1; ++x) {
+                const ChunkKey key{x, z};
+                const auto origin = ChunkOrigin(key);
+                if (origin.x < -WorldHalf || origin.x >= WorldHalf || origin.y < -WorldHalf ||
+                    origin.y >= WorldHalf || terrain_.contains(key))
+                    continue;
+                auto entity = scene_->CreateEntity("Terrain collision chunk");
+                entity.GetComponent<TransformComponent>().position = {origin.x, 0, origin.y};
+                entity.AddComponent<TriangleMeshCollider3DComponent>().mesh =
+                    TerrainCollision(key, seed_);
+                terrain_.emplace(key, entity);
+            }
+    terrainCenters_ = centers;
+}
+
+bool Game::HasTerrainAt(Vec2 position) const {
+    const auto found = terrain_.find(ChunkAt(position));
+    const auto height = Height(position, seed_);
+    RaycastHit3D hit;
+    return found != terrain_.end() &&
+           scene_->Raycast3D({position.x, height + 2, position.y}, {0, -1, 0}, 4, hit) &&
+           hit.entityId == found->second.GetId() && std::abs(hit.point.y - height) <= .001;
+}
+
+void Game::RemoveWalker() {
+    if (walker_)
+        scene_->DestroyEntity(walker_);
+    walker_ = {};
+}
+
 void Game::StartAt(Vec2 place, bool drive) {
+    RemoveWalker();
     driving_ = drive;
     place = Limit(place);
     player_ = {place.x, Floor(place, seed_) + .02, place.y};
     playerVelocity_ = {};
-    up_ = 0;
+    swimming_ = false;
     previousLook_ = {yaw_, pitch_};
     cameraReady_ = false;
     if (drive)
@@ -145,9 +204,12 @@ void Game::Step(const Controls& input, World& world, double dt) {
         // The parked vehicle still needs its suspension and water response.
         Drive({}, dt);
     }
+    UpdateTerrain();
     scene_->OnUpdate(dt);
     if (!scene_->GetLastPhysicsError3D().empty())
         throw std::runtime_error(scene_->GetLastPhysicsError3D());
+    if (walker_)
+        ReadWalker(dt);
     const auto& truckPose = truck_.GetComponent<TransformComponent>();
     const auto forward = truckPose.GetTransform().TransformDirection({0, 0, -1});
     if (std::hypot(forward.x, forward.z) > .001)
@@ -178,6 +240,7 @@ void Game::MovePlayer(const Controls& input, double dt) {
         crouched_ = !crouched_;
     const Vec2 here = Horizontal(player_);
     const double terrain = Floor(here, seed_);
+    const bool wasSwimming = swimming_;
     swimming_ = InLake(here) && terrain < LakeLevel - .52;
     const bool jog = input.sprint && !crouched_ && !swimming_;
     const double speed = swimming_ ? 1.45 : (crouched_ ? .95 : (jog ? 3.25 : 1.72));
@@ -185,6 +248,24 @@ void Game::MovePlayer(const Controls& input, double dt) {
     if (Length(wish) > 1)
         wish = wish.Normalized();
     const Vec2 delta = Horizontal(wish * (speed * dt));
+    if (!swimming_) {
+        if (!walker_) {
+            if (wasSwimming)
+                player_.y = std::max(player_.y, terrain + .02);
+            walker_ = scene_->CreateEntity("County walker");
+            walker_.GetComponent<TransformComponent>().position =
+                player_ + Vec3{0, PlayerCenterHeight, 0};
+            auto& character = walker_.AddComponent<CharacterController3DComponent>();
+            character.radius = PlayerClearance;
+            character.halfHeight = PlayerHalfHeight;
+        }
+        const Vec2 velocity = (Limit(here + delta) - here) * (1 / dt);
+        if (!scene_->SetCharacterMotion3D(walker_.GetId(), {velocity.x, 0, velocity.y},
+                                          input.jump ? 4.75 : 0))
+            throw std::runtime_error("Could not move the county walker");
+        return;
+    }
+    RemoveWalker();
     const auto truck = Truck();
     const auto truckSide = Side(truckYaw_), truckForward = Forward(truckYaw_);
     const auto blocked = [&](Vec2 next) {
@@ -200,22 +281,21 @@ void Game::MovePlayer(const Controls& input, double dt) {
     if (blocked(next))
         next.y = here.y;
     playerVelocity_ = (next - here) * (1 / dt);
-    const double ground = Floor(next, seed_);
-    if (swimming_) {
-        player_.y += std::clamp(LakeLevel - .75 - player_.y, -dt * 2, dt * 2);
-        up_ = 0;
-    } else {
-        if (input.jump && player_.y < terrain + .04)
-            up_ = 4.75;
-        up_ -= 13. * dt;
-        player_.y += up_ * dt;
-        if (player_.y < ground) {
-            player_.y = ground;
-            up_ = 0;
-        }
-    }
+    player_.y += std::clamp(LakeLevel - .75 - player_.y, -dt * 2, dt * 2);
     player_.x = next.x;
     player_.z = next.y;
+}
+
+void Game::ReadWalker(double dt) {
+    CharacterController3DState state;
+    if (!scene_->GetCharacterState3D(walker_.GetId(), state))
+        throw std::runtime_error("Could not read the county walker");
+    const auto horizontal = Horizontal(state.position);
+    const auto bound = Limit(horizontal);
+    playerVelocity_ = (bound - Horizontal(player_)) * (1 / dt);
+    player_ = {bound.x, state.position.y - PlayerCenterHeight, bound.y};
+    if (bound.x != horizontal.x || bound.y != horizontal.y)
+        walker_.GetComponent<TransformComponent>().position = {bound.x, state.position.y, bound.y};
 }
 
 void Game::Drive(const Controls& input, double dt) {
@@ -324,6 +404,7 @@ void Game::Interact(const World& world) {
     const auto truck = Truck();
     if (Distance(Horizontal(Player()), Horizontal(truck)) < 3.8 &&
         std::abs(player_.y - truck.y) < 2) {
+        RemoveWalker();
         driving_ = true;
         cameraReady_ = false;
     }

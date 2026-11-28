@@ -9,6 +9,7 @@
 #include <vector>
 
 namespace LuxEngine {
+class ModelAsset;
 struct ModelPose;
 
 struct Vertex3D {
@@ -58,6 +59,8 @@ struct MaterialTextures3D {
     GpuTexture* normal = nullptr;
     GpuTexture* roughness = nullptr;
     bool unlitSprite = false;
+    GpuTexture* metallic = nullptr;
+    GpuTexture* occlusion = nullptr;
 };
 
 struct PointLight {
@@ -196,9 +199,19 @@ public:
         bool GetMeshBounds(const std::string& path, Vec3& minimum, Vec3& maximum) const;
 
     private:
-        Ref<GpuTexture> ResolveBaseColorTexture(const std::string& path, TextureSampling sampling,
-                                                TextureColorSpace colorSpace,
-                                                float alphaMaskCutoff = 0);
+        friend class Renderer3D;
+        bool DrawMeshAssetImpl(const std::string& path, const Mat4& transform,
+                               const Material3D& material, int32 modelSubmesh, int32 clip,
+                               double time, uint64 instance, const ModelPose* pose,
+                               uint64 poseRevision, const Ref<const ModelPose>& poseOwner,
+                               const Ref<ModelAsset>* gltfModel = nullptr,
+                               const std::string& gltfError = {});
+        enum class TextureChannel { Red, Green, Blue };
+        Ref<GpuTexture> ResolveTexture(const std::string& path, TextureSampling sampling,
+                                       TextureColorSpace colorSpace, float alphaMaskCutoff = 0,
+                                       const Ref<ModelAsset>& model = {},
+                                       int32 modelTextureIndex = -1,
+                                       TextureChannel channel = TextureChannel::Red);
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };
@@ -238,6 +251,9 @@ public:
                               double time = 0.0, uint64 instance = 0,
                               const ModelPose* pose = nullptr, uint64 poseRevision = 0,
                               const Ref<const ModelPose>& poseOwner = {});
+    static bool DrawGltfSubmesh(const std::string& path, const Mat4& transform,
+                                const Material3D& material, int32 modelSubmesh,
+                                const Ref<ModelAsset>& model, const std::string& loadError);
     static void DrawMesh(std::span<const Vec3> positions, std::span<const uint32> indices,
                          const Mat4& transform, const Material3D& material);
     static void DrawCube(const Vec3& position, const Vec3& scale, const Material3D& material);

@@ -169,6 +169,15 @@
               "box_collider3d": {
                 "$ref": "#/$defs/box_collider3d"
               },
+              "capsule_collider3d": {
+                "$ref": "#/$defs/capsule_collider3d"
+              },
+              "character_controller3d": {
+                "$ref": "#/$defs/character_controller3d"
+              },
+              "triangle_mesh_collider3d": {
+                "$ref": "#/$defs/triangle_mesh_collider3d"
+              },
               "tilemap": {
                 "$ref": "#/$defs/tilemap"
               },
@@ -188,7 +197,37 @@
                 "$ref": "#/$defs/script"
               }
             },
-            "additionalProperties": false
+            "additionalProperties": false,
+            "not": {
+              "required": ["box_collider3d", "capsule_collider3d"]
+            },
+            "dependentSchemas": {
+              "character_controller3d": {
+                "not": {
+                  "anyOf": [
+                    { "required": ["rigidbody2d"] },
+                    { "required": ["box_collider2d"] },
+                    { "required": ["rigidbody3d"] },
+                    { "required": ["box_collider3d"] },
+                    { "required": ["capsule_collider3d"] },
+                    { "required": ["triangle_mesh_collider3d"] }
+                  ]
+                }
+              },
+              "triangle_mesh_collider3d": {
+                "not": {
+                  "anyOf": [
+                    { "required": ["box_collider3d"] },
+                    { "required": ["capsule_collider3d"] }
+                  ]
+                },
+                "properties": {
+                  "rigidbody3d": {
+                    "properties": { "type": { "const": 0 } }
+                  }
+                }
+              }
+            }
           }
         },
         "required": [
@@ -207,6 +246,25 @@
     "entities"
   ],
   "$defs": {
+    "triangle_mesh_collider3d": {
+      "type": "object",
+      "required": ["vertices", "indices"],
+      "additionalProperties": false,
+      "properties": {
+        "vertices": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 65536,
+          "items": { "$ref": "#/$defs/vec3" }
+        },
+        "indices": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 393216,
+          "items": { "type": "integer", "minimum": 0, "maximum": 65535 }
+        }
+      }
+    },
     "vec2": {
       "type": "array",
       "items": {
@@ -499,6 +557,61 @@
         "size",
         "offset",
         "trigger"
+      ]
+    },
+    "capsule_collider3d": {
+      "type": "object",
+      "properties": {
+        "radius": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "half_height": {
+          "description": "Half the height of the straight cylinder along the capsule's local Y axis",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "offset": {
+          "$ref": "#/$defs/vec3"
+        },
+        "trigger": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "radius",
+        "half_height",
+        "offset",
+        "trigger"
+      ]
+    },
+    "character_controller3d": {
+      "type": "object",
+      "properties": {
+        "radius": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "half_height": {
+          "description": "Half the height of the straight cylinder along the capsule's local Y axis",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "max_slope_radians": {
+          "type": "number",
+          "minimum": 0,
+          "exclusiveMaximum": 1.5707963267948966
+        },
+        "step_height": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "radius",
+        "half_height",
+        "max_slope_radians",
+        "step_height"
       ]
     },
     "tilemap": {

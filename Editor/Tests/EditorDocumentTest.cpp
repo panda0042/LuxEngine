@@ -2,6 +2,7 @@
 #include <LuxEditor/Project/PathEncoding.hpp>
 #include <LuxEditor/Project/ProjectArchive.hpp>
 #include <LuxEditor/Project/ProjectFileOperations.hpp>
+#include <LuxEditor/Project/ProjectTemplates.hpp>
 #include <LuxEditor/Scene/EditorDocument.hpp>
 #include <LuxEditor/Scene/SceneDependencies.hpp>
 #include <LuxEngine/Animation/Animator.hpp>
@@ -1333,6 +1334,25 @@ void TestGeneratedContentFormats(const std::filesystem::path& cmake) {
     auto project = EditorProject::Create(root, "Content formats", ProjectTemplate::Empty, error);
     Check(bool(project), "content fixture project creates");
     fs::create_directory(root / "Art");
+    fs::create_directory(root / "Assets/Models");
+    std::ofstream(root / "Art/Embedded.GLB") << "GLB content fixture";
+    std::ofstream(root / "Assets/Models/External.GLTF") << "glTF content fixture";
+    std::ofstream(root / "Assets/Models/geometry.bin") << "binary sidecar fixture";
+    std::ofstream(root / "Assets/Models/geometry.data") << "arbitrary sidecar suffix fixture";
+    std::ofstream(root / "Source/editor-session.bin") << "unrelated binary file";
+    const auto syncScript = root / "SyncContent.cmake";
+    const auto readSync = [&syncScript] {
+        std::ifstream input(syncScript, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(input), {});
+    };
+    const auto currentSync = readSync();
+    auto previousSync = currentSync;
+    const auto newFormats = previousSync.find("gltf|glb|");
+    Check(newFormats != std::string::npos, "generated template includes glTF extensions");
+    previousSync.erase(newFormats, std::string_view("gltf|glb|").size());
+    std::ofstream(syncScript, std::ios::binary | std::ios::trunc) << previousSync;
+    Check(UpgradeTemplateContentSync(root, error) && readSync() == currentSync,
+          "the prior stock content script upgrades to include glTF formats");
     Scene scene;
     scene.SetSourcePath(PathUtf8(project->GetSceneFile()));
     LuxUI::Image image(4, 4, LuxUI::Image::Format_RGBA8888);
@@ -1398,6 +1418,12 @@ void TestGeneratedContentFormats(const std::filesystem::path& cmake) {
               !fs::exists(content / "Art/skipped.notes") &&
               !fs::exists(content / "Source/editor-session.notes"),
           "generated content accepts alternate image suffixes and skips unrelated locked files");
+    Check(fs::is_regular_file(content / "Art/Embedded.GLB") &&
+              fs::is_regular_file(content / "Assets/Models/External.GLTF") &&
+              fs::is_regular_file(content / "Assets/Models/geometry.bin") &&
+              fs::is_regular_file(content / "Assets/Models/geometry.data") &&
+              !fs::exists(content / "Source/editor-session.bin"),
+          "the generated project preserves GLB and Assets sidecars and skips unrelated binaries");
 #ifdef _WIN32
     const auto imageLock = CreateFileW((root / "Art/Badge.image").c_str(), GENERIC_READ, 0, nullptr,
                                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);

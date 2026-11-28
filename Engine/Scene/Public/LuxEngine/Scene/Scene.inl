@@ -7,6 +7,18 @@ template <class T, class... Args> T& Scene::AddComponent(uint32 id, Args&&... ar
     auto [it, added] = values.try_emplace(id, T{std::forward<Args>(args)...});
     if (!added)
         throw std::logic_error("Component already exists");
+    if constexpr (std::is_same_v<T, BoxCollider2DComponent> ||
+                  std::is_same_v<T, Rigidbody2DComponent> ||
+                  std::is_same_v<T, BoxCollider3DComponent> ||
+                  std::is_same_v<T, Rigidbody3DComponent> ||
+                  std::is_same_v<T, CapsuleCollider3DComponent> ||
+                  std::is_same_v<T, TriangleMeshCollider3DComponent> ||
+                  std::is_same_v<T, CharacterController3DComponent>) {
+        const auto collider = GetPhysicsCollider(id);
+        if (collider == PhysicsCollider::ConflictingSpatial ||
+            collider == PhysicsCollider::ConflictingCharacter)
+            RemovePhysicsBody(id);
+    }
     return it->second;
 }
 
@@ -68,7 +80,10 @@ template <class T> void Scene::RemoveComponent(uint32 id) {
                       std::is_same_v<T, Rigidbody2DComponent> ||
                       std::is_same_v<T, BoxCollider2DComponent> ||
                       std::is_same_v<T, Rigidbody3DComponent> ||
-                      std::is_same_v<T, BoxCollider3DComponent>)
+                      std::is_same_v<T, BoxCollider3DComponent> ||
+                      std::is_same_v<T, CapsuleCollider3DComponent> ||
+                      std::is_same_v<T, TriangleMeshCollider3DComponent> ||
+                      std::is_same_v<T, CharacterController3DComponent>)
             RemovePhysicsBody(id);
     }
 }

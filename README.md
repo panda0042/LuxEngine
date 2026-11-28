@@ -133,9 +133,9 @@ ctest --test-dir build/desktop -L headless --output-on-failure
 - The Forge 기반 2D 스프라이트·3D 메시, PBR·HDR·톤 매핑·환경광/IBL·스카이박스·방향광 그림자·점광원
 - 불투명·컷아웃·반투명 재질, 깊이·알파 처리, 양면 표시와 반투명 정렬
 - 밉맵·Clamp/Repeat·이방성 샘플링, 기본색·노멀·금속성·거칠기·AO 텍스처
-- OBJ·정적 FBX 가져오기, 법선·UV·축·단위 처리와 기본 FBX 모델 10종
+- OBJ·FBX 및 정적 glTF/GLB 모델 로딩, 법선·UV·축·단위 처리와 기본 FBX 모델 10종
 - ECS, 부모·자식 계층, 버전 있는 씬·프로젝트 JSON, 다중 씬과 로딩·스트리밍
-- Jolt 기반 2D·3D 박스 강체·충돌·트리거, 정적·동적·키네마틱 바디
+- Jolt 기반 2D 박스와 3D 박스·캡슐 강체, 정적 삼각형 메시 충돌체, 3D 캐릭터 컨트롤러
 - Qt 레벨 에디터, 2D·3D 뷰포트, 선택·기즈모·스냅·Details·콘텐츠 탐색·Undo/Redo
 - Transform 키프레임·타임라인·독립 애니메이션 작업 공간
 - C# 수명 콜백·Transform·입력, 사용자 필드 Inspector·씬 저장·런타임 적용과 엔티티 참조 재매핑
@@ -162,7 +162,7 @@ ctest --test-dir build/desktop -L headless --output-on-failure
 
 `Application::Run()`은 정상 종료와 예외 경로에서 파생 클래스 종료 훅을 실행합니다. 초기화 후 Run을 호출하지 않는 사용 방식에서는 파생 객체가 살아 있을 때 `Shutdown()`을 호출해야 합니다.
 
-현재 물리 어댑터는 Jolt의 박스 강체와 접촉 시작 이벤트를 지원하며, 구·캡슐·메시 충돌체·캐릭터 컨트롤러·조인트는 후속 범위입니다. 바닥은 사용자가 배치한 정적 충돌체입니다. FBX와 애니메이션의 현재 지원 범위는 [FBX 문서](docs/FbxModels.md)와 [에디터 작업 공간](docs/EditorWorkspace.md)을 따릅니다. C# 디버거·자동 컴파일·핫 리로드와 고급 프리팹 제작 도구도 각 기능 문서의 지원 범위를 확인해야 합니다.
+물리 어댑터는 접촉 시작 이벤트를 지원합니다. 바닥에는 박스나 정적 삼각형 메시 충돌체를 배치합니다. 구 충돌체와 조인트는 후속 범위입니다. 모델과 애니메이션의 지원 범위는 [모델 문서](docs/FbxModels.md)와 [에디터 작업 공간](docs/EditorWorkspace.md)을 참고하세요. [Jolt 물리와 C++ API](docs/JoltPhysics.md) 및 [C# 게임플레이 물리](docs/CSharpScripting.md#3d-게임플레이-물리)에 사용법이 있습니다.
 
 반투명은 오브젝트 원점 거리 정렬을 사용하므로 교차하는 투명 메시의 순서를 보장하지 않습니다. 기존 부분 알파 재질은 `Blend`를 명시해야 하며 물 전용 반사·굴절은 별도 기능입니다. 자세한 마이그레이션과 샘플링 한계는 [재질 문서](docs/Materials.md)에 정리했습니다.
 

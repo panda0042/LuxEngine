@@ -753,7 +753,7 @@ endif()
 clean_transaction()
 )LUX";
 
-enum class ContentSyncVersion { Legacy, ImageSignatures, OptionalHeaders, Current };
+enum class ContentSyncVersion { Legacy, ImageSignatures, OptionalHeaders, RequiredImages, Current };
 
 std::string ContentSyncScript(ContentSyncVersion version = ContentSyncVersion::Current) {
     std::string script = SyncContent;
@@ -765,9 +765,10 @@ std::string ContentSyncScript(ContentSyncVersion version = ContentSyncVersion::C
         substitute("@CONTENT_SELECTION@", LegacyContentSelection);
     } else {
         const bool optional = version != ContentSyncVersion::ImageSignatures;
-        const bool current = version == ContentSyncVersion::Current;
+        const bool requireImages =
+            version == ContentSyncVersion::RequiredImages || version == ContentSyncVersion::Current;
         std::string imageCheck = optional ? ImageHeaderScript : "";
-        if (current)
+        if (requireImages)
             imageCheck += RequiredImageCheck;
         imageCheck += ImageContentCheck;
         substitute("@IMAGE_CHECK@", imageCheck);
@@ -775,8 +776,15 @@ std::string ContentSyncScript(ContentSyncVersion version = ContentSyncVersion::C
                    optional ? OptionalImageHeaderRead : DirectImageHeaderRead);
         if (optional)
             substitute("@CHECK_REFERENCED_IMAGE@",
-                       current ? "        require_readable_referenced_image(\"${path}\")\n" : "");
-        substitute("@CONTENT_SELECTION@", ContentSelection);
+                       requireImages ? "        require_readable_referenced_image(\"${path}\")\n"
+                                     : "");
+        std::string selection = ContentSelection;
+        if (version == ContentSyncVersion::Current) {
+            constexpr std::string_view previousFormats = "obj|fbx|";
+            selection.replace(selection.find(previousFormats), previousFormats.size(),
+                              "obj|fbx|gltf|glb|");
+        }
+        substitute("@CONTENT_SELECTION@", selection);
     }
     return script;
 }
@@ -1139,13 +1147,16 @@ bool UpgradeTemplateContentSync(const std::filesystem::path& directory, std::str
     const auto legacy = ContentSyncScript(ContentSyncVersion::Legacy);
     const auto signatures = ContentSyncScript(ContentSyncVersion::ImageSignatures);
     const auto optionalHeaders = ContentSyncScript(ContentSyncVersion::OptionalHeaders);
-    if (size != legacy.size() && size != signatures.size() && size != optionalHeaders.size())
+    const auto requiredImages = ContentSyncScript(ContentSyncVersion::RequiredImages);
+    if (size != legacy.size() && size != signatures.size() && size != optionalHeaders.size() &&
+        size != requiredImages.size())
         return true;
     std::string existing(static_cast<size_t>(size), '\0');
     std::ifstream input(path, std::ios::binary);
     if (!input.read(existing.data(), static_cast<std::streamsize>(existing.size())) ||
         input.peek() != std::char_traits<char>::eof() ||
-        (existing != legacy && existing != signatures && existing != optionalHeaders))
+        (existing != legacy && existing != signatures && existing != optionalHeaders &&
+         existing != requiredImages))
         return true;
     input.close();
 

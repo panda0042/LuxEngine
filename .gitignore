@@ -56,6 +56,7 @@ tools/dxc/
 
 /Engine/ThirdParty/*
 !/Engine/ThirdParty/ufbx/
+!/Engine/ThirdParty/cgltf/
 **/obj/
 __pycache__/
 

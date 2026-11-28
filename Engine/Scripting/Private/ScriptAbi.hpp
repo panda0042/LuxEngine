@@ -9,6 +9,22 @@
 #endif
 
 namespace LuxEngine::Managed {
+inline constexpr uint32 ScriptAbiVersion = 8;
+
+struct ScriptCharacterState3D {
+    Vec3 position;
+    Vec3 velocity;
+    Vec3 groundNormal;
+    int grounded;
+};
+
+struct ScriptRaycastHit3D {
+    uint32 entityId;
+    Vec3 point;
+    Vec3 normal;
+    float distance;
+};
+
 struct NativeApi {
     uint32 version;
     uint32 size;
@@ -23,6 +39,17 @@ struct NativeApi {
                                        int length, double value);
     int(LUX_SCRIPT_CALL* animationEvent)(uint64 world, uint32 entity, char* destination,
                                          int capacity);
+    int(LUX_SCRIPT_CALL* characterMotion)(uint64 world, uint32 entity, const Vec3* velocity,
+                                          double jumpSpeed);
+    int(LUX_SCRIPT_CALL* getCharacterState)(uint64 world, uint32 entity,
+                                            ScriptCharacterState3D* value);
+    int(LUX_SCRIPT_CALL* getVelocity3D)(uint64 world, uint32 entity, Vec3* velocity);
+    int(LUX_SCRIPT_CALL* setVelocity3D)(uint64 world, uint32 entity, const Vec3* velocity);
+    int(LUX_SCRIPT_CALL* addImpulse3D)(uint64 world, uint32 entity, const Vec3* impulse);
+    int(LUX_SCRIPT_CALL* isGrounded3D)(uint64 world, uint32 entity);
+    int(LUX_SCRIPT_CALL* raycast3D)(uint64 world, uint32 ignoreEntity, const Vec3* origin,
+                                    const Vec3* direction, float maxDistance, int includeTriggers,
+                                    ScriptRaycastHit3D* hit);
 };
 
 struct ManagedApi {
