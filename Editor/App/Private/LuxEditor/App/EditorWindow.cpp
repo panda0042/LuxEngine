@@ -11,6 +11,7 @@
 #include <LuxEditor/Viewport/SceneViewport2D.hpp>
 #include <LuxEditor/Viewport/SceneViewport3D.hpp>
 #include <LuxEngine/Assets/AssetManager.hpp>
+#include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/ECS/ECS.hpp>
 #include <LuxUI/Widgets.hpp>
 #include <algorithm>
@@ -731,7 +732,7 @@ void EditorWindow::RefreshProjectExplorer() {
         end;
     for (; !error && it != end && projectFilePaths_.size() < 500; it.increment(error)) {
         const auto relative = it->path().lexically_relative(root);
-        const auto filename = it->path().filename().string();
+        const auto filename = PathUtf8(it->path().filename());
         if (it->is_symlink(error) ||
             (it->is_directory(error) &&
              (filename.starts_with('.') || filename == "out" || filename == "build" ||
@@ -761,8 +762,9 @@ void EditorWindow::RefreshProjectExplorer() {
             const bool audio = suffix == LuxUI::Latin1String(".wav") ||
                                suffix == LuxUI::Latin1String(".ogg") ||
                                suffix == LuxUI::Latin1String(".mp3");
-            const bool model =
-                suffix == LuxUI::Latin1String(".obj") || suffix == LuxUI::Latin1String(".fbx");
+            const bool model = suffix == LuxUI::Latin1String(".obj") ||
+                               suffix == LuxUI::Latin1String(".fbx") ||
+                               LuxEngine::ModelAsset::IsGltfPath(PathUtf8(it->path()));
             if ((filter.isEmpty() || label.contains(filter, LuxUI::Flags::CaseInsensitive)) &&
                 (category == 0 || (category == 1 && scene) || (category == 2 && image) ||
                  (category == 3 && audio) || (category == 4 && model) ||

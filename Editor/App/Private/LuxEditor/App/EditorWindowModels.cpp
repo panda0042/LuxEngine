@@ -1,6 +1,7 @@
 #include <LuxEditor/App/EditorWindow.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
 #include <LuxEditor/Scene/ModelImport.hpp>
+#include <LuxEditor/Scene/SceneDependencies.hpp>
 #include <LuxEditor/Ui/IconFactory.hpp>
 #include <LuxEditor/Viewport/SceneViewport3D.hpp>
 #include <LuxEngine/Assets/AssetManager.hpp>
@@ -36,6 +37,15 @@ bool IsFbx(const std::filesystem::path& path) {
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return extension == ".fbx";
 }
+
+bool ValidateGltfAsset(const EditorProject& project, const std::string& path, std::string& error,
+                       LuxEngine::int32 submesh = -1) {
+    LuxEngine::Scene modelScene;
+    auto& mesh = modelScene.CreateEntity().AddComponent<LuxEngine::MeshRendererComponent>();
+    mesh.meshPath = path;
+    mesh.modelSubmesh = submesh;
+    return ValidateProjectSceneReferences(project, modelScene, error);
+}
 } // namespace
 
 void EditorWindow::AddBasicModelMenu(LuxUI::Menu* parent) {
@@ -64,9 +74,12 @@ void EditorWindow::AddBasicModelMenu(LuxUI::Menu* parent) {
                 return;
             const auto& mesh = selected.GetComponent<LuxEngine::MeshRendererComponent>();
             std::string error;
-            if (!LuxEngine::AssetManager::ReloadMesh(
-                    document_.GetScene().ResolveAssetPath(mesh.meshPath), error,
-                    !mesh.material.baseColorTexture.empty())) {
+            const auto path = document_.GetScene().ResolveAssetPath(mesh.meshPath);
+            const bool loaded = LuxEngine::ModelAsset::IsGltfPath(path)
+                                    ? ValidateGltfAsset(*project_, path, error, mesh.modelSubmesh)
+                                    : LuxEngine::AssetManager::ReloadMesh(
+                                          path, error, !mesh.material.baseColorTexture.empty());
+            if (!loaded) {
                 ShowError(LUX_UI_TEXT("모델 다시 가져오기"), LuxUI::String::fromUtf8(error));
                 return;
             }
@@ -119,6 +132,22 @@ void EditorWindow::AddModelAsset(const std::filesystem::path& path) {
         return;
     }
     const auto modelPath = PathUtf8(path);
+    if (LuxEngine::ModelAsset::IsGltfPath(modelPath)) {
+        std::string error;
+        if (!ValidateGltfAsset(*project_, modelPath, error)) {
+            ShowError(LUX_UI_TEXT("glTF 모델 배치"), LuxUI::String::fromUtf8(error));
+            return;
+        }
+        RecordEdit(LUX_UI_TEXT("glTF 모델 배치"), [this, &path, &modelPath] {
+            document_.CreateEntity(PathUtf8(path.stem()))
+                .AddComponent<LuxEngine::MeshRendererComponent>()
+                .meshPath = modelPath;
+        });
+        viewportTabs_->setCurrentIndex(0);
+        RefreshAll();
+        canvas3D_->FocusSelection();
+        return;
+    }
     LuxEngine::BasicModelInstallation installed;
     const bool basic = LuxEngine::BasicModelLibrary::IdentifyInstalledModel(path, installed);
     if (!basic && IsFbx(path)) {
@@ -182,7 +211,8 @@ void EditorWindow::ChooseModelAsset() {
     const auto file = LuxUI::FileDialog::getOpenFileName(
         this, LUX_UI_TEXT("모델 선택"), meshPath_->text(),
         LUX_UI_TEXT(
-            "3D 모델 (*.obj *.OBJ *.fbx *.FBX);;Wavefront OBJ (*.obj *.OBJ);;FBX (*.fbx *.FBX)"));
+            "3D 모델 (*.obj *.OBJ *.fbx *.FBX *.gltf *.GLTF *.glb *.GLB);;"
+            "Wavefront OBJ (*.obj *.OBJ);;FBX (*.fbx *.FBX);;glTF (*.gltf *.GLTF *.glb *.GLB)"));
     if (file.isEmpty())
         return;
     if (document_.GetActiveTabId() != tab || document_.GetSelectedId(tab) != entity) {
@@ -249,6 +279,31 @@ void EditorWindow::ChooseModelAsset() {
                               "배치할 수 있습니다."));
         return;
     }
+    if (LuxEngine::ModelAsset::IsGltfPath(path)) {
+        std::string error;
+        if (!project_ || !IsInsideProject(PathFromUtf8(path), project_->GetFile().parent_path())) {
+            ShowError(LUX_UI_TEXT("모델 불러오기"),
+                      LUX_UI_TEXT("외부 glTF 모델은 먼저 에셋 가져오기로 추가해 주세요."));
+            return;
+        }
+        if (!ValidateGltfAsset(*project_, path, error)) {
+            ShowError(LUX_UI_TEXT("glTF 모델 불러오기"), LuxUI::String::fromUtf8(error));
+            return;
+        }
+        RecordEdit(LUX_UI_TEXT("glTF 모델 파일 변경"), [this, &path] {
+            auto entity = document_.GetSelected();
+            if (!entity.HasComponent<LuxEngine::MeshRendererComponent>())
+                entity.AddComponent<LuxEngine::MeshRendererComponent>();
+            auto& mesh = entity.GetComponent<LuxEngine::MeshRendererComponent>();
+            if (document_.GetScene().ResolveAssetPath(mesh.meshPath) != path)
+                mesh.material = {};
+            mesh.meshPath = path;
+            mesh.modelSubmesh = -1;
+            document_.MarkDirty();
+        });
+        RefreshAll();
+        return;
+    }
     LuxEngine::RawMeshData data;
     if (!LuxEngine::AssetManager::LoadMesh(path, data, true)) {
         ShowError(LUX_UI_TEXT("모델 불러오기"), MeshFailure(path));
@@ -271,7 +326,10 @@ void EditorWindow::ChooseModelAsset() {
         auto selected = document_.GetSelected();
         if (!selected.HasComponent<LuxEngine::MeshRendererComponent>())
             selected.AddComponent<LuxEngine::MeshRendererComponent>();
-        selected.GetComponent<LuxEngine::MeshRendererComponent>().meshPath = path;
+        auto& mesh = selected.GetComponent<LuxEngine::MeshRendererComponent>();
+        if (LuxEngine::ModelAsset::IsGltfPath(mesh.meshPath))
+            mesh.modelSubmesh = -1;
+        mesh.meshPath = path;
         document_.MarkDirty();
     });
     RefreshAll();

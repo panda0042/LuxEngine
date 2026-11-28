@@ -1,11 +1,13 @@
 #include <LuxEditor/App/EditorWindow.hpp>
 #include <LuxEditor/Debug/DebugPanel.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
+#include <LuxEditor/Project/ProjectFileOperations.hpp>
 #include <LuxEditor/Scripting/ScriptWorkspace.hpp>
 #include <LuxEditor/Viewport/EngineSceneRenderer.hpp>
 #include <LuxEditor/Viewport/GameViewport.hpp>
 #include <LuxEditor/Viewport/SceneViewport2D.hpp>
 #include <LuxEditor/Viewport/SceneViewport3D.hpp>
+#include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/Core/Log.hpp>
 #include <LuxEngine/Platform/Input.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
@@ -280,6 +282,7 @@ bool EditorWindow::ImportAssetFiles(const std::vector<std::filesystem::path>& fi
     namespace fs = std::filesystem;
     error.clear();
     std::vector<fs::path> created;
+    std::vector<fs::path> createdDirectories;
     try {
         if (!project_ || preview_.IsActive() || files.empty() || files.size() > 256)
             throw std::runtime_error("프로젝트 편집 모드에서 1~256개 파일을 선택해 주세요.");
@@ -291,22 +294,78 @@ bool EditorWindow::ImportAssetFiles(const std::vector<std::filesystem::path>& fi
             throw std::runtime_error("프로젝트 내부의 에셋 폴더를 선택해 주세요.");
         std::set<fs::path> targets;
         std::vector<std::pair<fs::path, fs::path>> plan;
+        std::vector<std::pair<fs::path, fs::path>> models;
+        const auto addFile = [&](const fs::path& source, const fs::path& target) {
+            if (fs::exists(fs::symlink_status(target)) || !targets.insert(target).second)
+                throw std::runtime_error("같은 이름의 에셋이 이미 있습니다: " +
+                                         PathUtf8(target.filename()));
+            plan.emplace_back(source, target);
+        };
         for (const auto& file : files) {
             if (fs::is_symlink(file) || !fs::is_regular_file(file) ||
                 fs::file_size(file) > 512ull * 1024 * 1024)
                 throw std::runtime_error("512 MiB 이하의 일반 에셋 파일만 가져올 수 있습니다.");
-            const auto target = destination / file.filename();
-            if (fs::exists(target) || !targets.insert(target).second)
-                throw std::runtime_error("같은 이름의 에셋이 이미 있습니다: " +
-                                         PathUtf8(file.filename()));
-            plan.emplace_back(file, target);
+            const auto path = PathUtf8(file);
+            if (!LuxEngine::ModelAsset::IsGltfPath(path)) {
+                addFile(file, destination / file.filename());
+                continue;
+            }
+
+            std::string loadError;
+            const auto model = LuxEngine::ModelAsset::Load(path, loadError);
+            if (!model || !loadError.empty())
+                throw std::runtime_error("glTF 모델을 가져오지 못했습니다: " + loadError);
+            const auto assets = fs::weakly_canonical(root / "Assets");
+            const auto assetFolder = destination.lexically_relative(assets);
+            const auto parent =
+                !assetFolder.empty() && !assetFolder.is_absolute() && *assetFolder.begin() != ".."
+                    ? destination
+                    : assets;
+            const auto bundle = parent / file.stem();
+            const auto bundlePath = bundle.lexically_relative(root);
+            if (bundlePath.empty() || bundlePath.is_absolute() || *bundlePath.begin() != "Assets" ||
+                IsExcludedProjectPath(bundlePath))
+                throw std::runtime_error("glTF를 프로젝트의 Assets 폴더에 가져와야 합니다.");
+            if (fs::exists(fs::symlink_status(bundle)) || !targets.insert(bundle).second)
+                throw std::runtime_error("같은 이름의 모델 폴더가 이미 있습니다: " +
+                                         PathUtf8(bundle.filename()));
+            const auto target = bundle / file.filename();
+            addFile(file, target);
+            models.emplace_back(bundle, target);
+            const auto sourceFolder = PathFromUtf8(model->sourcePath).parent_path();
+            for (const auto& dependency : model->sourceDependencies) {
+                const auto source = PathFromUtf8(dependency);
+                const auto resource = source.lexically_relative(sourceFolder);
+                if (resource.empty() || resource.is_absolute() || *resource.begin() == ".." ||
+                    IsExcludedProjectPath(bundlePath / resource))
+                    throw std::runtime_error("glTF 리소스의 프로젝트 경로가 올바르지 않습니다.");
+                addFile(source, bundle / resource);
+            }
         }
         created.reserve(plan.size());
         fs::create_directories(destination);
+        for (const auto& [bundle, target] : models) {
+            fs::create_directories(bundle.parent_path());
+            if (!fs::create_directory(bundle))
+                throw std::runtime_error("glTF 모델 폴더를 만들지 못했습니다.");
+            createdDirectories.push_back(bundle);
+        }
         for (const auto& [file, target] : plan) {
+            auto folder = target.parent_path();
+            std::vector<fs::path> missing;
+            for (; !fs::exists(folder); folder = folder.parent_path())
+                missing.push_back(folder);
+            for (auto it = missing.rbegin(); it != missing.rend(); ++it)
+                if (fs::create_directory(*it))
+                    createdDirectories.push_back(*it);
             if (!fs::copy_file(file, target, fs::copy_options::none))
                 throw std::runtime_error("에셋 파일을 복사하지 못했습니다.");
             created.push_back(target);
+        }
+        for (const auto& [bundle, target] : models) {
+            std::string loadError;
+            if (!LuxEngine::ModelAsset::Load(PathUtf8(target), loadError) || !loadError.empty())
+                throw std::runtime_error("복사한 glTF 모델을 읽지 못했습니다: " + loadError);
         }
         RefreshProjectExplorer();
         return true;
@@ -314,6 +373,10 @@ bool EditorWindow::ImportAssetFiles(const std::vector<std::filesystem::path>& fi
         for (const auto& file : created) {
             std::error_code ignored;
             fs::remove(file, ignored);
+        }
+        for (auto it = createdDirectories.rbegin(); it != createdDirectories.rend(); ++it) {
+            std::error_code ignored;
+            fs::remove(*it, ignored);
         }
         error = failure.what();
         return false;

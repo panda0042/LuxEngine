@@ -254,6 +254,9 @@ public:
     static bool DrawGltfSubmesh(const std::string& path, const Mat4& transform,
                                 const Material3D& material, int32 modelSubmesh,
                                 const Ref<ModelAsset>& model, const std::string& loadError);
+    static void DrawGltfAsset(const std::string& path, const Mat4& transform,
+                              const Material3D& material, int32 modelSubmesh,
+                              const Ref<ModelAsset>& model, const std::string& loadError);
     static void DrawMesh(std::span<const Vec3> positions, std::span<const uint32> indices,
                          const Mat4& transform, const Material3D& material);
     static void DrawCube(const Vec3& position, const Vec3& scale, const Material3D& material);

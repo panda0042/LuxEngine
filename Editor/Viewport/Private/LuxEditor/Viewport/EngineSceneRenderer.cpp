@@ -2,6 +2,7 @@
 #include <LuxEditor/Viewport/SpriteImageCache.hpp>
 #include <LuxEditor/Viewport/ViewportCamera3D.hpp>
 #include <LuxEngine/Assets/AssetManager.hpp>
+#include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/ECS/ECS.hpp>
 #include <LuxEngine/Platform/Window.hpp>
 #include <LuxEngine/Renderer/RHI/GpuDevice.hpp>
@@ -621,6 +622,8 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
                 *path = scene.ResolveAssetPath(*path);
         LuxEngine::Renderer3D::BeginScene(camera, renderSettings, scene.GetSettings().exposure);
         std::vector<LuxEngine::Ref<LuxEngine::GpuTexture>> spriteTextures;
+        std::map<std::string, std::pair<LuxEngine::Ref<LuxEngine::ModelAsset>, std::string>>
+            gltfModels;
         for (LuxEngine::Entity entity : scene.GetEntities()) {
             if (backgroundOnly)
                 break;
@@ -650,12 +653,22 @@ bool EngineSceneRenderer::Render3DPass(LuxEngine::Scene& scene, int pixelWidth, 
                 } else if (mesh->meshPath.empty())
                     LuxEngine::Renderer3D::DrawMesh(world, material);
                 else {
+                    const auto path = scene.ResolveAssetPath(mesh->meshPath);
+                    if (LuxEngine::ModelAsset::IsGltfPath(path)) {
+                        const auto [entry, inserted] = gltfModels.try_emplace(path);
+                        auto& [model, error] = entry->second;
+                        if (inserted)
+                            model = LuxEngine::ModelAsset::Load(path, error);
+                        LuxEngine::Renderer3D::DrawGltfAsset(path, world, material,
+                                                             mesh->modelSubmesh, model, error);
+                        continue;
+                    }
                     const auto* animation =
                         entity.TryGetComponent<LuxEngine::ModelAnimationComponent>();
                     LuxEngine::Renderer3D::DrawMeshAsset(
-                        scene.ResolveAssetPath(mesh->meshPath), world, material, mesh->modelSubmesh,
-                        animation ? animation->clip : -1, animation ? animation->time : 0.0,
-                        entity.GetId(), animation ? animation->mixedPose.get() : nullptr,
+                        path, world, material, mesh->modelSubmesh, animation ? animation->clip : -1,
+                        animation ? animation->time : 0.0, entity.GetId(),
+                        animation ? animation->mixedPose.get() : nullptr,
                         animation ? animation->poseRevision : 0,
                         animation ? animation->mixedPose : nullptr);
                 }

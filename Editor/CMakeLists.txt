@@ -161,6 +161,19 @@ if(LUX_BUILD_TESTS)
     add_test(NAME Editor_basic_model_ui COMMAND LuxBasicModelUiTests)
     set_tests_properties(Editor_basic_model_ui PROPERTIES LABELS "headless;editor;assets;fbx"
         TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LUX_EDITOR_SOFTWARE_VIEWPORT=1")
+    add_test(NAME Editor_gltf_assets COMMAND LuxBasicModelUiTests gltf)
+    set_tests_properties(Editor_gltf_assets PROPERTIES LABELS "headless;editor;assets;gltf"
+        TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LUX_EDITOR_SOFTWARE_VIEWPORT=1")
+    if(TARGET LuxPlayer)
+        add_dependencies(LuxBasicModelUiTests LuxPlayer)
+        target_compile_definitions(LuxBasicModelUiTests PRIVATE
+            LUX_GLTF_TEST_PLAYER="$<TARGET_FILE:LuxPlayer>")
+        add_test(NAME Editor_gltf_player COMMAND LuxBasicModelUiTests gltf-gpu)
+        set_tests_properties(Editor_gltf_player PROPERTIES LABELS "gpu;editor;assets;gltf"
+            TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;SDL_AUDIO_DRIVER=dummy")
+    else()
+        target_compile_definitions(LuxBasicModelUiTests PRIVATE LUX_GLTF_TEST_PLAYER="")
+    endif()
     foreach(pair
         "LuxSelectionCoreTests|SelectionCoreTest.cpp|Editor_selection_core"
         "LuxInteraction2DTests|Interaction2DTest.cpp|Editor_interaction_2d"

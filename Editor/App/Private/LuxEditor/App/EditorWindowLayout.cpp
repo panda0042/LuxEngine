@@ -439,7 +439,8 @@ void EditorWindow::BuildLayout() {
             OpenProjectScene(path);
         else if (suffix == LuxUI::Latin1String(".cs"))
             OpenScriptFile(path);
-        else if (suffix == LuxUI::Latin1String(".obj") || suffix == LuxUI::Latin1String(".fbx"))
+        else if (suffix == LuxUI::Latin1String(".obj") || suffix == LuxUI::Latin1String(".fbx") ||
+                 LuxEngine::ModelAsset::IsGltfPath(PathUtf8(path)))
             AddModelAsset(path);
     });
 
@@ -543,8 +544,7 @@ void EditorWindow::BuildLayout() {
     meshPath_->setReadOnly(true);
     meshPath_->setPlaceholderText(LUX_UI_TEXT("기본 큐브"));
     meshLayout->addRow(LUX_UI_TEXT("모델"), meshPath_);
-    meshPath_->setToolTip(LUX_UI_TEXT("OBJ·FBX 정적 메시를 지원합니다. FBX 재질·스킨·애니메이션 "
-                                      "자동 가져오기는 개발 중입니다."));
+    meshPath_->setToolTip(LUX_UI_TEXT("OBJ, FBX, 정적 glTF·GLB 모델을 선택할 수 있습니다."));
     auto* meshButtons = new LuxUI::Widget(meshGroup);
     auto* meshButtonsLayout = new LuxUI::HBoxLayout(meshButtons);
     meshButtonsLayout->setContentsMargins(0, 0, 0, 0);
