@@ -307,7 +307,7 @@ void EditorWindow::RefreshAssetFolders() {
     for (; !error && iterator != end && folders.size() < 512; iterator.increment(error)) {
         if (!iterator->is_directory(error))
             continue;
-        const auto name = iterator->path().filename().string();
+        const auto name = PathUtf8(iterator->path().filename());
         if (name.starts_with('.') || name == "out" || name == "build" ||
             name.starts_with("cmake-build")) {
             iterator.disable_recursion_pending();
@@ -315,9 +315,8 @@ void EditorWindow::RefreshAssetFolders() {
         }
         const auto relative = iterator->path().lexically_relative(root);
         const auto parent = folders.find(relative.parent_path());
-        auto* item =
-            new LuxUI::TreeWidgetItem(parent == folders.end() ? all : parent->second,
-                                      {LuxUI::String::fromUtf8(PathUtf8(relative.filename()))});
+        auto* item = new LuxUI::TreeWidgetItem(parent == folders.end() ? all : parent->second,
+                                               {LuxUI::String::fromUtf8(name)});
         item->setData(0, LuxUI::Flags::UserRole,
                       LuxUI::String::fromUtf8(GenericPathUtf8(relative)));
         item->setIcon(0, MakeEditorIcon(EditorIcon::Folder));
