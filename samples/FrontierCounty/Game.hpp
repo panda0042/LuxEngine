@@ -4,6 +4,8 @@
 #include <LuxEngine/Scene/Entity.hpp>
 #include <LuxEngine/Scene/Scene.hpp>
 #include <array>
+#include <map>
+#include <optional>
 #include <string_view>
 
 namespace Frontier {
@@ -50,6 +52,7 @@ public:
     RenderView GetRenderView(double dt, double alpha);
     Vec3 Look() const;
     bool ShowPlayer() const;
+    bool HasTerrainAt(Vec2 position) const;
 
     bool Driving() const {
         return driving_;
@@ -82,7 +85,7 @@ public:
     std::string_view WeatherName() const;
 
     unsigned Bodies() const {
-        return unsigned(fixed_.size() + 1);
+        return unsigned(fixed_.size() + terrain_.size() + 2);
     }
 
     Vec2 PedestrianVelocity(size_t actor) const {
@@ -105,9 +108,12 @@ public:
 
 private:
     void ResetPhysics(World& world);
+    void UpdateTerrain();
     void ResetTruck(Vec3 position, double heading);
+    void RemoveWalker();
     bool BlockedByBuilding(Vec2 from, Vec2 to, double feet) const;
     void MovePlayer(const Controls& input, double dt);
+    void ReadWalker(double dt);
     void Drive(const Controls& input, double dt);
     void AdvanceWeather(double dt);
     void UpdatePeople(double dt);
@@ -117,7 +123,10 @@ private:
     double daySeconds_;
     std::unique_ptr<LuxEngine::Scene> scene_;
     LuxEngine::Entity truck_;
+    LuxEngine::Entity walker_;
     std::vector<LuxEngine::Entity> fixed_;
+    std::map<ChunkKey, LuxEngine::Entity> terrain_;
+    std::optional<std::array<ChunkKey, 2>> terrainCenters_;
     std::vector<Obstacle> obstacles_;
     unsigned collisionRevision_ = 0;
     ChunkKey collisionChunk_;
@@ -125,7 +134,7 @@ private:
     std::array<Vec2, 3> peopleVelocity_{};
     Vec2 playerVelocity_{};
     Vec3 player_{}, camera_{};
-    double up_ = 0, yaw_ = 1.49, pitch_ = -.12, truckYaw_ = 0;
+    double yaw_ = 1.49, pitch_ = -.12, truckYaw_ = 0;
     LuxEngine::TransformComponent previousTruck_;
     Vec2 previousLook_{yaw_, pitch_};
     Vec2 vehicleCameraLook_{};

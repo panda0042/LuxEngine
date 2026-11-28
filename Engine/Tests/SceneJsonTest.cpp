@@ -15,6 +15,55 @@ void Check(bool condition, const char* message) {
         throw std::runtime_error(message);
 }
 
+void CapsuleValidation() {
+    Scene scene;
+    auto entity = scene.CreateEntity("Capsule");
+    auto& capsule = entity.AddComponent<CapsuleCollider3DComponent>();
+    capsule.offset = {.25, -.5, .75};
+    capsule.isTrigger = true;
+    std::string baseline;
+    Check(scene.SerializeToString(baseline), "capsule scene is serializable");
+    const auto data = Json::parse(baseline);
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        auto invalid = data;
+        auto& components = invalid["entities"][0]["components"];
+        if (scenario == 0)
+            components["capsule_collider3d"]["half_height"] = -1;
+        else if (scenario == 1)
+            components["capsule_collider3d"].erase("radius");
+        else
+            components["box_collider3d"] = {
+                {"size", {1, 1, 1}}, {"offset", {0, 0, 0}}, {"trigger", false}};
+        std::string current;
+        Check(!scene.DeserializeFromString(invalid.dump()) && entity.IsValid() &&
+                  scene.SerializeToString(current) && current == baseline,
+              "invalid capsule JSON is rejected without replacing the scene");
+    }
+    Scene loaded;
+    Check(loaded.DeserializeFromString(baseline), "capsule JSON is readable");
+    const auto& roundTrip = loaded.GetComponent<CapsuleCollider3DComponent>(entity.GetId());
+    Check(roundTrip.offset.x == .25 && roundTrip.offset.y == -.5 && roundTrip.offset.z == .75 &&
+              roundTrip.isTrigger,
+          "capsule offset and trigger survive a round trip");
+}
+
+void TerrainValidation() {
+    Scene scene;
+    const auto tile = scene.CreateEntity("Terrain");
+    auto mesh = std::make_shared<TriangleMeshCollider3DData>();
+    mesh->vertices = {{0, 0, 0}, {0, 0, 2}, {2, 1, 0}};
+    mesh->indices = {0, 1, 2};
+    scene.AddComponent<TriangleMeshCollider3DComponent>(tile.GetId(), std::move(mesh));
+    std::string baseline;
+    Check(scene.SerializeToString(baseline), "terrain scene is serializable");
+    auto invalid = Json::parse(baseline);
+    invalid["entities"][0]["components"]["triangle_mesh_collider3d"]["indices"][1] = 7;
+    std::string current;
+    Check(!scene.DeserializeFromString(invalid.dump()) && tile.IsValid() &&
+              scene.SerializeToString(current) && current == baseline,
+          "invalid terrain indices leave the existing scene unchanged");
+}
+
 void Test() {
     Scene scene;
     auto root = scene.CreateEntity("한국어 \"이름\"\n둘째 줄");
@@ -302,6 +351,8 @@ void Test() {
 int main() {
     try {
         Test();
+        CapsuleValidation();
+        TerrainValidation();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

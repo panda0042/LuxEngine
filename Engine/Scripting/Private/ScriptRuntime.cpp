@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cmath>
 #include <coreclr_delegates.h>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <hostfxr.h>
@@ -26,6 +27,13 @@ namespace LuxEngine {
 namespace {
 static_assert(sizeof(TransformComponent) == 9 * sizeof(double));
 static_assert(std::is_standard_layout_v<TransformComponent>);
+static_assert(std::is_standard_layout_v<Managed::ScriptCharacterState3D>);
+static_assert(sizeof(Managed::ScriptCharacterState3D) == 80);
+static_assert(offsetof(Managed::ScriptCharacterState3D, grounded) == 72);
+static_assert(std::is_standard_layout_v<Managed::ScriptRaycastHit3D>);
+static_assert(sizeof(Managed::ScriptRaycastHit3D) == 64);
+static_assert(offsetof(Managed::ScriptRaycastHit3D, point) == 8);
+static_assert(offsetof(Managed::ScriptRaycastHit3D, distance) == 56);
 
 struct WorldState {
     Scene* scene = nullptr;
@@ -109,6 +117,95 @@ int LUX_SCRIPT_CALL SetSpriteColor(uint64 id, uint32 entity, const Vec4* value) 
 
 int LUX_SCRIPT_CALL IsKeyPressed(int key) {
     return Input::IsKeyPressed(key) ? 1 : 0;
+}
+
+template <typename Operation> int InvokePhysics(uint64 id, const Operation& operation) noexcept {
+    try {
+        const auto world = FindWorld(id);
+        return world && operation(*world->scene) ? 1 : 0;
+    } catch (...) {
+        return 0;
+    }
+}
+
+template <typename Operation>
+int InvokeEntityPhysics(uint64 id, uint32 entity, const Operation& operation) noexcept {
+    return InvokePhysics(id,
+                         [&](Scene& scene) { return scene.IsAlive(entity) && operation(scene); });
+}
+
+int LUX_SCRIPT_CALL CharacterMotion(uint64 id, uint32 entity, const Vec3* velocity,
+                                    double jumpSpeed) noexcept {
+    return InvokeEntityPhysics(id, entity, [&](Scene& scene) {
+        return velocity && scene.SetCharacterMotion3D(entity, *velocity, jumpSpeed);
+    });
+}
+
+int LUX_SCRIPT_CALL GetCharacterState(uint64 id, uint32 entity,
+                                      Managed::ScriptCharacterState3D* output) noexcept {
+    if (!output)
+        return 0;
+    *output = {};
+    return InvokeEntityPhysics(id, entity, [&](const Scene& scene) {
+        CharacterController3DState state;
+        if (!scene.GetCharacterState3D(entity, state))
+            return false;
+        *output = {state.position, state.velocity, state.groundNormal, state.grounded ? 1 : 0};
+        return true;
+    });
+}
+
+int LUX_SCRIPT_CALL GetVelocity3D(uint64 id, uint32 entity, Vec3* output) noexcept {
+    if (!output)
+        return 0;
+    *output = {};
+    return InvokeEntityPhysics(id, entity, [&](const Scene& scene) {
+        Vec3 velocity;
+        if (!scene.GetVelocity3D(entity, velocity))
+            return false;
+        *output = velocity;
+        return true;
+    });
+}
+
+int LUX_SCRIPT_CALL SetVelocity3D(uint64 id, uint32 entity, const Vec3* velocity) noexcept {
+    return InvokeEntityPhysics(id, entity, [&](Scene& scene) {
+        return velocity && scene.SetVelocity3D(entity, *velocity);
+    });
+}
+
+int LUX_SCRIPT_CALL AddImpulse3D(uint64 id, uint32 entity, const Vec3* impulse) noexcept {
+    return InvokeEntityPhysics(
+        id, entity, [&](Scene& scene) { return impulse && scene.AddImpulse3D(entity, *impulse); });
+}
+
+int LUX_SCRIPT_CALL IsGrounded3D(uint64 id, uint32 entity) noexcept {
+    return InvokeEntityPhysics(id, entity, [&](const Scene& scene) {
+        CharacterController3DState state;
+        if (scene.GetCharacterState3D(entity, state))
+            return state.grounded;
+        return scene.IsGrounded3D(entity);
+    });
+}
+
+int LUX_SCRIPT_CALL Raycast3D(uint64 id, uint32 ignoreEntity, const Vec3* origin,
+                              const Vec3* direction, float maxDistance, int includeTriggers,
+                              Managed::ScriptRaycastHit3D* output) noexcept {
+    if (!output)
+        return 0;
+    *output = {};
+    if (!origin || !direction)
+        return 0;
+    return InvokePhysics(id, [&](const Scene& scene) {
+        if (ignoreEntity && !scene.IsAlive(ignoreEntity))
+            return false;
+        RaycastHit3D hit;
+        if (!scene.Raycast3D(*origin, *direction, maxDistance, hit, ignoreEntity,
+                             includeTriggers != 0))
+            return false;
+        *output = {hit.entityId, hit.point, hit.normal, hit.distance};
+        return true;
+    });
 }
 
 double LUX_SCRIPT_CALL AnimationCommand(uint64 id, uint32 entity, int operation, const char* text,
@@ -312,7 +409,7 @@ struct DotnetHost {
             error = "C# 스크립트 코어 진입점을 찾을 수 없습니다.";
             return false;
         }
-        const Managed::NativeApi native = {7,
+        const Managed::NativeApi native = {Managed::ScriptAbiVersion,
                                            sizeof(Managed::NativeApi),
                                            IsAlive,
                                            GetTransform,
@@ -321,8 +418,16 @@ struct DotnetHost {
                                            SetSpriteColor,
                                            IsKeyPressed,
                                            AnimationCommand,
-                                           AnimationEventNext};
-        if (!getApi(&native, &api) || api.version != 7 || api.size != sizeof(api)) {
+                                           AnimationEventNext,
+                                           CharacterMotion,
+                                           GetCharacterState,
+                                           GetVelocity3D,
+                                           SetVelocity3D,
+                                           AddImpulse3D,
+                                           IsGrounded3D,
+                                           Raycast3D};
+        if (!getApi(&native, &api) || api.version != Managed::ScriptAbiVersion ||
+            api.size != sizeof(api)) {
             api = {};
             error = "C# 스크립트 ABI가 엔진과 일치하지 않습니다.";
             return false;

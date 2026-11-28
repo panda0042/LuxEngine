@@ -669,6 +669,29 @@ std::string_view NodeName(const ufbx_node& node) {
 bool ModelAsset::Evaluate(double seconds, int32 clip, ModelPose& output, std::string& error) const {
     error.clear();
     try {
+        if (staticGltf_) {
+            Require(std::isfinite(seconds) && clip == -1,
+                    "정적 glTF 모델은 기본 자세만 지원합니다.");
+            ModelPose pose;
+            pose.nodeLocalTransforms.reserve(nodes.size());
+            pose.nodeWorldTransforms.reserve(nodes.size());
+            pose.submeshes.reserve(submeshes.size());
+            pose.deformationPositions.resize(submeshes.size());
+            for (const auto& node : nodes) {
+                pose.nodeLocalTransforms.push_back(node.localTransform);
+                pose.nodeWorldTransforms.push_back(node.worldTransform);
+            }
+            for (size_t index = 0; index < submeshes.size(); ++index) {
+                const auto& mesh = submeshes[index];
+                pose.submeshes.push_back(mesh.vertices);
+                auto& positions = pose.deformationPositions[index];
+                positions.reserve(mesh.vertices.size());
+                for (const auto& vertex : mesh.vertices)
+                    positions.push_back(vertex.position);
+            }
+            output = std::move(pose);
+            return true;
+        }
         Require(impl_ && impl_->scene, "FBX 모델이 로딩되지 않았습니다.");
         Require(std::isfinite(seconds) && clip >= -1 &&
                     (clip == -1 || static_cast<size_t>(clip) < animations.size()),

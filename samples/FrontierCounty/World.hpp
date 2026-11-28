@@ -1,5 +1,6 @@
 #pragma once
 
+#include <LuxEngine/Physics/PhysicsEngine.hpp>
 #include <LuxEngine/Renderer/Renderer3D/Renderer3D.hpp>
 #include <array>
 #include <compare>
@@ -78,6 +79,9 @@ double Height(Vec2 point, unsigned seed);
 bool InLake(Vec2 point);
 Vec3 OnGround(Vec2 point, unsigned seed, double offset = 0);
 ChunkKey ChunkAt(Vec2 point);
+Vec2 ChunkOrigin(ChunkKey key);
+std::shared_ptr<const LuxEngine::TriangleMeshCollider3DData> TerrainCollision(ChunkKey key,
+                                                                              unsigned seed);
 
 class World {
 public:

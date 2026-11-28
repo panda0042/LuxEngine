@@ -11,11 +11,14 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
@@ -26,6 +29,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <map>
+#include <numbers>
 #include <set>
 #include <stdexcept>
 #include <tuple>
@@ -33,6 +37,7 @@
 namespace LuxEngine {
 namespace {
 constexpr size_t MaxBodies = 16384;
+constexpr double MaxBodyExtent = 10000;
 
 void JoltTrace(const char* format, ...) {
     char buffer[2048];
@@ -87,12 +92,91 @@ bool Same(Vec3 a, Vec3 b) {
     return a.x == b.x && a.y == b.y && a.z == b.z;
 }
 
+bool ValidCapsuleDimensions(double radius, double halfHeight) {
+    constexpr double minExtent = PhysicsWorld::MinBodyExtent;
+    return radius >= minExtent && halfHeight >= minExtent &&
+           radius + halfHeight <= MaxBodyExtent * .5;
+}
+
+bool ValidColliderDimensions(const PhysicsBodyDescription& body) {
+    constexpr double minExtent = PhysicsWorld::MinBodyExtent;
+    if (body.shape == ColliderShape3D::Capsule)
+        return ValidCapsuleDimensions(body.radius, body.halfHeight);
+    if (body.shape == ColliderShape3D::TriangleMesh)
+        return body.mesh && Valid(body.size, MaxBodyExtent) && body.size.x != 0 &&
+               body.size.y != 0 && body.size.z != 0;
+    return Valid(body.size, MaxBodyExtent) && body.size.x >= minExtent &&
+           body.size.y >= minExtent && body.size.z >= minExtent;
+}
+
+bool SameColliderDimensions(const PhysicsBodyDescription& first,
+                            const PhysicsBodyDescription& second) {
+    if (first.shape != second.shape)
+        return false;
+    if (first.shape == ColliderShape3D::Capsule)
+        return first.radius == second.radius && first.halfHeight == second.halfHeight;
+    if (first.shape == ColliderShape3D::TriangleMesh)
+        return first.mesh == second.mesh && Same(first.size, second.size);
+    return Same(first.size, second.size);
+}
+
 JPH::Vec3 Vector(Vec3 v) {
     return {static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)};
 }
 
 Vec3 Vector(JPH::Vec3Arg v) {
     return {v.GetX(), v.GetY(), v.GetZ()};
+}
+
+struct MeshBounds {
+    Vec3 minimum{MaxBodyExtent, MaxBodyExtent, MaxBodyExtent};
+    Vec3 maximum{-MaxBodyExtent, -MaxBodyExtent, -MaxBodyExtent};
+
+    bool Include(const Vec3& vertex) {
+        if (!Valid(vertex, MaxBodyExtent))
+            return false;
+        minimum = {std::min(minimum.x, vertex.x), std::min(minimum.y, vertex.y),
+                   std::min(minimum.z, vertex.z)};
+        maximum = {std::max(maximum.x, vertex.x), std::max(maximum.y, vertex.y),
+                   std::max(maximum.z, vertex.z)};
+        return maximum.x - minimum.x <= MaxBodyExtent && maximum.y - minimum.y <= MaxBodyExtent &&
+               maximum.z - minimum.z <= MaxBodyExtent;
+    }
+};
+
+JPH::RefConst<JPH::Shape> CreateTriangleMesh(const TriangleMeshCollider3DData& mesh,
+                                             const Vec3& scale, std::string& error) {
+    if (!PhysicsWorld::ValidTriangleMesh(mesh)) {
+        error = "invalid triangle mesh geometry";
+        return {};
+    }
+    JPH::MeshShapeSettings settings;
+    settings.mTriangleVertices.reserve(mesh.vertices.size());
+    settings.mIndexedTriangles.reserve(mesh.indices.size() / 3);
+    MeshBounds bounds;
+    for (const Vec3& vertex : mesh.vertices) {
+        const Vec3 scaled{vertex.x * scale.x, vertex.y * scale.y, vertex.z * scale.z};
+        if (!bounds.Include(scaled)) {
+            error = "triangle mesh exceeds scaled local bounds";
+            return {};
+        }
+        settings.mTriangleVertices.emplace_back(static_cast<float>(scaled.x),
+                                                static_cast<float>(scaled.y),
+                                                static_cast<float>(scaled.z));
+    }
+    const bool mirrored = (scale.x < 0) ^ (scale.y < 0) ^ (scale.z < 0);
+    for (size_t index = 0; index < mesh.indices.size(); index += 3) {
+        const uint32 a = mesh.indices[index];
+        const uint32 b = mesh.indices[index + 1];
+        const uint32 c = mesh.indices[index + 2];
+        settings.mIndexedTriangles.emplace_back(a, mirrored ? c : b, mirrored ? b : c);
+    }
+    const auto result = settings.Create();
+    if (!result.IsValid()) {
+        error = result.HasError() ? result.GetError().c_str() : "triangle mesh construction failed";
+        return {};
+    }
+    return result.Get();
 }
 
 struct Layers final : JPH::BroadPhaseLayerInterface {
@@ -121,6 +205,18 @@ struct PairFilter final : JPH::ObjectLayerPairFilter {
         return a != 0 || b != 0;
     }
 };
+
+struct BodyQueryFilter final : JPH::BodyFilter {
+    uint32 ignored;
+    bool sensors;
+
+    BodyQueryFilter(uint32 ignoredEntity, bool includeSensors)
+        : ignored(ignoredEntity), sensors(includeSensors) {}
+
+    bool ShouldCollideLocked(const JPH::Body& body) const override {
+        return body.GetUserData() != ignored && (sensors || !body.IsSensor());
+    }
+};
 } // namespace
 
 struct PhysicsWorld::Impl final : JPH::ContactListener {
@@ -131,6 +227,14 @@ struct PhysicsWorld::Impl final : JPH::ContactListener {
         bool movingToTarget = false;
     };
 
+    struct CharacterEntry {
+        JPH::Ref<JPH::CharacterVirtual> character;
+        float radius = 0;
+        float halfHeight = 0;
+        float maxSlope = 0;
+        float verticalVelocity = 0;
+    };
+
     bool planar;
     Layers layers;
     BroadFilter broadFilter;
@@ -139,9 +243,11 @@ struct PhysicsWorld::Impl final : JPH::ContactListener {
     JPH::TempAllocatorImpl allocator{16 * 1024 * 1024};
     JPH::JobSystemSingleThreaded jobs{JPH::cMaxPhysicsJobs};
     std::map<uint32, Entry> entries;
+    std::map<uint32, CharacterEntry> characters;
     std::vector<Collision3DEvent> contacts, began;
     std::set<std::tuple<uint32, uint32, bool>> previousContacts;
     std::string error;
+    std::string characterError;
 
     explicit Impl(bool plane) : planar(plane) {
         system.Init(static_cast<JPH::uint>(MaxBodies), 0, 65536, 16384, layers, broadFilter,
@@ -151,6 +257,7 @@ struct PhysicsWorld::Impl final : JPH::ContactListener {
 
     ~Impl() override {
         system.SetContactListener(nullptr);
+        characters.clear();
         while (!entries.empty())
             Remove(entries.begin()->first);
     }
@@ -172,6 +279,16 @@ struct PhysicsWorld::Impl final : JPH::ContactListener {
             std::erase_if(previousContacts, [id](const auto& pair) {
                 return std::get<0>(pair) == id || std::get<1>(pair) == id;
             });
+    }
+
+    void RestoreKinematicVelocity(Entry& entry) {
+        if (!entry.movingToTarget)
+            return;
+        auto& bodies = system.GetBodyInterface();
+        bodies.SetLinearAndAngularVelocity(entry.body, Vector(entry.description.velocity),
+                                           JPH::Vec3::sZero());
+        entry.state.velocity = Vector(bodies.GetLinearVelocity(entry.body));
+        entry.movingToTarget = false;
     }
 
     void Contact(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold) {
@@ -204,12 +321,35 @@ PhysicsWorld::PhysicsWorld(bool planar) {
 
 PhysicsWorld::~PhysicsWorld() = default;
 
+bool PhysicsWorld::ValidTriangleMesh(const TriangleMeshCollider3DData& mesh) {
+    if (mesh.vertices.size() < 3 || mesh.vertices.size() > MaxTriangleMeshVertices ||
+        mesh.indices.empty() || mesh.indices.size() > MaxTriangleMeshIndices ||
+        mesh.indices.size() % 3 != 0)
+        return false;
+    MeshBounds bounds;
+    for (const Vec3& vertex : mesh.vertices)
+        if (!bounds.Include(vertex))
+            return false;
+    for (size_t index = 0; index < mesh.indices.size(); index += 3) {
+        const uint32 a = mesh.indices[index];
+        const uint32 b = mesh.indices[index + 1];
+        const uint32 c = mesh.indices[index + 2];
+        if (a >= mesh.vertices.size() || b >= mesh.vertices.size() || c >= mesh.vertices.size())
+            return false;
+        const auto base = Vector(mesh.vertices[a]);
+        if ((Vector(mesh.vertices[b]) - base).Cross(Vector(mesh.vertices[c]) - base).IsNearZero())
+            return false;
+    }
+    return true;
+}
+
 bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input) {
     return Synchronize(input, 0);
 }
 
 bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input, double step) {
     impl_->error.clear();
+    impl_->characterError.clear();
     bool valid = true;
     const auto report = [&](uint32 id, const char* reason) {
         valid = false;
@@ -225,12 +365,26 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input, do
             report(id, "duplicate entity ID");
             continue;
         }
+        const auto shape = description.shape;
+        if (shape != ColliderShape3D::Box && shape != ColliderShape3D::Capsule &&
+            shape != ColliderShape3D::TriangleMesh) {
+            report(id, "invalid collider shape");
+            continue;
+        }
+        if (impl_->planar && shape == ColliderShape3D::Capsule) {
+            report(id, "capsule collider requires a 3D physics world");
+            continue;
+        }
+        if (shape == ColliderShape3D::TriangleMesh &&
+            (impl_->planar || description.type != BodyType::Static || description.trigger)) {
+            report(id, "triangle mesh collider requires a non-trigger static 3D body");
+            continue;
+        }
         if (!id || !Valid(description.position, 1e15) || !Valid(description.rotation) ||
-            !Valid(description.velocity, MaxLinearVelocity) || !Valid(description.size, 10000) ||
-            !Valid(description.offset) || description.size.x < MinBodyExtent ||
-            description.size.y < MinBodyExtent || description.size.z < MinBodyExtent ||
-            !std::isfinite(description.mass) || description.mass < .001f ||
-            description.mass > 1000000 || !std::isfinite(description.gravityScale) ||
+            !Valid(description.velocity, MaxLinearVelocity) || !Valid(description.offset) ||
+            !ValidColliderDimensions(description) || !std::isfinite(description.mass) ||
+            description.mass < .001f || description.mass > 1000000 ||
+            !std::isfinite(description.gravityScale) ||
             std::abs(description.gravityScale) > 10000 || description.type < BodyType::Static ||
             description.type > BodyType::Kinematic) {
             report(id, "invalid body type, transform, velocity, mass or collider dimensions "
@@ -261,7 +415,7 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input, do
         auto found = impl_->entries.find(id);
         if (found != impl_->entries.end()) {
             const auto& old = found->second.description;
-            if (old.type != description.type || !Same(old.size, description.size) ||
+            if (old.type != description.type || !SameColliderDimensions(old, description) ||
                 !Same(old.offset, description.offset) || old.mass != description.mass ||
                 old.trigger != description.trigger) {
                 impl_->Remove(id, true);
@@ -269,9 +423,22 @@ bool PhysicsWorld::Synchronize(std::span<const PhysicsBodyDescription> input, do
             }
         }
         if (found == impl_->entries.end()) {
-            const auto half = Vector(description.size * .5f);
-            JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(
-                half, std::min(.02f, .2f * std::min({half.GetX(), half.GetY(), half.GetZ()})));
+            JPH::RefConst<JPH::Shape> shape;
+            if (description.shape == ColliderShape3D::Capsule) {
+                shape = new JPH::CapsuleShape(static_cast<float>(description.halfHeight),
+                                              static_cast<float>(description.radius));
+            } else if (description.shape == ColliderShape3D::TriangleMesh) {
+                std::string error;
+                shape = CreateTriangleMesh(*description.mesh, description.size, error);
+                if (!shape) {
+                    report(id, error.c_str());
+                    continue;
+                }
+            } else {
+                const auto half = Vector(description.size * .5f);
+                shape = new JPH::BoxShape(
+                    half, std::min(.02f, .2f * std::min({half.GetX(), half.GetY(), half.GetZ()})));
+            }
             if (!Same(description.offset, {}))
                 shape = new JPH::RotatedTranslatedShape(Vector(description.offset),
                                                         JPH::Quat::sIdentity(), shape);
@@ -351,9 +518,14 @@ void PhysicsWorld::Remove(uint32 entity) {
 }
 
 void PhysicsWorld::Step(double dt, Vec3 gravity) {
+    Step(dt, gravity, false);
+}
+
+void PhysicsWorld::Step(double dt, Vec3 gravity, bool keepKinematicTargetVelocity) {
     impl_->contacts.clear();
     impl_->began.clear();
     impl_->error.clear();
+    impl_->characterError.clear();
     if (!std::isfinite(dt) || dt <= 0 || dt > .25 || !Valid(gravity)) {
         impl_->error = "Invalid Jolt time step or gravity";
         return;
@@ -374,11 +546,8 @@ void PhysicsWorld::Step(double dt, Vec3 gravity) {
     impl_->previousContacts = std::move(currentContacts);
     auto& bodies = impl_->system.GetBodyInterface();
     for (auto& [id, entry] : impl_->entries) {
-        if (entry.movingToTarget) {
-            bodies.SetLinearAndAngularVelocity(entry.body, Vector(entry.description.velocity),
-                                               JPH::Vec3::sZero());
-            entry.movingToTarget = false;
-        }
+        if (!keepKinematicTargetVelocity)
+            impl_->RestoreKinematicVelocity(entry);
         const auto p = bodies.GetPosition(entry.body);
         entry.state = {{static_cast<double>(p.GetX()), static_cast<double>(p.GetY()),
                         static_cast<double>(p.GetZ())},
@@ -400,6 +569,155 @@ void PhysicsWorld::Step(double dt, Vec3 gravity) {
     }
 }
 
+void PhysicsWorld::RestoreKinematicVelocities() {
+    for (auto& [id, entry] : impl_->entries)
+        impl_->RestoreKinematicVelocity(entry);
+}
+
+bool PhysicsWorld::MoveCharacter(uint32 entity, const CharacterController3DComponent& settings,
+                                 Vec3 position, Vec3 horizontalVelocity, double jumpSpeed,
+                                 double dt, Vec3 gravity, CharacterController3DState& state) {
+    return MoveCharacter(entity, settings, position, horizontalVelocity, jumpSpeed, dt, gravity,
+                         state, {}, false);
+}
+
+bool PhysicsWorld::MoveCharacter(
+    uint32 entity, const CharacterController3DComponent& settings, Vec3 position,
+    Vec3 horizontalVelocity, double jumpSpeed, double dt, Vec3 gravity,
+    CharacterController3DState& state,
+    const std::function<Vec3(uint32, const Vec3&)>& supportMotionFilter,
+    bool preserveVerticalVelocity) {
+    state = {};
+    impl_->characterError.clear();
+    const auto fail = [&](const char* reason) {
+        impl_->characterError = "Jolt character #" + std::to_string(entity) + ": " + reason;
+        return false;
+    };
+    if (!entity || impl_->planar)
+        return fail("character requires a valid entity in a 3D physics world");
+    if (!ValidCapsuleDimensions(settings.radius, settings.halfHeight) ||
+        !(settings.maxSlopeRadians >= 0 && settings.maxSlopeRadians < std::numbers::pi / 2) ||
+        !(settings.stepHeight >= 0 && settings.stepHeight <= MaxBodyExtent))
+        return fail("invalid capsule dimensions, slope or step height");
+    if (!Valid(position, 1e15) || !Valid(horizontalVelocity, MaxLinearVelocity) ||
+        !Valid(gravity) || !(jumpSpeed >= 0 && jumpSpeed <= MaxLinearVelocity) ||
+        !(dt >= 1e-6 && dt <= .25))
+        return fail("invalid position, velocity, jump, gravity or time step");
+    if (impl_->characters.size() >= MaxBodies && !impl_->characters.contains(entity))
+        return fail("16384-character world limit exceeded");
+
+    auto& entry = impl_->characters[entity];
+    const auto radius = static_cast<float>(settings.radius);
+    const auto halfHeight = static_cast<float>(settings.halfHeight);
+    // Jolt treats cosines near one as disabling the slope limit.
+    const auto maxSlope = std::clamp(static_cast<float>(settings.maxSlopeRadians),
+                                     std::acos(std::nextafter(0.9999f, 0.0f)),
+                                     std::nextafter(std::numbers::pi_v<float> * .5f, 0.0f));
+    const JPH::RVec3 start(position.x, position.y, position.z);
+    const auto movingLayer = JPH::ObjectLayer(1);
+    const auto broadFilter = impl_->system.GetDefaultBroadPhaseLayerFilter(movingLayer);
+    const auto layerFilter = impl_->system.GetDefaultLayerFilter(movingLayer);
+    const BodyQueryFilter bodyFilter(entity, false);
+
+    const bool newShape =
+        !entry.character || entry.radius != radius || entry.halfHeight != halfHeight;
+    bool refresh = jumpSpeed > 0;
+    if (newShape) {
+        JPH::CharacterVirtualSettings nativeSettings;
+        nativeSettings.mShape = new JPH::CapsuleShape(halfHeight, radius);
+        nativeSettings.mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), halfHeight);
+        nativeSettings.mMaxSlopeAngle = maxSlope;
+        nativeSettings.mCharacterPadding = std::min(nativeSettings.mCharacterPadding, radius * .2f);
+        nativeSettings.mPredictiveContactDistance =
+            std::min(nativeSettings.mPredictiveContactDistance, radius * .5f);
+        nativeSettings.mCollisionTolerance =
+            std::min(nativeSettings.mCollisionTolerance, radius * .01f);
+        nativeSettings.mMinTimeRemaining = .5e-6f;
+        entry.character = new JPH::CharacterVirtual(&nativeSettings, start, JPH::Quat::sIdentity(),
+                                                    entity, &impl_->system);
+        entry.radius = radius;
+        entry.halfHeight = halfHeight;
+        entry.maxSlope = maxSlope;
+        entry.verticalVelocity = 0;
+        refresh = true;
+    }
+    auto& character = *entry.character;
+    const auto samePositionAxis = [](double current, double requested) {
+        const double magnitude = std::abs(current);
+        const double ulp =
+            std::nextafter(magnitude, std::numeric_limits<double>::infinity()) - magnitude;
+        return std::abs(current - requested) <= std::max(1e-7, 4 * ulp);
+    };
+    const auto current = character.GetPosition();
+    if (!samePositionAxis(current.GetX(), start.GetX()) ||
+        !samePositionAxis(current.GetY(), start.GetY()) ||
+        !samePositionAxis(current.GetZ(), start.GetZ())) {
+        character.SetPosition(start);
+        if (!preserveVerticalVelocity)
+            entry.verticalVelocity = 0;
+        refresh = true;
+    }
+    if (entry.maxSlope != maxSlope) {
+        character.SetMaxSlopeAngle(maxSlope);
+        entry.maxSlope = maxSlope;
+        refresh = true;
+    }
+    const auto groundBody = character.GetGroundBodyID();
+    const bool removedGround =
+        !groundBody.IsInvalid() && !impl_->system.GetBodyInterface().IsAdded(groundBody);
+    if (refresh || removedGround)
+        character.RefreshContacts(broadFilter, layerFilter, bodyFilter, {}, impl_->allocator);
+    else
+        character.UpdateGroundVelocity();
+
+    const bool grounded = character.GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
+    const bool jumping = grounded && jumpSpeed > 0;
+    const auto step = static_cast<float>(dt);
+    const auto oldPosition = character.GetPosition();
+    auto velocity = Vector(horizontalVelocity);
+    velocity.SetY(grounded ? static_cast<float>(jumpSpeed) : entry.verticalVelocity);
+    const auto support = character.GetGroundBodyID();
+    if (grounded) {
+        auto supportVelocity = character.GetGroundVelocity();
+        if (!support.IsInvalid() && supportMotionFilter) {
+            const auto supportEntity =
+                static_cast<uint32>(impl_->system.GetBodyInterface().GetUserData(support));
+            const auto platform = impl_->entries.find(supportEntity);
+            if (platform != impl_->entries.end() && platform->second.body == support &&
+                platform->second.movingToTarget)
+                supportVelocity =
+                    Vector(supportMotionFilter(supportEntity, Vector(supportVelocity)));
+        }
+        velocity += supportVelocity;
+    }
+    velocity += step * Vector(gravity);
+    character.SetLinearVelocity(velocity);
+
+    JPH::CharacterVirtual::ExtendedUpdateSettings movement;
+    const auto stepHeight = static_cast<float>(settings.stepHeight);
+    movement.mWalkStairsStepUp = {0, grounded && !jumping ? stepHeight : 0, 0};
+    movement.mStickToFloorStepDown = {0, jumping ? 0 : -stepHeight, 0};
+    character.ExtendedUpdate(step, Vector(gravity), movement, broadFilter, layerFilter, bodyFilter,
+                             {}, impl_->allocator);
+
+    const auto end = character.GetPosition();
+    const auto delta = end - oldPosition;
+    state.position = {end.GetX(), end.GetY(), end.GetZ()};
+    state.velocity = {delta.GetX() / dt, delta.GetY() / dt, delta.GetZ() / dt};
+    state.grounded = character.GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
+    if (state.grounded)
+        state.groundNormal = Vector(character.GetGroundNormal());
+    entry.verticalVelocity =
+        state.grounded ? 0
+                       : static_cast<float>(std::clamp(state.velocity.y, -double(MaxLinearVelocity),
+                                                       double(MaxLinearVelocity)));
+    return true;
+}
+
+void PhysicsWorld::RemoveCharacter(uint32 entity) {
+    impl_->characters.erase(entity);
+}
+
 std::optional<PhysicsBodyState> PhysicsWorld::GetState(uint32 entity) const {
     const auto it = impl_->entries.find(entity);
     return it == impl_->entries.end() ? std::nullopt : std::optional(it->second.state);
@@ -414,7 +732,7 @@ const std::vector<Collision3DEvent>& PhysicsWorld::BeganContacts() const {
 }
 
 const std::string& PhysicsWorld::GetLastError() const {
-    return impl_->error;
+    return impl_->error.empty() ? impl_->characterError : impl_->error;
 }
 
 bool PhysicsWorld::Raycast(Vec3 origin, Vec3 direction, float maxDistance, RaycastHit3D& hit,
@@ -430,17 +748,7 @@ bool PhysicsWorld::Raycast(Vec3 origin, Vec3 direction, float maxDistance, Rayca
                     static_cast<float>(direction.y / length),
                     static_cast<float>(direction.z / length)};
 
-    struct Filter final : JPH::BodyFilter {
-        uint32 ignored = 0;
-        bool sensors = false;
-
-        bool ShouldCollideLocked(const JPH::Body& body) const override {
-            return body.GetUserData() != ignored && (sensors || !body.IsSensor());
-        }
-    } filter;
-
-    filter.ignored = ignoreEntity;
-    filter.sensors = includeTriggers;
+    const BodyQueryFilter filter(ignoreEntity, includeTriggers);
     const JPH::RRayCast ray(JPH::RVec3(origin.x, origin.y, origin.z), Vector(unit * maxDistance));
     JPH::RayCastResult result;
     if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray, result, {}, {}, filter))

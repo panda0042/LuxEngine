@@ -1,17 +1,21 @@
 // Tests for the Runtime library: LuxPlayer argument parsing, view fitting and a scene file for
 // the LuxPlayer smoke test.
+#include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/ECS/ECS.hpp>
 #include <LuxEngine/Physics/PhysicsEngine.hpp>
 #include <LuxEngine/Runtime/ScenePlayer.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
 #include <SDL3/SDL_timer.h>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <nlohmann/json.hpp>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -44,6 +48,252 @@ void Check(bool ok, const char* message) {
 bool Near(float a, float b) {
     return std::abs(a - b) < 0.001f;
 }
+
+namespace Gltf {
+using namespace LuxEngine;
+
+std::string Utf8Path(const std::filesystem::path& path) {
+    const auto bytes = path.u8string();
+    return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+}
+
+void AppendLittleEndian(std::vector<uint8>& bytes, uint32 value, unsigned count = 4) {
+    for (unsigned i = 0; i < count; ++i)
+        bytes.push_back(static_cast<uint8>(value >> (i * 8)));
+}
+
+void WriteModelBytes(const std::filesystem::path& file, std::span<const uint8> bytes) {
+    std::ofstream stream(file, std::ios::binary);
+    stream.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    Check(bool(stream), "write glTF test data");
+}
+
+std::filesystem::path WriteGltfFixture(const std::filesystem::path& root, bool binary,
+                                       bool secondInstance = false) {
+    using Json = nlohmann::ordered_json;
+    constexpr std::array<uint8, 70> redImage{
+        137, 80,  78, 71, 13, 10,  26,  10, 0,   0,   0,   13,  73,  72,  68,  82, 0, 0,
+        0,   1,   0,  0,  0,  1,   8,   6,  0,   0,   0,   31,  21,  196, 137, 0,  0, 0,
+        13,  73,  68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31,  0,   5,   0,  1, 255,
+        137, 153, 61, 29, 0,  0,   0,   0,  73,  69,  78,  68,  174, 66,  96,  130};
+    std::vector<uint8> bytes;
+    for (float value : {-.6f, -.4f, 0.f, .6f, -.4f, 0.f, 0.f, .6f, 0.f, 0.f, 0.f, 1.f,
+                        0.f,  0.f,  1.f, 0.f, 0.f,  1.f, 0.f, 1.f, 1.f, 1.f, .5f, 0.f})
+        AppendLittleEndian(bytes, std::bit_cast<uint32>(value));
+    for (const auto index : {0u, 1u, 2u})
+        AppendLittleEndian(bytes, index, 2);
+
+    auto json = Json::parse(R"({
+        "asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+        "nodes":[{"name":"Parent","translation":[0.6,0,0],"children":[1]},
+                 {"name":"Triangle","scale":[1.1,0.8,1],"mesh":0}],
+        "buffers":[{"byteLength":102,"uri":"mesh.bin"}],
+        "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36,"target":34962},
+                       {"buffer":0,"byteOffset":36,"byteLength":36,"target":34962},
+                       {"buffer":0,"byteOffset":72,"byteLength":24,"target":34962},
+                       {"buffer":0,"byteOffset":96,"byteLength":6,"target":34963}],
+        "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3",
+                      "min":[-0.6,-0.4,0],"max":[0.6,0.6,0]},
+                     {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+                     {"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},
+                     {"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"}],
+        "meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},
+                                   "indices":3,"material":0}]}],
+        "materials":[{"name":"Paint","pbrMetallicRoughness":{"baseColorTexture":{"index":0},
+                       "metallicFactor":0,"roughnessFactor":0.7},"doubleSided":true}],
+        "textures":[{"source":0}],"images":[{"uri":"paint.png"}]
+    })");
+    if (secondInstance) {
+        json["nodes"][0]["children"].push_back(2);
+        json["nodes"].push_back({{"name", "Second"}, {"translation", {-1.2, 0, 0}}, {"mesh", 0}});
+    }
+    if (!binary) {
+        WriteModelBytes(root / "mesh.bin", bytes);
+        WriteModelBytes(root / "paint.png", redImage);
+        const auto file = root / "triangle.gltf";
+        std::ofstream(file, std::ios::binary) << json.dump();
+        return file;
+    }
+
+    bytes.resize(104);
+    bytes.insert(bytes.end(), redImage.begin(), redImage.end());
+    json["buffers"][0] = {{"byteLength", bytes.size()}};
+    json["bufferViews"].push_back(
+        {{"buffer", 0}, {"byteOffset", 104}, {"byteLength", redImage.size()}});
+    json["images"][0] = {{"bufferView", 4}, {"mimeType", "image/png"}};
+    auto document = json.dump();
+    document.resize((document.size() + 3) & ~size_t{3}, ' ');
+    bytes.resize((bytes.size() + 3) & ~size_t{3});
+    std::vector<uint8> glb;
+    AppendLittleEndian(glb, 0x46546c67);
+    AppendLittleEndian(glb, 2);
+    AppendLittleEndian(glb, static_cast<uint32>(28 + document.size() + bytes.size()));
+    AppendLittleEndian(glb, static_cast<uint32>(document.size()));
+    AppendLittleEndian(glb, 0x4e4f534a);
+    glb.insert(glb.end(), document.begin(), document.end());
+    AppendLittleEndian(glb, static_cast<uint32>(bytes.size()));
+    AppendLittleEndian(glb, 0x004e4942);
+    glb.insert(glb.end(), bytes.begin(), bytes.end());
+    const auto file = root / "triangle.glb";
+    WriteModelBytes(file, glb);
+    return file;
+}
+
+void Assets() {
+    RuntimeFiles files;
+    std::string error;
+    Check(ModelAsset::IsGltfPath("models.with.dots\\SHAPE.GLB") &&
+              ModelAsset::IsGltfPath("nested/shape.gltf") &&
+              !ModelAsset::IsGltfPath("saved.gltf/asset"),
+          "glTF format selection is case-insensitive and uses the filename extension");
+    for (bool binary : {false, true}) {
+        const auto file = WriteGltfFixture(files.root, binary);
+        const auto model = ModelAsset::Load(Utf8Path(file), error);
+        if (!model)
+            throw std::runtime_error(error);
+        Check(model->nodes.size() == 2 && model->submeshes.size() == 1 &&
+                  model->materials.size() == 1 && !model->textures.empty(),
+              "glTF keeps its parent and child nodes, geometry and material");
+        Check(model->sourceDependencies.size() == (binary ? 0 : 2),
+              "only external buffers and textures are exposed as model dependencies");
+        const auto& mesh = model->submeshes.front();
+        const auto& node = model->nodes.at(mesh.node);
+        Check(node.name == "Triangle" && node.parent >= 0 && mesh.vertices.size() == 3 &&
+                  mesh.indices.size() == 3 && mesh.hasTexCoords &&
+                  std::abs(node.worldTransform.TransformPoint({}).x - .6) < .001,
+              "glTF local vertices and hierarchical world transform are available");
+        const auto texture = model->materials.front().baseColorTexture;
+        Check(texture >= 0 && model->materials.front().doubleSided &&
+                  std::abs(model->materials.front().roughness - .7) < .001 &&
+                  (binary ? !model->textures.at(static_cast<size_t>(texture)).embedded.empty()
+                          : !model->textures.at(static_cast<size_t>(texture)).path.empty()),
+              "glTF external texture and GLB embedded texture are represented");
+        ModelPose pose;
+        Check(model->Evaluate(0, -1, pose, error) && pose.submeshes.size() == 1,
+              "a static model supplies its rest pose");
+
+        Scene scene;
+        auto entity = scene.CreateEntity("Model");
+        entity.AddComponent<MeshRendererComponent>().meshPath = Utf8Path(file);
+        const auto view = FitSceneView(scene, 1);
+        Check(std::abs(view.centerX - .6f) < .05f,
+              "whole glTF camera fit includes the parent node transform");
+        entity.GetComponent<MeshRendererComponent>().modelSubmesh = 0;
+        Check(std::abs(FitSceneView(scene, 1).centerX) < .05f,
+              "explicit glTF submesh camera fit uses the authored entity transform");
+        entity.GetComponent<MeshRendererComponent>().modelSubmesh = -1;
+        if (!binary) {
+            std::ofstream(files.root / "mesh.bin", std::ios::binary | std::ios::trunc) << 'x';
+            Check(ModelAsset::Load(Utf8Path(file), error) == model && !error.empty(),
+                  "corrupt external buffer keeps the last valid model with a diagnostic");
+            Check(std::abs(FitSceneView(scene, 1).centerX - view.centerX) < .05f,
+                  "camera fit keeps the last valid hierarchy bounds after a buffer error");
+            Check(std::filesystem::remove(file), "the original glTF can be removed");
+            Check(ModelAsset::Load(Utf8Path(file), error) == model && !error.empty(),
+                  "missing source keeps the last valid model with a diagnostic");
+            WriteGltfFixture(files.root, false);
+            Check(ModelAsset::Load(Utf8Path(file), error) && error.empty(),
+                  "fixed glTF resources load without the previous diagnostic");
+        }
+    }
+    std::ifstream source(files.root / "triangle.gltf", std::ios::binary);
+    auto escaped = nlohmann::ordered_json::parse(source);
+    const auto nested = files.root / "nested";
+    std::filesystem::create_directory(nested);
+    std::filesystem::copy_file(files.root / "paint.png", nested / "paint.png");
+    escaped["buffers"][0]["uri"] = "../mesh.bin";
+    const auto outside = nested / "bad.gltf";
+    std::ofstream(outside) << escaped.dump();
+    Check(!ModelAsset::Load(Utf8Path(outside), error) && !error.empty(),
+          "a glTF buffer cannot escape the model directory");
+}
+
+void PlayerGpu() {
+    RuntimeFiles files;
+    const auto model = WriteGltfFixture(files.root, true, true);
+    const auto path = files.root / "gltf-scene.lux";
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.clearColor = {.01f, .02f, .04f, 1};
+    Check(scene.SetSettings(settings), "set the glTF fixture clear color");
+    auto camera = scene.CreateEntity("Camera");
+    camera.GetComponent<TransformComponent>().position.z = 3;
+    camera.AddComponent<CameraComponent>().isPerspective = true;
+    scene.CreateEntity("glTF Triangle").AddComponent<MeshRendererComponent>().meshPath =
+        Utf8Path(model.filename());
+    Check(scene.Serialize(Utf8Path(path)), "save the GLB reference in the ordinary scene format");
+    ScenePlayerOptions options;
+    options.scenePath = Utf8Path(path);
+    options.width = 320;
+    options.height = 240;
+    ScenePlayer player(options);
+    Check(player.Initialize() && player.LoadedScene(), "open the authored GLB scene in LuxPlayer");
+    const auto hasBothParts = [](const GpuFrameCapture& capture) {
+        std::array<size_t, 2> redPixels{};
+        for (uint32 y = capture.height / 4; y < capture.height * 3 / 4; ++y)
+            for (uint32 x = capture.width / 5; x < capture.width * 4 / 5; ++x) {
+                if (x >= capture.width * 3 / 10 && x < capture.width * 7 / 10)
+                    continue;
+                const auto offset = (static_cast<size_t>(y) * capture.width + x) * 4;
+                const auto red = capture.rgba.at(offset);
+                redPixels[x >= capture.width / 2] += red > 60 &&
+                                                     red > 3 * capture.rgba.at(offset + 1) &&
+                                                     red > 3 * capture.rgba.at(offset + 2);
+            }
+        return redPixels[0] > 20 && redPixels[1] > 20;
+    };
+    const auto checkFrame = [&] {
+        Check(player.GetGpuDevice().RequestFrameCapture() &&
+                  player.RunFrame() == Application::FrameResult::Continue,
+              "draw the GLB scene");
+        GpuFrameCapture capture;
+        Check(player.GetGpuDevice().ReadFrameCapture(capture) && capture.width >= 32 &&
+                  capture.height >= 24,
+              "capture the authored GLB scene");
+        return hasBothParts(capture);
+    };
+    Check(checkFrame(), "both GLB instances retain the hierarchy and embedded base texture");
+    Check(std::filesystem::remove(model), "the active GLB source can be removed");
+    Check(checkFrame(), "both GLB instances stay in place after deletion of the active source");
+    {
+        WriteGltfFixture(files.root, true, true);
+        const auto modelPath = Utf8Path(model);
+        std::string error;
+        const auto snapshot = ModelAsset::Load(modelPath, error);
+        Check(snapshot && error.empty() && snapshot->submeshes.size() == 2,
+              "snapshot the original two-part GLB");
+        auto& gpu = player.GetGpuDevice();
+        Renderer3D::Context context(&gpu);
+        Renderer3D::ScopedContext useContext(context);
+        PerspectiveCamera view(ToRadians(45), 4.0 / 3.0, .1, 100);
+        view.SetPosition({0, 0, 3});
+        view.SetTarget({0, 0, 0});
+        Check(gpu.RequestFrameCapture() && gpu.BeginFrame() == GpuDevice::FrameStart::Ready &&
+                  gpu.Clear(.01f, .02f, .04f, 1),
+              "begin drawing the snapshotted GLB");
+        context.BeginScene(view, settings.render3D, settings.exposure);
+        const auto drawPart = [&](int32 index) {
+            const auto node = snapshot->submeshes[static_cast<size_t>(index)].node;
+            return Renderer3D::DrawGltfSubmesh(modelPath, snapshot->nodes[node].worldTransform, {},
+                                               index, snapshot, {});
+        };
+        Check(drawPart(0), "the first draw uses the two-part snapshot");
+        WriteGltfFixture(files.root, true);
+        const auto replacement = ModelAsset::Load(modelPath, error);
+        Check(replacement && error.empty() && replacement != snapshot &&
+                  replacement->submeshes.size() == 1,
+              "the GLB changes to a valid one-part model between draws");
+        Check(drawPart(1), "the second draw still uses the two-part snapshot");
+        context.EndScene();
+        Check(gpu.EndFrame(), "present the frame drawn from the model snapshot");
+        GpuFrameCapture capture;
+        Check(gpu.ReadFrameCapture(capture) && hasBothParts(capture),
+              "file replacement between draws preserves both parts in the frame");
+    }
+    player.Shutdown();
+}
+} // namespace Gltf
 
 using Args = std::vector<std::string>;
 using LuxEngine::ParseScenePlayerArguments;
@@ -694,6 +944,10 @@ int main(int argc, char** argv) {
             WriteScene(argv[2]);
         else if (suite == "scene-management-gpu")
             return SceneManagementGpu();
+        else if (suite == "gltf")
+            Gltf::Assets();
+        else if (suite == "gltf-gpu")
+            Gltf::PlayerGpu();
         else
             throw std::runtime_error("Unknown suite");
         std::cout << suite << ": " << checks << " checks passed\n";

@@ -1,5 +1,6 @@
 #include <LuxEngine/Physics/PhysicsWorld.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <iostream>
@@ -56,6 +57,272 @@ void Queries() {
     world.Remove(1);
     Check(world.Raycast({}, {1, 0, 0}, 10, hit) && hit.entityId == 2,
           "removed bodies immediately disappear from ray queries");
+}
+
+void CapsuleQueries() {
+    PhysicsWorld world;
+    PhysicsBodyDescription body;
+    body.entity = 1;
+    body.position = {3, 0, 0};
+    body.shape = ColliderShape3D::Capsule;
+    body.radius = .5;
+    body.halfHeight = 1;
+    RaycastHit3D hit;
+    Check(world.Synchronize(std::array{body}) && world.Raycast({}, {1, 0, 0}, 10, hit) &&
+              std::abs(hit.distance - 2.5f) < .01f,
+          "capsule side is one radius from its axis");
+    Check(world.Raycast({3, 4, 0}, {0, -1, 0}, 10, hit) && std::abs(hit.distance - 2.5f) < .01f,
+          "capsule top includes the cylinder and rounded cap");
+
+    body.radius = .75;
+    body.offset.x = .25;
+    body.trigger = true;
+    Check(world.Synchronize(std::array{body}) && !world.Raycast({}, {1, 0, 0}, 10, hit) &&
+              world.Raycast({3.25, 4, 0}, {0, -1, 0}, 10, hit, 0, true) &&
+              std::abs(hit.distance - 2.25f) < .01f,
+          "capsule shape edits and trigger filtering take effect on synchronization");
+    body.shape = ColliderShape3D::Box;
+    body.offset = {};
+    body.trigger = false;
+    Check(world.Synchronize(std::array{body}) && world.Raycast({3, 4, 0}, {0, -1, 0}, 10, hit) &&
+              std::abs(hit.distance - 3.5f) < .01f,
+          "switching shape rebuilds the old native body");
+
+    body.shape = ColliderShape3D::Capsule;
+    body.halfHeight = 0;
+    Check(!world.Synchronize(std::array{body}) && world.BodyCount() == 0,
+          "invalid capsule dimensions remove the old native body");
+    body.halfHeight = 1;
+    PhysicsWorld planar(true);
+    Check(!planar.Synchronize(std::array{body}) && planar.BodyCount() == 0,
+          "a planar physics world rejects a 3D capsule");
+}
+
+void CapsuleSceneRoundTrip() {
+    Scene authored;
+    auto floor = authored.CreateEntity("Floor");
+    floor.AddComponent<BoxCollider3DComponent>().size = {10, 1, 10};
+    auto capsule = authored.CreateEntity("Capsule");
+    capsule.GetComponent<TransformComponent>().position.y = 5;
+    auto& shape = capsule.AddComponent<CapsuleCollider3DComponent>();
+    shape.radius = .4;
+    shape.halfHeight = .6;
+    capsule.AddComponent<Rigidbody3DComponent>();
+    const auto capsuleId = capsule.GetId();
+
+    std::string saved;
+    Scene scene;
+    Check(authored.SerializeToString(saved) && scene.DeserializeFromString(saved),
+          "capsule scene saves and reloads");
+    const auto& loaded = scene.GetComponent<CapsuleCollider3DComponent>(capsuleId);
+    Check(loaded.radius == .4 && loaded.halfHeight == .6 && !loaded.isTrigger,
+          "capsule parameters round trip");
+    for (int step = 0; step < 120; ++step)
+        scene.OnUpdate(scene.GetSettings().fixedStep);
+    Check(scene.GetLastPhysicsError3D().empty() && scene.IsGrounded3D(capsuleId) &&
+              std::abs(scene.GetWorldTransform(capsuleId).position.y - 1.5) < .04,
+          "reloaded capsule rests on a box floor at the expected height");
+    RaycastHit3D hit;
+    Check(scene.Raycast3D({0, 5, 0}, {0, -1, 0}, 6, hit) && hit.entityId == capsuleId,
+          "reloaded capsule can be queried");
+    scene.RemoveComponent<CapsuleCollider3DComponent>(capsuleId);
+    Check(scene.Raycast3D({0, 5, 0}, {0, -1, 0}, 6, hit) && hit.entityId == floor.GetId(),
+          "removing the capsule component immediately removes the native body");
+}
+
+void CharacterMovement() {
+    Scene authored;
+    const auto box = [&](Vec3 position, Vec3 size) {
+        auto entity = authored.CreateEntity("Obstacle");
+        entity.GetComponent<TransformComponent>().position = position;
+        entity.AddComponent<BoxCollider3DComponent>().size = size;
+    };
+    box({0, -.5, 0}, {18, 1, 18});
+    box({-.75, .11, 0}, {1.5, .22, 4});
+    box({2.3, 1, 0}, {.3, 2, 8});
+    auto character = authored.CreateEntity("Walker");
+    character.GetComponent<TransformComponent>().position = {-3, 1, 0};
+    character.AddComponent<CharacterController3DComponent>();
+    const auto id = character.GetId();
+    std::string saved;
+    Scene scene;
+    Check(authored.SerializeToString(saved) && scene.DeserializeFromString(saved),
+          "a playable character scene can be saved and loaded");
+    const auto tick = [&] { scene.OnUpdate(scene.GetSettings().fixedStep); };
+    CharacterController3DState state;
+    for (int step = 0; step < 12; ++step)
+        tick();
+    Check(scene.GetCharacterState3D(id, state) && state.grounded,
+          "a character finds the floor while idle");
+    Check(scene.SetCharacterMotion3D(id, {3, 0, 0}), "a character accepts horizontal input");
+    double stepHeight = state.position.y;
+    for (int step = 0; step < 120; ++step) {
+        tick();
+        Check(scene.GetCharacterState3D(id, state), "character state remains available");
+        stepHeight = std::max(stepHeight, state.position.y);
+    }
+    Check(stepHeight > 1.07 && state.position.x > 1.5 && state.position.x < 1.95,
+          "the character climbs the low step and stops at the wall");
+    Check(scene.SetCharacterMotion3D(id, {2, 0, 2}), "a character accepts diagonal input");
+    for (int step = 0; step < 20; ++step)
+        tick();
+    Check(scene.GetCharacterState3D(id, state) && state.position.x < 1.95 && state.position.z > .4,
+          "the character slides along a wall on diagonal input");
+    Check(scene.SetCharacterMotion3D(id, {}, 5), "a grounded character accepts a jump");
+    for (int step = 0; step < 10; ++step)
+        tick();
+    Check(scene.GetCharacterState3D(id, state) && !state.grounded && state.position.y > 1.35 &&
+              scene.GetLastPhysicsError3D().empty(),
+          "the character rises and leaves contact on a jump");
+    Check(scene.SetCharacterMotion3D(id, {}, 5), "an airborne jump request is queued");
+    double peak = state.position.y;
+    for (int step = 0; step < 70; ++step) {
+        tick();
+        Check(scene.GetCharacterState3D(id, state), "jump test character state remains available");
+        peak = std::max(peak, state.position.y);
+    }
+    Check(state.grounded && peak < 2.3,
+          "airborne jump requests neither extend the jump nor replay on landing");
+    scene.RemoveComponent<CharacterController3DComponent>(id);
+    Check(!scene.GetCharacterState3D(id, state) && !scene.SetCharacterMotion3D(id, {}),
+          "removing the controller invalidates its gameplay controls");
+}
+
+void CharacterSlopeLimits() {
+    const auto onSlope = [](double angle) {
+        Scene scene;
+        auto floor = scene.CreateEntity("Floor");
+        floor.GetComponent<TransformComponent>().position.y = -.5;
+        floor.AddComponent<BoxCollider3DComponent>().size = {18, 1, 18};
+        auto ramp = scene.CreateEntity("Ramp");
+        ramp.GetComponent<TransformComponent>().rotation.z = angle;
+        ramp.AddComponent<BoxCollider3DComponent>().size = {8, .25, 4};
+        auto walker = scene.CreateEntity("Walker");
+        walker.GetComponent<TransformComponent>().position = {-1.5, 1, 0};
+        walker.AddComponent<CharacterController3DComponent>().stepHeight = 0;
+        Check(scene.SetCharacterMotion3D(walker.GetId(), {2, 0, 0}), "set slope test motion");
+        for (int step = 0; step < 93; ++step)
+            scene.OnUpdate(scene.GetSettings().fixedStep);
+        CharacterController3DState state;
+        Check(scene.GetCharacterState3D(walker.GetId(), state) &&
+                  scene.GetLastPhysicsError3D().empty(),
+              "slope test character has a valid state");
+        return state;
+    };
+    const auto shallow = onSlope(ToRadians(20));
+    const auto steep = onSlope(ToRadians(60));
+    Check(shallow.position.x > 1 && shallow.position.y > 1.25 && shallow.grounded &&
+              steep.position.x < .3 && steep.position.y < 1.15,
+          "walkable slopes climb and slopes beyond the limit block ascent");
+}
+
+void CharacterLosesRemovedSupport() {
+    PhysicsWorld world;
+    PhysicsBodyDescription platform;
+    platform.entity = 1;
+    platform.type = BodyType::Kinematic;
+    platform.position.y = -.5;
+    platform.size = {5, 1, 5};
+    platform.velocity.x = 2;
+    Check(world.Synchronize(std::array{platform}), "create moving character support");
+    constexpr double step = 1.0 / 60;
+    const Vec3 gravity{0, -9.81, 0};
+    CharacterController3DState state;
+    state.position = {0, .92, 0};
+    for (int tick = 0; tick < 20; ++tick) {
+        world.Step(step, gravity);
+        const auto start = state.position;
+        Check(world.MoveCharacter(2, {}, start, {}, 0, step, gravity, state),
+              "move a character above an active platform");
+    }
+    Check(state.grounded && state.velocity.x > 1,
+          "the character inherits the moving floor velocity");
+    const auto lastPosition = state.position;
+    world.Remove(1);
+    Check(world.MoveCharacter(2, {}, lastPosition, {}, 0, step, gravity, state) &&
+              !state.grounded && std::abs(state.position.x - lastPosition.x) < .001,
+          "removing the floor clears the cached support on the next move");
+}
+
+void CharacterKeepsLargeWorldVerticalVelocity() {
+    for (double origin : {-1e12, 1e12}) {
+        Scene scene;
+        auto settings = scene.GetSettings();
+        settings.overrideGravity = true;
+        settings.gravity3D = {0, -9.81, 0};
+        Check(scene.SetSettings(settings), "apply large-world character gravity");
+        auto parent = scene.CreateEntity("Distant rotated parent");
+        auto& transform = parent.GetComponent<TransformComponent>();
+        transform.position = {origin, 0, -origin};
+        transform.rotation.y = .3;
+        auto character = scene.CreateEntity("Character");
+        auto& position = character.GetComponent<TransformComponent>().position;
+        position = {2.1, 5, 3.2};
+        character.AddComponent<CharacterController3DComponent>();
+        const auto characterId = character.GetId();
+        Check(scene.SetParent(characterId, parent.GetId(), false) &&
+                  scene.SetCharacterMotion3D(characterId, {.92, 0, .37}),
+              "move under a distant rotated parent");
+        constexpr int steps = 30;
+        const double dt = settings.fixedStep;
+        for (int i = 0; i < steps; ++i)
+            scene.OnUpdate(dt);
+        CharacterController3DState state;
+        const double expectedVelocity = settings.gravity3D.y * dt * steps;
+        const double expectedHeight = 5 + expectedVelocity * dt * (steps + 1) / 2;
+        Check(scene.GetCharacterState3D(characterId, state) && !state.grounded &&
+                  std::abs(state.velocity.y - expectedVelocity) < .1 &&
+                  std::abs(state.position.y - expectedHeight) < .03 &&
+                  scene.GetLastPhysicsError3D().empty(),
+              "large-world pose round trips preserve character acceleration");
+        position.y += 3;
+        scene.OnUpdate(dt);
+        Check(scene.GetCharacterState3D(characterId, state) &&
+                  std::abs(state.velocity.y - settings.gravity3D.y * dt) < .05 &&
+                  state.position.y > expectedHeight + 2.9,
+              "an authored teleport still resets character falling velocity");
+    }
+}
+
+void StreamingTerrainCollision() {
+    Scene authored;
+    const auto chunk = [&](double x, double farHeight) {
+        auto tile = authored.CreateEntity("Terrain");
+        tile.GetComponent<TransformComponent>().position.x = x;
+        auto geometry = std::make_shared<TriangleMeshCollider3DData>();
+        geometry->vertices = {{0, 0, 0}, {0, 0, 2}, {2, farHeight, 0}, {2, farHeight, 2}};
+        geometry->indices = {0, 1, 2, 2, 1, 3};
+        tile.AddComponent<TriangleMeshCollider3DComponent>(std::move(geometry));
+        return tile.GetId();
+    };
+    const auto left = chunk(0, 0);
+    const auto right = chunk(2, .8);
+    auto character = authored.CreateEntity("Terrain walker");
+    character.GetComponent<TransformComponent>().position = {.5, 1, 1};
+    character.AddComponent<CharacterController3DComponent>();
+    const auto actor = character.GetId();
+    Scene scene;
+    std::string saved;
+    Check(authored.SerializeToString(saved) && scene.DeserializeFromString(saved),
+          "terrain collision survives scene storage");
+    const auto tick = [&] { scene.OnUpdate(scene.GetSettings().fixedStep); };
+    tick();
+    RaycastHit3D hit;
+    Check(scene.Raycast3D({1.99, 3, 1}, {0, -1, 0}, 6, hit) && hit.entityId == left &&
+              std::abs(hit.point.y) < .01 && scene.Raycast3D({3, 3, 1}, {0, -1, 0}, 6, hit) &&
+              hit.entityId == right && std::abs(hit.point.y - .4) < .01,
+          "render-style triangles are queryable on either side of a chunk boundary");
+    Check(scene.SetCharacterMotion3D(actor, {2, 0, 0}), "set terrain walking input");
+    for (int step = 0; step < 77; ++step)
+        tick();
+    CharacterController3DState state;
+    Check(scene.GetCharacterState3D(actor, state) && state.grounded && state.position.x > 2.65 &&
+              state.position.y > 1.17 && scene.GetLastPhysicsError3D().empty(),
+          "the character walks from a flat tile to an uphill neighboring tile");
+    scene.RemoveComponent<TriangleMeshCollider3DComponent>(right);
+    Check(!scene.Raycast3D({3, 3, 1}, {0, -1, 0}, 6, hit) &&
+              scene.Raycast3D({1, 3, 1}, {0, -1, 0}, 6, hit) && hit.entityId == left,
+          "evicting one terrain chunk removes its collider and keeps its neighbor queryable");
 }
 
 void LargeWorldQueries() {
@@ -305,6 +572,145 @@ void KinematicTransformCarriesBox(uint32 substeps) {
           "a served kinematic target does not leave residual velocity");
 }
 
+void KinematicTransformCarriesCharacter(uint32 substeps, bool parented) {
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.physicsSubsteps = substeps;
+    Check(scene.SetSettings(settings), "apply kinematic character test substeps");
+    auto platform = scene.CreateEntity("Kinematic platform");
+    platform.AddComponent<BoxCollider3DComponent>().size = {12, 1, 12};
+    platform.AddComponent<Rigidbody3DComponent>().type = BodyType::Kinematic;
+    auto character = scene.CreateEntity("Character");
+    character.AddComponent<CharacterController3DComponent>();
+    character.GetComponent<TransformComponent>().position.y = 1.45;
+    if (parented)
+        Check(scene.SetParent(character.GetId(), platform.GetId(), false),
+              "parent the character to its supporting platform");
+
+    const double dt = settings.fixedStep;
+    for (int i = 0; i < 60; ++i)
+        scene.OnUpdate(dt);
+    CharacterController3DState state;
+    Check(scene.GetCharacterState3D(character.GetId(), state) && state.grounded,
+          "character is resting on the kinematic platform");
+    auto& position = platform.GetComponent<TransformComponent>().position;
+    for (int i = 0; i < 90; ++i) {
+        position.x += dt;
+        scene.OnUpdate(dt);
+    }
+    Vec3 velocity;
+    Check(scene.GetCharacterState3D(character.GetId(), state) && state.grounded &&
+              std::abs(state.position.x - position.x) < .1 &&
+              scene.GetVelocity3D(platform.GetId(), velocity) && std::abs(velocity.x) < .001,
+          "a transform-driven platform carries the character exactly once");
+    const double characterX = state.position.x;
+    for (int i = 0; i < 30; ++i)
+        scene.OnUpdate(dt);
+    Check(scene.GetCharacterState3D(character.GetId(), state) && state.grounded &&
+              std::abs(state.position.x - characterX) < .01 && std::abs(position.x - 1.5) < .01,
+          "the platform and character stop when the position target stops moving");
+    if (parented) {
+        Check(scene.SetVelocity3D(platform.GetId(), {1, 0, 0}), "drive the platform by velocity");
+        for (int i = 0; i < 30; ++i)
+            scene.OnUpdate(dt);
+        Check(scene.GetCharacterState3D(character.GetId(), state) && state.grounded &&
+                  std::abs(state.position.x - position.x) < .1 && std::abs(position.x - 2) < .01,
+              "a velocity-driven platform still transfers motion to its parented character");
+    }
+}
+
+void SharedGroupCarriesCharacter(uint32 substeps) {
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.physicsSubsteps = substeps;
+    Check(scene.SetSettings(settings), "apply moving group substeps");
+    auto group = scene.CreateEntity("Moving group");
+    auto platform = scene.CreateEntity("Kinematic platform");
+    platform.AddComponent<BoxCollider3DComponent>().size = {12, 1, 12};
+    platform.AddComponent<Rigidbody3DComponent>().type = BodyType::Kinematic;
+    auto character = scene.CreateEntity("Character");
+    character.AddComponent<CharacterController3DComponent>();
+    character.GetComponent<TransformComponent>().position.y = 1.45;
+    Check(scene.SetParent(platform.GetId(), group.GetId(), false) &&
+              scene.SetParent(character.GetId(), group.GetId(), false),
+          "the platform and character are siblings in a moving group");
+
+    const double dt = settings.fixedStep;
+    for (int i = 0; i < 60; ++i)
+        scene.OnUpdate(dt);
+    const auto characterFollows = [&] {
+        CharacterController3DState state;
+        const double platformX = scene.GetWorldTransform(platform.GetId()).position.x;
+        return scene.GetCharacterState3D(character.GetId(), state) && state.grounded &&
+               std::abs(state.position.x - platformX) < .1;
+    };
+    auto& groupPosition = group.GetComponent<TransformComponent>().position;
+    auto& platformPosition = platform.GetComponent<TransformComponent>().position;
+    for (int i = 0; i < 90; ++i) {
+        groupPosition.x += dt;
+        scene.OnUpdate(dt);
+    }
+    Check(characterFollows(), "siblings inherit the common group motion exactly once");
+    for (int i = 0; i < 30; ++i) {
+        platformPosition.x += dt;
+        scene.OnUpdate(dt);
+    }
+    Check(characterFollows(), "platform-local motion still carries a sibling character");
+    for (int i = 0; i < 30; ++i) {
+        groupPosition.x += dt;
+        platformPosition.x += 2 * dt;
+        scene.OnUpdate(dt);
+    }
+    Check(characterFollows(), "shared translation and platform-local motion contribute once each");
+}
+
+void ParentedCharacterKeepsJumpVelocity(uint32 substeps) {
+    Scene scene;
+    auto settings = scene.GetSettings();
+    settings.overrideGravity = true;
+    settings.gravity3D = {0, -9.81, 0};
+    settings.physicsSubsteps = substeps;
+    Check(scene.SetSettings(settings), "apply parented jump settings");
+    auto platform = scene.CreateEntity("Kinematic platform");
+    platform.AddComponent<BoxCollider3DComponent>().size = {12, 1, 12};
+    platform.AddComponent<Rigidbody3DComponent>().type = BodyType::Kinematic;
+    auto character = scene.CreateEntity("Character");
+    character.AddComponent<CharacterController3DComponent>();
+    auto& local = character.GetComponent<TransformComponent>().position;
+    local.y = 1.45;
+    Check(scene.SetParent(character.GetId(), platform.GetId(), false),
+          "parent the jumping character to the platform");
+
+    const double dt = settings.fixedStep;
+    for (int i = 0; i < 60; ++i)
+        scene.OnUpdate(dt);
+    CharacterController3DState state;
+    Check(scene.GetCharacterState3D(character.GetId(), state) && state.grounded,
+          "parented character rests before jumping");
+    constexpr double jumpSpeed = 5;
+    constexpr int steps = 10;
+    const double startingHeight = state.position.y;
+    Check(scene.SetCharacterMotion3D(character.GetId(), {}, jumpSpeed), "queue parented jump");
+    auto& platformPosition = platform.GetComponent<TransformComponent>().position;
+    for (int i = 0; i < steps; ++i) {
+        platformPosition.x += dt;
+        scene.OnUpdate(dt);
+    }
+    Check(scene.GetCharacterState3D(character.GetId(), state) && !state.grounded &&
+              state.position.y - startingHeight > .58 &&
+              std::abs(state.velocity.y - (jumpSpeed + settings.gravity3D.y * dt * steps)) < .1 &&
+              std::abs(state.position.x - platformPosition.x) < .02,
+          "moving parents preserve the airborne character's vertical momentum");
+    const double heightBeforeTeleport = state.position.y;
+    local.y += 3;
+    platformPosition.x += dt;
+    scene.OnUpdate(dt);
+    Check(scene.GetCharacterState3D(character.GetId(), state) &&
+              state.position.y > heightBeforeTeleport + 2.9 &&
+              std::abs(state.velocity.y - settings.gravity3D.y * dt) < .05,
+          "editing position within a moving parent is still a teleport");
+}
+
 void CapacityAndReplacement() {
     PhysicsWorld world;
     std::vector<PhysicsBodyDescription> bodies(16384);
@@ -549,12 +955,26 @@ void FastBodyStaysInSimulation() {
 int main() {
     try {
         Queries();
+        CapsuleQueries();
+        CapsuleSceneRoundTrip();
+        CharacterMovement();
+        CharacterSlopeLimits();
+        CharacterLosesRemovedSupport();
+        CharacterKeepsLargeWorldVerticalVelocity();
+        StreamingTerrainCollision();
         LargeWorldQueries();
         Diagnostics();
         MotionAndEdits();
         GameplayControl();
-        for (const uint32 substeps : {1, 2, 4, 8})
+        for (const uint32 substeps : {1, 2, 4, 8}) {
             KinematicTransformCarriesBox(substeps);
+            KinematicTransformCarriesCharacter(substeps, false);
+            KinematicTransformCarriesCharacter(substeps, true);
+        }
+        ParentedCharacterKeepsJumpVelocity(1);
+        ParentedCharacterKeepsJumpVelocity(8);
+        SharedGroupCarriesCharacter(1);
+        SharedGroupCarriesCharacter(8);
         CapacityAndReplacement();
         StableContactIdentity();
         PlanarColliderHierarchy();

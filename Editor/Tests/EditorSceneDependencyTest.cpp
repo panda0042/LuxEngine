@@ -1,11 +1,14 @@
 #include <LuxEditor/Project/EditorProject.hpp>
 #include <LuxEditor/Project/PathEncoding.hpp>
+#include <LuxEditor/Project/ProjectArchive.hpp>
 #include <LuxEditor/Scene/SceneDependencies.hpp>
 #include <LuxEngine/Assets/AssetManager.hpp>
 #include <LuxEngine/Assets/ModelAsset.hpp>
 #include <LuxEngine/EntryPoint.hpp>
 #include <LuxEngine/Scene/Entity.hpp>
+#include <LuxEngine/Scene/SceneManager.hpp>
 #include <LuxUI/Widgets.hpp>
+#include <bit>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -161,6 +164,77 @@ void TestMeshDependencies() {
     mesh.meshPath = PathUtf8(file.parent_path() / "Missing.obj");
     RejectWithoutMutation(fixture, scene,
                           "missing mesh dependencies are rejected before game builds");
+}
+
+void TestGltfDependencies() {
+    Fixture fixture;
+    const auto root = fixture.project.GetFile().parent_path();
+    const auto assets = root / "Assets" / PathFromUtf8("한글 모델");
+    fs::create_directories(assets);
+    const auto file = assets / "Triangle.gltf";
+    const auto buffer = assets / "geometry.bin";
+    const auto imageFile = assets / "paint.png";
+    {
+        std::ofstream binary(buffer, std::ios::binary);
+        for (const float value :
+             {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f}) {
+            const auto bits = std::bit_cast<uint32>(value);
+            for (unsigned byte = 0; byte < 4; ++byte)
+                binary.put(static_cast<char>((bits >> (byte * 8)) & 0xff));
+        }
+        Check(static_cast<bool>(binary), "glTF external buffer fixture writes");
+    }
+    LuxUI::Image image(1, 1, LuxUI::Image::Format_RGBA8888);
+    image.fill(LuxUI::Color(255, 80, 30));
+    Check(image.save(LuxUI::String::fromUtf8(PathUtf8(imageFile)), "PNG"),
+          "glTF external image fixture writes");
+    const auto writeModel = [&file](std::string_view bufferUri) {
+        std::ofstream(file) << R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+            "nodes":[{"mesh":0}],"buffers":[{"uri":")"
+                            << bufferUri << R"(","byteLength":60}],
+            "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},
+                           {"buffer":0,"byteOffset":36,"byteLength":24}],
+            "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3",
+                          "min":[0,0,0],"max":[1,1,0]},
+                         {"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"}],
+            "meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},"material":0}]}],
+            "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],
+            "textures":[{"source":0}],"images":[{"uri":"paint.png"}]})";
+    };
+    writeModel("geometry.bin");
+    Scene scene;
+    auto& mesh = scene.CreateEntity("glTF triangle").AddComponent<MeshRendererComponent>();
+    mesh.meshPath = PathUtf8(file);
+    std::string error;
+    Check(ValidateProjectSceneReferences(fixture.project, scene, error),
+          "a whole glTF model and its binary and image dependencies are accepted");
+    mesh.modelSubmesh = 0;
+    Check(SceneManager::Save(scene, fixture.project.GetSceneFile(), {}, error) &&
+              ValidateProjectScenes(fixture.project, error),
+          "a saved project can build with an explicit glTF submesh");
+    const auto archive = fixture.root / "art.luxpack";
+    Check(ExportProject(fixture.project, archive, error), "export a project with glTF contents");
+    const auto imported = ImportProject(archive, fixture.root / "imported", error);
+    Check(imported && ValidateProjectScenes(*imported, error),
+          "a relocated project keeps its glTF buffers and images");
+    mesh.modelSubmesh = 1;
+    RejectWithoutMutation(fixture, scene, "an unavailable glTF submesh is rejected");
+    mesh.modelSubmesh = -1;
+    const auto prepared = ModelAsset::Load(mesh.meshPath, error);
+    Check(prepared && error.empty(), "valid glTF remains alive in the model cache");
+    fs::rename(buffer, assets / "removed.bin");
+    RejectWithoutMutation(fixture, scene,
+                          "a missing external buffer is rejected despite a live cached model");
+    fs::rename(assets / "removed.bin", buffer);
+    fs::create_directory(assets / ".lux");
+    fs::copy_file(buffer, assets / ".lux/geometry.bin");
+    writeModel(".lux/geometry.bin");
+    RejectWithoutMutation(fixture, scene,
+                          "glTF buffers excluded from project export cannot be dependencies");
+    writeModel("geometry.bin");
+    std::ofstream(imageFile, std::ios::binary | std::ios::trunc) << "broken PNG";
+    Check(!ValidateProjectScenes(fixture.project, error) && !error.empty(),
+          "game build validation rejects a corrupt external glTF image");
 }
 
 void TestAnimatedModelDependencies() {
@@ -350,6 +424,7 @@ int RunDependencyChecks(int, char**) {
     try {
         TestSourcesAndSnapshots();
         TestMeshDependencies();
+        TestGltfDependencies();
         TestAnimatedModelDependencies();
         TestEnvironmentDependencies();
         TestTextureDependencies();

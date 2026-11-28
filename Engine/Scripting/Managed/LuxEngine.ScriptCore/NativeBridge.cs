@@ -20,6 +20,14 @@ internal unsafe struct NativeApi {
     public delegate* unmanaged[Cdecl]<int, int> IsKeyPressed;
     public delegate* unmanaged[Cdecl]<ulong, uint, int, byte*, int, double, double> Animation;
     public delegate* unmanaged[Cdecl]<ulong, uint, byte*, int, int> AnimationEvent;
+    public delegate* unmanaged[Cdecl]<ulong, uint, Vector3d*, double, int> CharacterMotion;
+    public delegate* unmanaged[Cdecl]<ulong, uint, CharacterState3D*, int> GetCharacterState;
+    public delegate* unmanaged[Cdecl]<ulong, uint, Vector3d*, int> GetVelocity3D;
+    public delegate* unmanaged[Cdecl]<ulong, uint, Vector3d*, int> SetVelocity3D;
+    public delegate* unmanaged[Cdecl]<ulong, uint, Vector3d*, int> AddImpulse3D;
+    public delegate* unmanaged[Cdecl]<ulong, uint, int> IsGrounded3D;
+    public delegate* unmanaged[Cdecl]<ulong, uint, Vector3d*, Vector3d*, float, int, RaycastHit3D*, int>
+        Raycast3D;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -70,6 +78,7 @@ public static unsafe class NativeBridge {
     }
 
     private static NativeApi native;
+    private const uint ScriptAbiVersion = 8;
     private static readonly Dictionary<ulong, World> worlds = new();
     private static ulong nextId;
     private static string lastError = string.Empty;
@@ -89,11 +98,11 @@ public static unsafe class NativeBridge {
                 return 0;
             // Check the fixed header before reading callbacks from a potentially older host.
             uint* header = (uint*)nativeApi;
-            if (header[0] != 7 || header[1] != sizeof(NativeApi))
+            if (header[0] != ScriptAbiVersion || header[1] != sizeof(NativeApi))
                 return 0;
             native = *(NativeApi*)nativeApi;
             *(ManagedApi*)managedApi =
-                new ManagedApi { Version = 7,           Size = (uint)sizeof(ManagedApi),
+                new ManagedApi { Version = ScriptAbiVersion, Size = (uint)sizeof(ManagedApi),
                                  Load = &Load,          Attach = &Attach,
                                  SetFields = &SetFields, Detach = &Detach, Update = &Update,
                                  Unload = &Unload,      Describe = &Describe,
@@ -120,6 +129,46 @@ public static unsafe class NativeBridge {
     internal static void SetTransform(ulong world, uint entity, Transform value) {
         if (native.SetTransform(world, entity, &value) == 0)
             throw new InvalidOperationException("The entity transform is invalid or unavailable.");
+    }
+
+    internal static bool SetCharacterMotion3D(ulong world, uint entity, Vector3d horizontalVelocity,
+                                               double jumpSpeed) {
+        return native.CharacterMotion(world, entity, &horizontalVelocity, jumpSpeed) != 0;
+    }
+
+    internal static bool TryGetCharacterState3D(ulong world, uint entity, out CharacterState3D state) {
+        CharacterState3D value = new();
+        bool found = native.GetCharacterState(world, entity, &value) != 0;
+        state = found ? value : default;
+        return found;
+    }
+
+    internal static bool TryGetVelocity3D(ulong world, uint entity, out Vector3d velocity) {
+        Vector3d value;
+        bool found = native.GetVelocity3D(world, entity, &value) != 0;
+        velocity = found ? value : default;
+        return found;
+    }
+
+    internal static bool SetVelocity3D(ulong world, uint entity, Vector3d velocity) {
+        return native.SetVelocity3D(world, entity, &velocity) != 0;
+    }
+
+    internal static bool AddImpulse3D(ulong world, uint entity, Vector3d impulse) {
+        return native.AddImpulse3D(world, entity, &impulse) != 0;
+    }
+
+    internal static bool IsGrounded3D(ulong world, uint entity) {
+        return native.IsGrounded3D(world, entity) != 0;
+    }
+
+    internal static bool Raycast3D(ulong world, uint entity, Vector3d origin, Vector3d direction,
+                                   float maxDistance, bool includeTriggers, out RaycastHit3D hit) {
+        RaycastHit3D value;
+        bool found = native.Raycast3D(world, entity, &origin, &direction, maxDistance,
+                                     includeTriggers ? 1 : 0, &value) != 0;
+        hit = found ? value : default;
+        return found;
     }
 
     internal static Vector4 GetSpriteColor(ulong world, uint entity) {

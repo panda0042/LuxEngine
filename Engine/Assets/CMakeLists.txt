@@ -12,6 +12,7 @@ lux_engine_module(Assets
         Private/ModelAsset.cpp
         Private/ModelPoseMixer.cpp
         Private/FbxModelImporter.cpp
+        Private/GltfModelImporter.cpp
 )
 target_include_directories(LuxModuleAssets SYSTEM PRIVATE "${stb_SOURCE_DIR}")
 target_compile_definitions(LuxModuleAssets PRIVATE
@@ -31,3 +32,17 @@ if(LUX_ENABLE_SANITIZERS)
     target_compile_options(LuxUfbx PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
 endif()
 target_sources(LuxEngine PRIVATE $<TARGET_OBJECTS:LuxUfbx>)
+
+set(_lux_cgltf_dir "${CMAKE_SOURCE_DIR}/Engine/ThirdParty/cgltf")
+add_library(LuxCgltf OBJECT Private/Cgltf.c)
+set_target_properties(LuxCgltf PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON C_VISIBILITY_PRESET hidden FOLDER ThirdParty)
+target_include_directories(LuxCgltf SYSTEM PRIVATE "${_lux_cgltf_dir}")
+target_include_directories(LuxModuleAssets SYSTEM PRIVATE "${_lux_cgltf_dir}")
+if(MSVC)
+    target_compile_options(LuxCgltf PRIVATE /W1)
+endif()
+if(LUX_ENABLE_SANITIZERS)
+    target_compile_options(LuxCgltf PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+endif()
+target_sources(LuxEngine PRIVATE $<TARGET_OBJECTS:LuxCgltf>)

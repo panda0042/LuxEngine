@@ -169,13 +169,15 @@ bool ReadTextureFile(const std::string& filepath, std::vector<uint8>& data) {
     }
 }
 
-stbi_uc* DecodeTexture(const std::string& filepath, int& width, int& height) {
-    std::vector<uint8> fileData;
-    if (!ReadTextureFile(filepath, fileData)) {
-        Log::Warn("Image file missing, changing, empty or exceeds size limit: " + filepath);
+stbi_uc* DecodeTexture(std::span<const uint8> fileData, int& width, int& height,
+                       const std::string& filepath = "embedded image") {
+    const auto byteCount = fileData.size();
+    if (fileData.empty() || byteCount > MaxJpegTextureFileBytes ||
+        (byteCount > MaxTextureFileSizeBytes &&
+         (fileData[0] != 0xff || fileData[1] != 0xd8 || fileData[2] != 0xff))) {
+        Log::Warn("Image data empty or exceeds size limit: " + filepath);
         return nullptr;
     }
-    const auto byteCount = fileData.size();
     // Inspect image header before allocating decoded pixels to prevent decompression bombs
     int testW = 0, testH = 0, testChannels = 0;
     if (!stbi_info_from_memory(fileData.data(), static_cast<int>(byteCount), &testW, &testH,
@@ -243,6 +245,37 @@ stbi_uc* DecodeTexture(const std::string& filepath, int& width, int& height) {
     }
 
     return pixels;
+}
+
+stbi_uc* DecodeTexture(const std::string& filepath, int& width, int& height) {
+    std::vector<uint8> fileData;
+    if (!ReadTextureFile(filepath, fileData)) {
+        Log::Warn("Image file missing, changing, empty or exceeds size limit: " + filepath);
+        return nullptr;
+    }
+    return DecodeTexture(fileData, width, height, filepath);
+}
+
+bool DecodeTexturePixels(const auto& input, int& outWidth, int& outHeight,
+                         std::vector<uint8>& outRgbaPixels) {
+    outWidth = outHeight = 0;
+    outRgbaPixels.clear();
+    try {
+        int width = 0, height = 0;
+        std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels(
+            DecodeTexture(input, width, height), &stbi_image_free);
+        if (!pixels)
+            return false;
+        const size_t bytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+        outRgbaPixels.resize(bytes);
+        std::memcpy(outRgbaPixels.data(), pixels.get(), bytes);
+        outWidth = width;
+        outHeight = height;
+        return true;
+    } catch (const std::exception&) {
+        outRgbaPixels.clear();
+        return false;
+    }
 }
 } // namespace
 
@@ -395,24 +428,12 @@ bool AssetManager::ValidateTextureFile(const std::string& filepath, int* outWidt
 
 bool AssetManager::DecodeTextureCpu(const std::string& filepath, int& outWidth, int& outHeight,
                                     std::vector<uint8>& outRgbaPixels) {
-    outWidth = outHeight = 0;
-    outRgbaPixels.clear();
-    try {
-        int width = 0, height = 0;
-        auto* decoded = DecodeTexture(filepath, width, height);
-        if (!decoded)
-            return false;
-        std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels(decoded, &stbi_image_free);
-        const size_t bytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-        outRgbaPixels.resize(bytes);
-        std::memcpy(outRgbaPixels.data(), pixels.get(), bytes);
-        outWidth = width;
-        outHeight = height;
-        return true;
-    } catch (const std::exception&) {
-        outRgbaPixels.clear();
-        return false;
-    }
+    return DecodeTexturePixels(filepath, outWidth, outHeight, outRgbaPixels);
+}
+
+bool AssetManager::DecodeTextureCpu(std::span<const uint8> encoded, int& outWidth, int& outHeight,
+                                    std::vector<uint8>& outRgbaPixels) {
+    return DecodeTexturePixels(encoded, outWidth, outHeight, outRgbaPixels);
 }
 
 bool AssetManager::HasTexture(const std::string& filepath) {

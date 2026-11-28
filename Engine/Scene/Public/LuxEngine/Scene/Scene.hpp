@@ -6,6 +6,7 @@
 #include <LuxEngine/Physics/PhysicsWorld.hpp>
 #include <algorithm>
 #include <iosfwd>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <typeindex>
@@ -47,6 +48,8 @@ public:
     bool SetVelocity3D(uint32 entity, Vec3 velocity);
     bool AddImpulse3D(uint32 entity, Vec3 impulse);
     bool IsGrounded3D(uint32 entity) const;
+    bool SetCharacterMotion3D(uint32 entity, Vec3 horizontalVelocity, double jumpSpeed = 0);
+    bool GetCharacterState3D(uint32 entity, CharacterController3DState& state) const;
     const std::string& GetLastPhysicsError2D() const;
     const std::string& GetLastPhysicsError3D() const;
     std::vector<Entity> GetEntitiesInHierarchyOrder();
@@ -197,7 +200,29 @@ private:
                       const std::unordered_set<uint32>& affected, RegionReferences& references);
     void DestroySubtrees(const std::vector<uint32>& roots);
     void RepairReferenceLinks();
+    friend class ScenePhysicsWorld;
+    enum class PhysicsCollider {
+        None,
+        PlanarBox,
+        SpatialBox,
+        Capsule,
+        TriangleMesh,
+        Character,
+        ConflictingSpatial,
+        ConflictingCharacter
+    };
+    PhysicsCollider GetPhysicsCollider(uint32 id) const;
+    bool CanKeepPhysicsBody(const Scene& replacement, uint32 id) const;
     void RemovePhysicsBody(uint32 id);
+
+    struct CharacterMotion {
+        Vec3 horizontalVelocity{};
+        double jumpSpeed = 0;
+        std::optional<CharacterController3DState> state;
+        std::optional<Vec3> lastLocalPosition;
+        uint32 lastParent = 0;
+    };
+
     uint32 nextEntityId_ = 1;
     std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
     std::shared_ptr<int> scriptLifetime_ = std::make_shared<int>(0);
@@ -207,6 +232,7 @@ private:
     std::unordered_map<std::type_index, std::unique_ptr<PoolBase>> pools_;
     std::unique_ptr<ScenePhysicsWorld> physics2D_;
     std::unique_ptr<ScenePhysicsWorld> physics3D_;
+    std::unordered_map<uint32, CharacterMotion> characterMotions_;
     std::vector<Collision3DEvent> collisionEvents3D_;
     std::vector<Collision2DEvent> collisionEvents2D_;
     std::vector<uint32> updateBuffer_;

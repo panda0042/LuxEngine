@@ -37,6 +37,7 @@ constexpr std::array Roads{
     std::array<Vec2, 2>{{{-447, -667}, {-374, -840}}},
 };
 constexpr unsigned Cells = 32;
+constexpr double TerrainStep = double(ChunkSize) / Cells;
 
 double Blend(double from, double to, double fraction) {
     return from + (to - from) * fraction;
@@ -204,7 +205,7 @@ double Cross2(Vec2 a, Vec2 b) {
 
 void AddRoadSurface(MeshData& mesh, const std::array<Vec2, 4>& ribbon, Vec2 origin, unsigned seed,
                     double bias, Vec4 color) {
-    constexpr double step = double(ChunkSize) / Cells;
+    constexpr double step = TerrainStep;
     const auto [minX, maxX] = std::ranges::minmax(ribbon, {}, &Vec2::x);
     const auto [minZ, maxZ] = std::ranges::minmax(ribbon, {}, &Vec2::y);
     for (double z = std::floor(minZ.y / step) * step; z <= maxZ.y; z += step) {
@@ -247,42 +248,54 @@ void AddRoadSurface(MeshData& mesh, const std::array<Vec2, 4>& ribbon, Vec2 orig
     }
 }
 
+template <typename Emit> void ForTerrainVertex(Vec2 origin, unsigned seed, Emit emit) {
+    for (unsigned z = 0; z <= Cells; ++z)
+        for (unsigned x = 0; x <= Cells; ++x) {
+            const Vec2 local{x * TerrainStep, z * TerrainStep};
+            const Vec2 point = origin + local;
+            emit(point, Vec3{local.x, Height(point, seed), local.y});
+        }
+}
+
+const std::vector<uint32>& TerrainIndices() {
+    static const auto indices = [] {
+        std::vector<uint32> values;
+        values.reserve(Cells * Cells * 6);
+        constexpr unsigned stride = Cells + 1;
+        for (unsigned z = 0; z < Cells; ++z)
+            for (unsigned x = 0; x < Cells; ++x) {
+                const auto a = z * stride + x, b = a + stride;
+                values.insert(values.end(), {a, b, a + 1, a + 1, b, b + 1});
+            }
+        return values;
+    }();
+    return indices;
+}
+
 Draft Generate(ChunkKey key, unsigned seed, unsigned vegetation) {
     const auto start = std::chrono::steady_clock::now();
     Draft result;
     result.key = key;
-    const Vec2 origin{double(key.x * ChunkSize), double(key.z * ChunkSize)};
-    const unsigned stride = Cells + 1;
+    const Vec2 origin = ChunkOrigin(key);
     auto& ground = result.terrain;
-    ground.vertices.reserve(stride * stride);
-    ground.indices.reserve(Cells * Cells * 6);
-    for (unsigned z = 0; z <= Cells; ++z) {
-        for (unsigned x = 0; x <= Cells; ++x) {
-            const Vec2 p =
-                origin + Vec2{double(x * ChunkSize / Cells), double(z * ChunkSize / Cells)};
-            const double y = Height(p, seed);
-            const auto normal =
-                Vec3{AnalyticHeight(p - Vec2{.6, 0}, seed) - AnalyticHeight(p + Vec2{.6, 0}, seed),
-                     1.2,
-                     AnalyticHeight(p - Vec2{0, .6}, seed) - AnalyticHeight(p + Vec2{0, .6}, seed)}
-                    .Normalized();
-            const double moisture = .62 * Noise(p, 61, seed + 31) + .38 * Noise(p, 16, seed + 55);
-            const double slope = 1 - normal.y;
-            const double bank = Curve(.90, 1.16, LakeRadius(p));
-            const double vegetationWeight = bank * (1 - Curve(.08, .31, slope)) *
-                                            Curve(.20, .60, moisture) * (1 - Curve(70, 105, y)) *
-                                            Curve(5, 13, RoadDistance(p));
-            const float tone = float(.83 + .19 * moisture);
-            ground.vertices.push_back({{p.x - origin.x, y, p.y - origin.y},
-                                       normal,
-                                       {p.x * .5, p.y * .5},
-                                       {tone, tone, tone, float(vegetationWeight)}});
-            if (x < Cells && z < Cells) {
-                const auto a = z * stride + x, b = a + stride;
-                ground.indices.insert(ground.indices.end(), {a, b, a + 1, a + 1, b, b + 1});
-            }
-        }
-    }
+    ground.vertices.reserve((Cells + 1) * (Cells + 1));
+    ground.indices = TerrainIndices();
+    ForTerrainVertex(origin, seed, [&](Vec2 p, Vec3 position) {
+        const double y = position.y;
+        const auto normal =
+            Vec3{AnalyticHeight(p - Vec2{.6, 0}, seed) - AnalyticHeight(p + Vec2{.6, 0}, seed), 1.2,
+                 AnalyticHeight(p - Vec2{0, .6}, seed) - AnalyticHeight(p + Vec2{0, .6}, seed)}
+                .Normalized();
+        const double moisture = .62 * Noise(p, 61, seed + 31) + .38 * Noise(p, 16, seed + 55);
+        const double slope = 1 - normal.y;
+        const double bank = Curve(.90, 1.16, LakeRadius(p));
+        const double vegetationWeight = bank * (1 - Curve(.08, .31, slope)) *
+                                        Curve(.20, .60, moisture) * (1 - Curve(70, 105, y)) *
+                                        Curve(5, 13, RoadDistance(p));
+        const float tone = float(.83 + .19 * moisture);
+        ground.vertices.push_back(
+            {position, normal, {p.x * .5, p.y * .5}, {tone, tone, tone, float(vegetationWeight)}});
+    });
     for (const auto& [a, b] : Roads) {
         const Vec2 ray = b - a;
         const double length = Distance(a, b);
@@ -400,7 +413,7 @@ double RoadDistance(Vec2 point) {
 }
 
 double Height(Vec2 point, unsigned seed) {
-    constexpr double step = double(ChunkSize) / Cells;
+    constexpr double step = TerrainStep;
     const Vec2 base{step * std::floor(point.x / step), step * std::floor(point.y / step)};
     const double u = (point.x - base.x) / step, v = (point.y - base.y) / step;
     const double a = AnalyticHeight(base, seed);
@@ -408,7 +421,7 @@ double Height(Vec2 point, unsigned seed) {
         return a;
     const double right = AnalyticHeight(base + Vec2{step, 0}, seed);
     const double bottom = AnalyticHeight(base + Vec2{0, step}, seed);
-    // Match the diagonal used by Generate so wheels, feet and terrain agree.
+    // Match the diagonal used by TerrainIndices so wheels, feet and terrain agree.
     if (u + v <= 1)
         return a * (1 - u - v) + right * u + bottom * v;
     const double corner = AnalyticHeight(base + Vec2{step, step}, seed);
@@ -425,6 +438,20 @@ Vec3 OnGround(Vec2 point, unsigned seed, double offset) {
 
 ChunkKey ChunkAt(Vec2 point) {
     return KeyFor(point);
+}
+
+Vec2 ChunkOrigin(ChunkKey key) {
+    return {double(key.x * ChunkSize), double(key.z * ChunkSize)};
+}
+
+std::shared_ptr<const LuxEngine::TriangleMeshCollider3DData> TerrainCollision(ChunkKey key,
+                                                                              unsigned seed) {
+    auto mesh = std::make_shared<LuxEngine::TriangleMeshCollider3DData>();
+    mesh->vertices.reserve((Cells + 1) * (Cells + 1));
+    mesh->indices = TerrainIndices();
+    ForTerrainVertex(ChunkOrigin(key), seed,
+                     [&](Vec2, Vec3 position) { mesh->vertices.push_back(position); });
+    return mesh;
 }
 
 void MeshData::Quad(Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec4 color) {
@@ -658,8 +685,8 @@ void World::Draw(Renderer3D::Context& renderer, const Material3D& ground, const 
                  const Material3D& foliage, const Material3D& road, Vec3 eye,
                  std::vector<Plant>& nearTrees) const {
     for (const auto& [key, chunk] : state_->loaded) {
-        const auto model =
-            Mat4::Translate({double(key.x * ChunkSize), 0, double(key.z * ChunkSize)});
+        const auto origin = ChunkOrigin(key);
+        const auto model = Mat4::Translate({origin.x, 0, origin.y});
         renderer.DrawMesh(chunk.ground, model, ground);
         if (chunk.road.IsValid())
             renderer.DrawMesh(chunk.road, model, road);

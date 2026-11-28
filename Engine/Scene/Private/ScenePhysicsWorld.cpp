@@ -3,21 +3,80 @@
 #include <LuxEngine/Scene/Scene.hpp>
 #include <algorithm>
 #include <cmath>
+#include <string_view>
+#include <utility>
 
 namespace LuxEngine {
+namespace {
+bool FiniteMatrix(const Mat4& matrix) {
+    return std::all_of(std::begin(matrix.elements), std::end(matrix.elements),
+                       [](double value) { return std::isfinite(value); });
+}
+
+bool OrthogonalPhysicsAxes(const Mat4& matrix, int count) {
+    const auto* m = matrix.elements;
+    const Vec3 axes[] = {{m[0], m[1], m[2]}, {m[4], m[5], m[6]}, {m[8], m[9], m[10]}};
+    const double lengths[] = {std::hypot(m[0], m[1], m[2]), std::hypot(m[4], m[5], m[6]),
+                              std::hypot(m[8], m[9], m[10])};
+    for (int axis = 0; axis < count; ++axis)
+        if (!std::isfinite(lengths[axis]) || lengths[axis] <= 0)
+            return false;
+    for (int a = 0; a < count; ++a)
+        for (int b = a + 1; b < count; ++b) {
+            const double dot = (axes[a].x / lengths[a]) * (axes[b].x / lengths[b]) +
+                               (axes[a].y / lengths[a]) * (axes[b].y / lengths[b]) +
+                               (axes[a].z / lengths[a]) * (axes[b].z / lengths[b]);
+            if (std::abs(dot) > 1e-4)
+                return false;
+        }
+    return true;
+}
+
+bool UniformScale(const Vec3& scale) {
+    const auto [minimum, maximum] =
+        std::minmax({std::abs(scale.x), std::abs(scale.y), std::abs(scale.z)});
+    return minimum > 0 && maximum - minimum <= maximum * 1e-6;
+}
+
+bool SameCoordinates(const Vec3& a, const Vec3& b) {
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+}
+} // namespace
 
 ScenePhysicsWorld::ScenePhysicsWorld(bool planar) : planar_(planar), world_(planar) {}
 
 void ScenePhysicsWorld::Remove(uint32 entity) {
     world_.Remove(entity);
+    if (!planar_)
+        world_.RemoveCharacter(entity);
     kinematicTargets_.erase(entity);
+    previousKinematicLocals_.erase(entity);
+    inheritedKinematicMotion_.erase(entity);
+}
+
+void ScenePhysicsWorld::RememberKinematicLocalPoses(const Scene& scene) {
+    previousKinematicLocals_.clear();
+    for (const auto id : active_) {
+        const auto* rigid = scene.TryGetComponent<Rigidbody3DComponent>(id);
+        const auto parent = scene.GetParent(id);
+        if (rigid && rigid->type == BodyType::Kinematic && parent) {
+            const auto& local = scene.GetComponent<TransformComponent>(id);
+            previousKinematicLocals_.emplace(id, LocalPose{parent, local.position, local.rotation,
+                                                           scene.GetWorldMatrix(parent)});
+        }
+    }
 }
 
 void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, double dt,
                              uint32 index, uint32 count,
-                             const std::unordered_map<uint32, Vec3>& rootMotion) {
-    if (index == 0)
+                             const std::unordered_map<uint32, Vec3>& rootMotion,
+                             std::span<const uint32> characters) {
+    if (index == 0) {
         kinematicTargets_.clear();
+        inheritedKinematicMotion_.clear();
+        if (characters.empty())
+            previousKinematicLocals_.clear();
+    }
     error_.clear();
     const auto& settings = scene.GetSettings();
     const auto gravity2D =
@@ -39,36 +98,37 @@ void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, dou
         auto* rigid2D = planar_ ? scene.TryGetComponent<Rigidbody2DComponent>(id) : nullptr;
         if (rigid2D)
             rigid2D->isGrounded = false;
+        const auto* capsule =
+            planar_ ? nullptr : scene.TryGetComponent<CapsuleCollider3DComponent>(id);
+        const auto* box = planar_ ? nullptr : scene.TryGetComponent<BoxCollider3DComponent>(id);
+        const auto* mesh =
+            planar_ ? nullptr : scene.TryGetComponent<TriangleMeshCollider3DComponent>(id);
+        const auto* rigid3D = planar_ ? nullptr : scene.TryGetComponent<Rigidbody3DComponent>(id);
+        if ((capsule && box) || (mesh && (box || capsule))) {
+            if (error_.empty())
+                error_ = "Jolt physics entity #" + std::to_string(id) +
+                         (mesh ? ": Triangle mesh and another 3D collider cannot coexist"
+                               : ": Box and Capsule colliders cannot coexist");
+            continue;
+        }
+        if (mesh && rigid3D && rigid3D->type != BodyType::Static) {
+            if (error_.empty())
+                error_ = "Jolt physics entity #" + std::to_string(id) +
+                         ": Triangle mesh requires a static body";
+            continue;
+        }
         {
             const auto matrix = scene.GetWorldMatrix(id);
-            const auto* m = matrix.elements;
-            if (!std::all_of(std::begin(matrix.elements), std::end(matrix.elements),
-                             [](double value) { return std::isfinite(value); })) {
+            if (!FiniteMatrix(matrix)) {
                 if (error_.empty())
                     error_ = "Jolt physics entity #" + std::to_string(id) +
                              ": non-finite world transform";
                 continue;
             }
-            const Vec3 axes[] = {{m[0], m[1], m[2]}, {m[4], m[5], m[6]}, {m[8], m[9], m[10]}};
-            const double lengths[] = {std::hypot(static_cast<double>(m[0]), m[1], m[2]),
-                                      std::hypot(static_cast<double>(m[4]), m[5], m[6]),
-                                      std::hypot(static_cast<double>(m[8]), m[9], m[10])};
-            const int axisCount = planar_ ? 2 : 3;
-            bool supported = true;
-            for (int axis = 0; axis < axisCount; ++axis)
-                supported = supported && std::isfinite(lengths[axis]) && lengths[axis] > 0;
-            if (supported)
-                for (int a = 0; a < axisCount; ++a)
-                    for (int b = a + 1; b < axisCount; ++b) {
-                        const double dot = (axes[a].x / lengths[a]) * (axes[b].x / lengths[b]) +
-                                           (axes[a].y / lengths[a]) * (axes[b].y / lengths[b]) +
-                                           (axes[a].z / lengths[a]) * (axes[b].z / lengths[b]);
-                        supported = supported && std::abs(dot) <= 1e-4;
-                    }
-            if (!supported) {
+            if (!OrthogonalPhysicsAxes(matrix, planar_ ? 2 : 3)) {
                 if (error_.empty())
                     error_ = "Jolt physics entity #" + std::to_string(id) +
-                             ": degenerate or sheared Box transform is unsupported";
+                             ": degenerate or sheared collider transform is unsupported";
                 continue;
             }
         }
@@ -98,19 +158,61 @@ void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, dou
                 body.mass = rigid2D->mass;
             }
         } else {
-            const auto& collider = scene.GetComponent<BoxCollider3DComponent>(id);
-            body.size = {collider.size.x * std::abs(transform.scale.x),
-                         collider.size.y * std::abs(transform.scale.y),
-                         collider.size.z * std::abs(transform.scale.z)};
-            body.offset = {collider.offset.x * transform.scale.x,
-                           collider.offset.y * transform.scale.y,
-                           collider.offset.z * transform.scale.z};
-            body.trigger = collider.isTrigger;
-            if (const auto* rigid = scene.TryGetComponent<Rigidbody3DComponent>(id)) {
-                body.type = rigid->type;
-                body.velocity = rigid->velocity;
-                body.gravityScale = rigid->gravityScale;
-                body.mass = rigid->mass;
+            if (mesh) {
+                body.shape = ColliderShape3D::TriangleMesh;
+                body.size = transform.scale;
+                body.mesh = mesh->mesh;
+            } else {
+                const Vec3 scale{std::abs(transform.scale.x), std::abs(transform.scale.y),
+                                 std::abs(transform.scale.z)};
+                if (capsule) {
+                    if (!UniformScale(scale)) {
+                        if (error_.empty())
+                            error_ = "Jolt physics entity #" + std::to_string(id) +
+                                     ": Capsule requires uniform world scale";
+                        continue;
+                    }
+                    body.shape = ColliderShape3D::Capsule;
+                    body.radius = capsule->radius * scale.y;
+                    body.halfHeight = capsule->halfHeight * scale.y;
+                } else
+                    body.size = {box->size.x * scale.x, box->size.y * scale.y,
+                                 box->size.z * scale.z};
+                const auto& offset = capsule ? capsule->offset : box->offset;
+                body.offset = {offset.x * transform.scale.x, offset.y * transform.scale.y,
+                               offset.z * transform.scale.z};
+                body.trigger = capsule ? capsule->isTrigger : box->isTrigger;
+            }
+            if (rigid3D) {
+                body.type = rigid3D->type;
+                body.velocity = rigid3D->velocity;
+                body.gravityScale = rigid3D->gravityScale;
+                body.mass = rigid3D->mass;
+            }
+        }
+        if (index == 0 && !characters.empty() && body.type == BodyType::Kinematic) {
+            const auto previous = previousKinematicLocals_.find(id);
+            if (previous != previousKinematicLocals_.end() &&
+                previous->second.parent == scene.GetParent(id)) {
+                const auto parent = previous->second.parent;
+                const auto& local = scene.GetComponent<TransformComponent>(id);
+                if (SameCoordinates(local.position, previous->second.position) &&
+                    SameCoordinates(local.rotation, previous->second.rotation)) {
+                    inheritedKinematicMotion_.emplace(id, InheritedKinematicMotion{parent, {}});
+                } else if (!scene.GetParent(parent) &&
+                           scene.GetPhysicsCollider(parent) == Scene::PhysicsCollider::None) {
+                    const auto parentWorld = scene.GetWorldMatrix(parent);
+                    const auto* current = parentWorld.elements;
+                    const auto* last = previous->second.parentWorld.elements;
+                    const Vec3 move{current[12] - last[12], 0, current[14] - last[14]};
+                    const auto velocity = move * (1 / (dt * count));
+                    if (FiniteMatrix(parentWorld) && std::equal(current, current + 12, last) &&
+                        current[13] == last[13] && !SameCoordinates(move, {}) &&
+                        std::hypot(velocity.x, velocity.z) <= PhysicsWorld::MaxLinearVelocity) {
+                        inheritedKinematicMotion_.emplace(
+                            id, InheritedKinematicMotion{parent, velocity});
+                    }
+                }
             }
         }
         if (body.type == BodyType::Kinematic && count > 1) {
@@ -144,9 +246,18 @@ void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, dou
     }
     if (!world_.Synchronize(descriptions, dt) && error_.empty())
         error_ = world_.GetLastError();
-    world_.Step(dt, gravity);
+    world_.Step(dt, gravity, !characters.empty());
     if (error_.empty())
         error_ = world_.GetLastError();
+    if (!characters.empty()) {
+        try {
+            StepCharacters(scene, characters, dt, count, rootMotion, gravity);
+        } catch (...) {
+            world_.RestoreKinematicVelocities();
+            throw;
+        }
+        world_.RestoreKinematicVelocities();
+    }
     if (!error_.empty() && error_ != lastError_)
         Log::Warn(error_);
     lastError_ = error_;
@@ -196,10 +307,90 @@ void ScenePhysicsWorld::Step(Scene& scene, std::span<const uint32> entities, dou
     }
 }
 
+void ScenePhysicsWorld::StepCharacters(Scene& scene, std::span<const uint32> characters, double dt,
+                                       uint32 count,
+                                       const std::unordered_map<uint32, Vec3>& rootMotion,
+                                       const Vec3& gravity) {
+    std::vector<uint32> ancestors;
+    for (const auto id : characters) {
+        auto& motion = scene.characterMotions_[id];
+        const double jump = std::exchange(motion.jumpSpeed, 0.0);
+        motion.state.reset();
+        const auto reject = [&](std::string_view reason) {
+            motion.lastLocalPosition.reset();
+            world_.RemoveCharacter(id);
+            if (error_.empty())
+                error_ = "Jolt character #" + std::to_string(id) + ": " + std::string(reason);
+        };
+        if (scene.GetPhysicsCollider(id) != Scene::PhysicsCollider::Character) {
+            reject("cannot coexist with a rigid body or collider");
+            continue;
+        }
+        const auto* local = scene.TryGetComponent<TransformComponent>(id);
+        if (!local) {
+            reject("requires a Transform component");
+            continue;
+        }
+        const auto matrix = scene.GetWorldMatrix(id);
+        if (!FiniteMatrix(matrix) || !OrthogonalPhysicsAxes(matrix, 3)) {
+            reject("non-finite, degenerate or sheared world transform");
+            continue;
+        }
+        TransformComponent pose;
+        try {
+            pose = scene.GetWorldTransform(id);
+        } catch (const std::logic_error&) {
+            reject("invalid world transform");
+            continue;
+        }
+        if (!UniformScale(pose.scale)) {
+            reject("requires uniform world scale");
+            continue;
+        }
+        const double scale = std::abs(pose.scale.y);
+        auto settings = scene.GetComponent<CharacterController3DComponent>(id);
+        settings.radius *= scale;
+        settings.halfHeight *= scale;
+        settings.stepHeight *= scale;
+        auto velocity = motion.horizontalVelocity;
+        if (const auto animated = rootMotion.find(id); animated != rootMotion.end()) {
+            velocity.x += animated->second.x / (dt * count);
+            velocity.z += animated->second.z / (dt * count);
+        }
+        CharacterController3DState state;
+        const auto directParent = scene.GetParent(id);
+        const auto& last = motion.lastLocalPosition;
+        const bool preserveVerticalVelocity = directParent && directParent == motion.lastParent &&
+                                              last && SameCoordinates(local->position, *last);
+        ancestors.clear();
+        for (auto parent = directParent; parent; parent = scene.GetParent(parent))
+            ancestors.push_back(parent);
+        const auto supportMotionFilter = [this, &ancestors](uint32 platform, const Vec3& velocity) {
+            if (std::ranges::find(ancestors, platform) != ancestors.end())
+                return Vec3{};
+            const auto inherited = inheritedKinematicMotion_.find(platform);
+            if (inherited == inheritedKinematicMotion_.end() ||
+                std::ranges::find(ancestors, inherited->second.parent) == ancestors.end())
+                return velocity;
+            const auto& shared = inherited->second.sharedVelocity;
+            return shared ? velocity - *shared : Vec3{};
+        };
+        if (world_.MoveCharacter(id, settings, pose.position, velocity, jump, dt, gravity, state,
+                                 supportMotionFilter, preserveVerticalVelocity))
+            motion.state = state;
+        else {
+            motion.lastLocalPosition.reset();
+            if (error_.empty())
+                error_ = world_.GetLastError();
+            world_.RemoveCharacter(id);
+        }
+    }
+}
+
 std::unordered_map<uint32, TransformComponent>
-ScenePhysicsWorld::GetWorldPoses(const Scene& scene) const {
+ScenePhysicsWorld::GetWorldPoses(const Scene& scene, std::span<const uint32> characters) const {
     std::unordered_map<uint32, TransformComponent> poses;
-    poses.reserve(active_.size());
+    poses.reserve(active_.size() + characters.size());
     for (const auto id : active_) {
         const auto state = world_.GetState(id);
         if (!state || !scene.IsAlive(id))
@@ -214,6 +405,14 @@ ScenePhysicsWorld::GetWorldPoses(const Scene& scene) const {
             transform.rotation = state->rotation;
         }
         poses.emplace(id, transform);
+    }
+    for (const auto id : characters) {
+        CharacterController3DState state;
+        if (scene.GetCharacterState3D(id, state)) {
+            auto transform = scene.GetWorldTransform(id);
+            transform.position = state.position;
+            poses.emplace(id, transform);
+        }
     }
     return poses;
 }

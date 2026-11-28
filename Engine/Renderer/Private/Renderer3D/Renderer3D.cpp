@@ -33,6 +33,12 @@ bool FitsGpuVector(Vec3 value) {
     return std::abs(value.x) <= limit && std::abs(value.y) <= limit && std::abs(value.z) <= limit;
 }
 
+const ModelMaterial* SubmeshMaterial(const ModelAsset& model, const ModelSubmesh& part) {
+    return part.material >= 0 && static_cast<size_t>(part.material) < model.materials.size()
+               ? &model.materials[static_cast<size_t>(part.material)]
+               : nullptr;
+}
+
 Mat4 ViewProjection(const Mat4& projection, const Mat4& view) {
     const auto matrix = projection * view;
     if (!std::all_of(std::begin(matrix.elements), std::end(matrix.elements),
@@ -139,6 +145,7 @@ struct Renderer3D::Context::Impl {
 
     struct CachedTexture {
         Ref<GpuTexture> texture;
+        std::weak_ptr<ModelAsset> model;
         uint64 attempted = std::numeric_limits<uint64>::max();
         uint64 used = 0;
         size_t bytes = 0;
@@ -570,8 +577,8 @@ void Renderer3D::Context::DrawMesh(const Mat4& transform, const Material3D& mate
 
 void Renderer3D::Context::DrawMesh(const Mesh3D& mesh, const Mat4& transform,
                                    const Material3D& material) {
-    auto texture = ResolveBaseColorTexture(material.baseColorTexture, material.textureSampling,
-                                           TextureColorSpace::Srgb, AlphaMaskCutoff(material));
+    auto texture = ResolveTexture(material.baseColorTexture, material.textureSampling,
+                                  TextureColorSpace::Srgb, AlphaMaskCutoff(material));
     DrawMesh(mesh, transform, material, texture.get());
 }
 
@@ -593,7 +600,9 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     const auto* texture = textures.baseColor;
     if ((texture && !texture->BelongsTo(*impl_->device)) ||
         (textures.normal && !textures.normal->BelongsTo(*impl_->device)) ||
-        (textures.roughness && !textures.roughness->BelongsTo(*impl_->device)))
+        (textures.roughness && !textures.roughness->BelongsTo(*impl_->device)) ||
+        (textures.metallic && !textures.metallic->BelongsTo(*impl_->device)) ||
+        (textures.occlusion && !textures.occlusion->BelongsTo(*impl_->device)))
         return;
     const auto model = transform * Mat4::Translate(mesh.origin_);
     const auto relativeModel = Mat4::Translate(impl_->camera * -1) * model;
@@ -640,24 +649,28 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     std::array<Ref<GpuTexture>, 6> maps;
     const auto map = [this, &maps](size_t index, const std::string& path,
                                    TextureSampling sampling) {
-        maps[index] = ResolveBaseColorTexture(path, sampling, TextureColorSpace::Linear);
+        maps[index] = ResolveTexture(path, sampling, TextureColorSpace::Linear);
         return maps[index] ? maps[index]->handle_ : uint64{0};
     };
     const uint64 normal =
         textures.normal ? textures.normal->handle_ : map(0, material.normalTexture, normalSampling);
-    const uint64 metallic = map(1, material.metallicTexture, material.textureSampling);
+    const uint64 metallic = textures.metallic
+                                ? textures.metallic->handle_
+                                : map(1, material.metallicTexture, material.textureSampling);
     const uint64 roughness = textures.roughness
                                  ? textures.roughness->handle_
                                  : map(2, material.roughnessTexture, material.textureSampling);
-    const uint64 occlusion = map(3, material.occlusionTexture, material.textureSampling);
+    const uint64 occlusion = textures.occlusion
+                                 ? textures.occlusion->handle_
+                                 : map(3, material.occlusionTexture, material.textureSampling);
     Ref<GpuTexture> terrainBase;
     uint64 terrainColor = 0, terrainNormal = 0, terrainRoughness = 0;
     Vec4 albedo = material.albedoColor;
     if (material.terrainLayer && material.alphaMode == MaterialAlphaMode::Opaque &&
         !material.water) {
         const auto& layer = *material.terrainLayer;
-        terrainBase = ResolveBaseColorTexture(layer.baseColorTexture, material.textureSampling,
-                                              TextureColorSpace::Srgb);
+        terrainBase = ResolveTexture(layer.baseColorTexture, material.textureSampling,
+                                     TextureColorSpace::Srgb);
         if (terrainBase) {
             terrainColor = terrainBase->handle_;
             terrainNormal = map(4, layer.normalTexture, normalSampling);
@@ -725,18 +738,35 @@ void Renderer3D::Context::DrawMeshWithTextures(const Mesh3D& mesh, const Mat4& t
     ++impl_->stats.drawCalls;
 }
 
-Ref<GpuTexture> Renderer3D::Context::ResolveBaseColorTexture(const std::string& path,
-                                                             TextureSampling sampling,
-                                                             TextureColorSpace colorSpace,
-                                                             float alphaMaskCutoff) {
+Ref<GpuTexture>
+Renderer3D::Context::ResolveTexture(const std::string& path, TextureSampling sampling,
+                                    TextureColorSpace colorSpace, float alphaMaskCutoff,
+                                    const Ref<ModelAsset>& model, int32 modelTextureIndex,
+                                    TextureChannel channel) {
     if (path.empty() || !impl_ || !impl_->LockValidState())
         return nullptr;
+    const ModelTexture* modelTexture = nullptr;
+    std::string modelKey, modelLabel;
+    if (model) {
+        if (modelTextureIndex < 0 ||
+            static_cast<size_t>(modelTextureIndex) >= model->textures.size())
+            return nullptr;
+        modelTexture = &model->textures[static_cast<size_t>(modelTextureIndex)];
+        modelKey = model->sourcePath;
+        modelKey.push_back('\0');
+        modelKey += std::to_string(modelTextureIndex);
+        modelLabel = path + " / glTF 이미지 " + std::to_string(modelTextureIndex);
+    }
+    const auto& file = modelTexture ? modelTexture->path : path;
+    const auto& sourceKey = modelTexture ? modelKey : path;
+    const auto& label = modelTexture ? modelLabel : path;
     if (!sampling.mipmaps)
         alphaMaskCutoff = 0;
     const std::string key =
-        path + "\n" + std::to_string(static_cast<int>(colorSpace)) +
+        sourceKey + "\n" + std::to_string(static_cast<int>(colorSpace)) +
         std::to_string(sampling.mipmaps) + std::to_string(static_cast<int>(sampling.addressMode)) +
         std::to_string(sampling.anisotropic) + std::to_string(sampling.normalMap) + ":" +
+        std::to_string(static_cast<int>(channel)) + ":" +
         std::to_string(std::bit_cast<uint32>(alphaMaskCutoff));
     auto found = impl_->textures.find(key);
     if (found == impl_->textures.end()) {
@@ -751,14 +781,23 @@ Ref<GpuTexture> Renderer3D::Context::ResolveBaseColorTexture(const std::string& 
     }
     auto& cached = found->second;
     cached.used = ++impl_->sequence;
-    const auto revision = AssetManager::GetTextureRevision(path);
-    if (cached.attempted != revision) {
+    const auto revision = file.empty() ? uint64{0} : AssetManager::GetTextureRevision(file);
+    if (cached.attempted != revision || (model && cached.model.lock() != model)) {
         cached.attempted = revision;
+        cached.model = model;
         try {
             int width = 0, height = 0;
             std::vector<uint8> pixels;
-            const bool decoded = AssetManager::IsBaseColorTextureFile(path) &&
-                                 AssetManager::DecodeTextureCpu(path, width, height, pixels);
+            const bool decoded =
+                modelTexture && !modelTexture->embedded.empty()
+                    ? AssetManager::DecodeTextureCpu(modelTexture->embedded, width, height, pixels)
+                    : (modelTexture || AssetManager::IsBaseColorTextureFile(file)) &&
+                          AssetManager::DecodeTextureCpu(file, width, height, pixels);
+            if (decoded && channel != TextureChannel::Red) {
+                const auto offset = static_cast<size_t>(channel);
+                for (size_t i = 0; i < pixels.size(); i += 4)
+                    pixels[i] = pixels[i + offset];
+            }
             const size_t bytes = Rhi::GetTextureLayout(width, height, sampling.mipmaps).bytes;
             constexpr size_t Budget = 512ull * 1024 * 1024;
             bool room = decoded && bytes && bytes <= Budget;
@@ -787,22 +826,22 @@ Ref<GpuTexture> Renderer3D::Context::ResolveBaseColorTexture(const std::string& 
                 cached.bytes = bytes;
                 cached.error.clear();
             } else {
-                cached.error =
-                    !decoded ? "텍스처 파일을 디코딩하지 못했습니다: " + path
-                    : !room
-                        ? "텍스처 캐시 예산을 초과했습니다: " + path
-                        : "GPU 텍스처 업로드 실패: " + impl_->device->GetLastError() + " / " + path;
+                cached.error = !decoded ? "텍스처 파일을 디코딩하지 못했습니다: " + label
+                               : !room
+                                   ? "텍스처 캐시 예산을 초과했습니다: " + label
+                                   : "GPU 텍스처 업로드 실패: " + impl_->device->GetLastError() +
+                                         " / " + label;
             }
         } catch (const std::exception&) {
-            cached.error = "기본 색상 텍스처 갱신에 실패했습니다: " + path;
+            cached.error = "기본 색상 텍스처 갱신에 실패했습니다: " + label;
         }
     }
-    auto error = AssetManager::GetAssetError(path, true);
+    auto error = file.empty() ? std::string{} : AssetManager::GetAssetError(file, true);
     if (error.empty())
         error = cached.error;
     if (!error.empty() && cached.texture)
         error += " (이전 정상 텍스처 유지)";
-    impl_->Report("texture:" + path, error);
+    impl_->Report("texture:" + (modelTexture ? key : sourceKey), error);
     if (impl_->active && cached.texture)
         impl_->frameTextures.push_back(cached.texture);
     return cached.texture;
@@ -813,8 +852,20 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
                                         double time, uint64 instance, const ModelPose* overridePose,
                                         uint64 poseRevision,
                                         const Ref<const ModelPose>& poseOwner) {
+    return DrawMeshAssetImpl(path, transform, material, modelSubmesh, clip, time, instance,
+                             overridePose, poseRevision, poseOwner);
+}
+
+bool Renderer3D::Context::DrawMeshAssetImpl(const std::string& path, const Mat4& transform,
+                                            const Material3D& material, int32 modelSubmesh,
+                                            int32 clip, double time, uint64 instance,
+                                            const ModelPose* overridePose, uint64 poseRevision,
+                                            const Ref<const ModelPose>& poseOwner,
+                                            const Ref<ModelAsset>* gltfModel,
+                                            const std::string& gltfError) {
     if (!impl_ || !impl_->active || !impl_->LockValidState())
         return false;
+    const bool gltf = modelSubmesh >= 0 && ModelAsset::IsGltfPath(path);
     std::string key = path;
     if (modelSubmesh >= 0) {
         key.push_back('\0');
@@ -842,19 +893,25 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
                             !material.roughnessTexture.empty() ||
                             !material.occlusionTexture.empty() || material.terrainLayer.has_value();
     if (modelSubmesh >= 0) {
-        std::string error;
-        auto model = ModelAsset::LoadFbx(path, error);
+        std::string error = gltfModel ? gltfError : std::string{};
+        auto model = gltfModel ? *gltfModel : ModelAsset::Load(path, error);
+        const auto loadWarning = gltf && model ? std::exchange(error, {}) : std::string{};
         if ((!overridePose && !std::isfinite(time)) || clip < -1) {
             model.reset();
-            error = "FBX 애니메이션 시간 또는 클립 번호가 올바르지 않습니다.";
+            error = "모델 애니메이션 시간 또는 클립 번호가 올바르지 않습니다.";
         }
         if (model && static_cast<size_t>(modelSubmesh) < model->submeshes.size()) {
             const auto index = static_cast<size_t>(modelSubmesh);
             const auto& part = model->submeshes[index];
+            const auto* imported = gltf ? SubmeshMaterial(*model, part) : nullptr;
+            const bool importedUv =
+                imported && (imported->baseColorTexture >= 0 || imported->normalTexture >= 0 ||
+                             imported->metallicTexture >= 0 || imported->roughnessTexture >= 0 ||
+                             imported->occlusionTexture >= 0);
             if (overridePose && (index >= overridePose->submeshes.size() ||
                                  overridePose->submeshes[index].size() != part.vertices.size())) {
                 impl_->Report("mesh:" + key,
-                              "FBX 포즈의 정점 데이터가 하위 메시와 일치하지 않습니다: " + path);
+                              "모델 포즈의 정점 데이터가 하위 메시와 일치하지 않습니다: " + path);
                 return false;
             }
             const bool ownsPose = overridePose && poseOwner.get() == overridePose;
@@ -862,7 +919,7 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
                                                         cached.pose.lock() == poseOwner &&
                                                         cached.poseRevision == poseRevision
                                                   : !cached.usesOverride && cached.time == time;
-            if (requiresUv && !part.hasTexCoords) {
+            if ((requiresUv || importedUv) && !part.hasTexCoords) {
                 error = "텍스처를 적용할 UV 좌표가 없는 모델입니다: " + path;
             } else if (cached.model != model || cached.clip != clip || !poseMatches) {
                 ModelPose pose;
@@ -915,7 +972,7 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
                         cached.hasUvs = part.hasTexCoords;
                         cached.error.clear();
                     } else {
-                        error = room ? "FBX 메시 업로드에 실패했습니다: " + path
+                        error = room ? "모델 메시 업로드에 실패했습니다: " + path
                                      : "메시 캐시 예산을 초과했습니다: " + path;
                     }
                 }
@@ -923,8 +980,10 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
                 cached.error.clear();
             }
         } else if (model) {
-            error = "FBX 하위 메시 번호가 올바르지 않습니다: " + path;
+            error = "모델 하위 메시 번호가 올바르지 않습니다: " + path;
         }
+        if (error.empty())
+            error = loadWarning;
         if (!error.empty())
             cached.error = std::move(error);
     } else if (cached.attempted != revision || (cached.uvBlocked && !requiresUv) ||
@@ -1028,7 +1087,59 @@ bool Renderer3D::Context::DrawMeshAsset(const std::string& path, const Mat4& tra
         drawable.occlusionTexture.clear();
         drawable.terrainLayer.reset();
     }
-    DrawMesh(*cached.mesh, transform, drawable);
+    const auto* imported =
+        gltf && cached.model && static_cast<size_t>(modelSubmesh) < cached.model->submeshes.size()
+            ? SubmeshMaterial(*cached.model,
+                              cached.model->submeshes[static_cast<size_t>(modelSubmesh)])
+            : nullptr;
+    if (!imported) {
+        DrawMesh(*cached.mesh, transform, drawable);
+        return impl_->stats.meshCount > previous;
+    }
+    drawable.albedoColor = imported->baseColor;
+    drawable.metallic = imported->metallic;
+    drawable.roughness = imported->roughness;
+    drawable.doubleSided = imported->doubleSided;
+    drawable.alphaMode = imported->alphaMode == ModelAlphaMode::Mask    ? MaterialAlphaMode::Mask
+                         : imported->alphaMode == ModelAlphaMode::Blend ? MaterialAlphaMode::Blend
+                                                                        : MaterialAlphaMode::Opaque;
+    drawable.alphaCutoff = imported->alphaCutoff;
+    drawable.normalScale = imported->normalScale;
+    drawable.occlusionStrength = imported->occlusionStrength;
+    if (cached.hasUvs) {
+        const auto sample = drawable.textureSampling;
+        const auto base =
+            drawable.baseColorTexture.empty()
+                ? ResolveTexture(path, sample, TextureColorSpace::Srgb, AlphaMaskCutoff(drawable),
+                                 cached.model, imported->baseColorTexture)
+                : ResolveTexture(drawable.baseColorTexture, sample, TextureColorSpace::Srgb,
+                                 AlphaMaskCutoff(drawable));
+        auto normalSample = sample;
+        normalSample.normalMap = true;
+        const auto normal = drawable.normalTexture.empty()
+                                ? ResolveTexture(path, normalSample, TextureColorSpace::Linear, 0,
+                                                 cached.model, imported->normalTexture)
+                                : nullptr;
+        const auto map = [&](int32 index, const std::string& overridePath, TextureChannel channel) {
+            return overridePath.empty() ? ResolveTexture(path, sample, TextureColorSpace::Linear, 0,
+                                                         cached.model, index, channel)
+                                        : nullptr;
+        };
+        const auto metallic =
+            map(imported->metallicTexture, drawable.metallicTexture, TextureChannel::Blue);
+        const auto roughness =
+            map(imported->roughnessTexture, drawable.roughnessTexture, TextureChannel::Green);
+        const auto occlusion =
+            map(imported->occlusionTexture, drawable.occlusionTexture, TextureChannel::Red);
+        DrawMeshWithTextures(*cached.mesh, transform, drawable,
+                             {.baseColor = base.get(),
+                              .normal = normal.get(),
+                              .roughness = roughness.get(),
+                              .metallic = metallic.get(),
+                              .occlusion = occlusion.get()});
+    } else {
+        DrawMesh(*cached.mesh, transform, drawable);
+    }
     return impl_->stats.meshCount > previous;
 }
 
@@ -1185,6 +1296,19 @@ bool Renderer3D::DrawMeshAsset(const std::string& path, const Mat4& transform,
     std::lock_guard<std::recursive_mutex> lock(s_DefaultContext3DMutex);
     return DefaultContext3D().DrawMeshAsset(path, transform, material, modelSubmesh, clip, time,
                                             instance, overridePose, poseRevision, poseOwner);
+}
+
+bool Renderer3D::DrawGltfSubmesh(const std::string& path, const Mat4& transform,
+                                 const Material3D& material, int32 modelSubmesh,
+                                 const Ref<ModelAsset>& model, const std::string& loadError) {
+    const auto draw = [&](Context& context) {
+        return context.DrawMeshAssetImpl(path, transform, material, modelSubmesh, -1, 0.0, 0,
+                                         nullptr, 0, {}, &model, loadError);
+    };
+    if (t_ActiveContext3D)
+        return draw(*t_ActiveContext3D);
+    std::lock_guard<std::recursive_mutex> lock(s_DefaultContext3DMutex);
+    return draw(DefaultContext3D());
 }
 
 void Renderer3D::DrawCube(const Vec3& p, const Vec3& scale, const Material3D& material) {

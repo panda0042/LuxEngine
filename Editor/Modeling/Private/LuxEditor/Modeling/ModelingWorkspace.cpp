@@ -59,6 +59,9 @@ bool PlainMesh(Entity entity) {
            !entity.HasComponent<BoxCollider2DComponent>() &&
            !entity.HasComponent<Rigidbody3DComponent>() &&
            !entity.HasComponent<BoxCollider3DComponent>() &&
+           !entity.HasComponent<CapsuleCollider3DComponent>() &&
+           !entity.HasComponent<CharacterController3DComponent>() &&
+           !entity.HasComponent<TriangleMeshCollider3DComponent>() &&
            !entity.HasComponent<AnimationComponent>() &&
            !entity.HasComponent<ModelAnimationComponent>() &&
            !entity.HasComponent<CameraComponent>() &&

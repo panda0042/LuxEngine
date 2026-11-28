@@ -160,11 +160,13 @@ void Scene::ApplyAnimationFrame(uint32 owner, const AnimationFrame& frame, doubl
             return;
         auto* body2D = TryGetComponent<Rigidbody2DComponent>(owner);
         auto* body3D = TryGetComponent<Rigidbody3DComponent>(owner);
-        const bool uses2D = body2D && HasComponent<BoxCollider2DComponent>(owner);
-        const bool dynamic2D = uses2D && body2D->type == BodyType::Dynamic;
-        const bool dynamic3D = !uses2D && body3D && body3D->type == BodyType::Dynamic &&
-                               HasComponent<BoxCollider3DComponent>(owner);
-        if (dynamic2D || dynamic3D) {
+        const auto collider = GetPhysicsCollider(owner);
+        const bool dynamic2D =
+            collider == PhysicsCollider::PlanarBox && body2D && body2D->type == BodyType::Dynamic;
+        const bool dynamic3D =
+            (collider == PhysicsCollider::SpatialBox || collider == PhysicsCollider::Capsule) &&
+            body3D && body3D->type == BodyType::Dynamic;
+        if (dynamic2D || dynamic3D || (collider == PhysicsCollider::Character && physicsMotion)) {
             const auto worldDelta = GetWorldMatrix(owner).TransformDirection(delta);
             if (!finite(worldDelta))
                 return;

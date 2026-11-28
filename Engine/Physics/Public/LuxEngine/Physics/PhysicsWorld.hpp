@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LuxEngine/Physics/PhysicsEngine.hpp>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -19,12 +20,23 @@ struct PhysicsBodyDescription {
     float mass = 1;
     float gravityScale = 1;
     bool trigger = false;
+    ColliderShape3D shape = ColliderShape3D::Box;
+    double radius = 0.5;
+    double halfHeight = 0.5;
+    std::shared_ptr<const TriangleMeshCollider3DData> mesh;
 };
 
 struct PhysicsBodyState {
     Vec3 position;
     Vec3 rotation;
     Vec3 velocity;
+    bool grounded = false;
+};
+
+struct CharacterController3DState {
+    Vec3 position;
+    Vec3 velocity;
+    Vec3 groundNormal;
     bool grounded = false;
 };
 
@@ -48,6 +60,9 @@ class LUX_API PhysicsWorld final {
 public:
     static constexpr double MinBodyExtent = 1e-6;
     static constexpr float MaxLinearVelocity = 200000.f;
+    static constexpr size_t MaxTriangleMeshVertices = 65536;
+    static constexpr size_t MaxTriangleMeshIndices = 393216;
+    static bool ValidTriangleMesh(const TriangleMeshCollider3DData& mesh);
     explicit PhysicsWorld(bool planar = false);
     ~PhysicsWorld();
     PhysicsWorld(const PhysicsWorld&) = delete;
@@ -58,6 +73,10 @@ public:
     const std::string& GetLastError() const;
     void Remove(uint32 entity);
     void Step(double dt, Vec3 gravity);
+    bool MoveCharacter(uint32 entity, const CharacterController3DComponent& settings, Vec3 position,
+                       Vec3 horizontalVelocity, double jumpSpeed, double dt, Vec3 gravity,
+                       CharacterController3DState& state);
+    void RemoveCharacter(uint32 entity);
     std::optional<PhysicsBodyState> GetState(uint32 entity) const;
     const std::vector<Collision3DEvent>& Contacts() const;
     const std::vector<Collision3DEvent>& BeganContacts() const;
@@ -68,6 +87,13 @@ public:
 private:
     friend class ScenePhysicsWorld;
     bool Synchronize(std::span<const PhysicsBodyDescription> bodies, double step);
+    void Step(double dt, Vec3 gravity, bool keepKinematicTargetVelocity);
+    void RestoreKinematicVelocities();
+    bool MoveCharacter(uint32 entity, const CharacterController3DComponent& settings, Vec3 position,
+                       Vec3 horizontalVelocity, double jumpSpeed, double dt, Vec3 gravity,
+                       CharacterController3DState& state,
+                       const std::function<Vec3(uint32, const Vec3&)>& supportMotionFilter,
+                       bool preserveVerticalVelocity);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

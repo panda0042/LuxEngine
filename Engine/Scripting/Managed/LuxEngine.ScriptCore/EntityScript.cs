@@ -44,6 +44,32 @@ public struct Transform {
     public Vector3d Scale;
 }
 
+/// <summary>The most recent motion state of a 3D character controller in world coordinates.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct CharacterState3D {
+    public Vector3d Position;
+    public Vector3d Velocity;
+    public Vector3d GroundNormal;
+    private readonly int grounded;
+
+    public CharacterState3D() {
+        grounded = 0;
+    }
+
+    public readonly bool Grounded {
+        get { return grounded != 0; }
+    }
+}
+
+/// <summary>The nearest hit from a 3D raycast in world coordinates.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct RaycastHit3D {
+    public uint EntityId;
+    public Vector3d Point;
+    public Vector3d Normal;
+    public float Distance;
+}
+
 /// <summary>A handle to an entity in the running scene.</summary>
 public sealed class Entity {
     private readonly ulong world;
@@ -72,6 +98,43 @@ public sealed class Entity {
     public Transform Transform {
         get { return NativeBridge.GetTransform(world, Id); }
         set { NativeBridge.SetTransform(world, Id, value); }
+    }
+
+    /// <summary>Sets the controller's world XZ velocity and optionally queues a jump.</summary>
+    public bool SetCharacterMotion3D(Vector3d horizontalVelocity, double jumpSpeed = 0) {
+        return NativeBridge.SetCharacterMotion3D(world, Id, horizontalVelocity, jumpSpeed);
+    }
+
+    /// <summary>Reads the controller's state from the last physics step.</summary>
+    public bool TryGetCharacterState3D(out CharacterState3D state) {
+        return NativeBridge.TryGetCharacterState3D(world, Id, out state);
+    }
+
+    /// <summary>Reads the world-space velocity of a 3D rigid body.</summary>
+    public bool TryGetVelocity3D(out Vector3d velocity) {
+        return NativeBridge.TryGetVelocity3D(world, Id, out velocity);
+    }
+
+    /// <summary>Sets the world-space velocity of a 3D rigid body.</summary>
+    public bool SetVelocity3D(Vector3d velocity) {
+        return NativeBridge.SetVelocity3D(world, Id, velocity);
+    }
+
+    /// <summary>Applies a world-space impulse at the center of a dynamic 3D rigid body.</summary>
+    public bool AddImpulse3D(Vector3d impulse) {
+        return NativeBridge.AddImpulse3D(world, Id, impulse);
+    }
+
+    /// <summary>Whether the entity's 3D rigid body is grounded at the last physics step.</summary>
+    public bool IsGrounded3D {
+        get { return NativeBridge.IsGrounded3D(world, Id); }
+    }
+
+    /// <summary>Casts a world-space ray in the entity's scene, ignoring the entity itself.</summary>
+    public bool Raycast3D(Vector3d origin, Vector3d direction, float maxDistance, out RaycastHit3D hit,
+                          bool includeTriggers = false) {
+        return NativeBridge.Raycast3D(world, Id, origin, direction, maxDistance, includeTriggers,
+                                      out hit);
     }
 }
 

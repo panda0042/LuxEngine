@@ -80,30 +80,6 @@ struct Bounds {
 
 constexpr Bounds UnitBounds{{-.5, -.5, -.5}, {.5, .5, .5}};
 
-using Models = std::unordered_map<std::string, Ref<ModelAsset>>;
-
-Bounds MeshBounds(const Scene& scene, const MeshRendererComponent& mesh, Models& models) {
-    if (mesh.meshPath.empty())
-        return UnitBounds;
-    const auto path = scene.ResolveAssetPath(mesh.meshPath);
-    if (mesh.modelSubmesh >= 0) {
-        const auto [entry, inserted] = models.try_emplace(path);
-        auto& model = entry->second;
-        if (inserted) {
-            std::string error;
-            model = ModelAsset::LoadFbx(path, error);
-        }
-        const auto index = static_cast<size_t>(mesh.modelSubmesh);
-        if (model && index < model->submeshes.size()) {
-            const auto& part = model->submeshes[index];
-            return {part.boundsMin, part.boundsMax};
-        }
-        return UnitBounds;
-    }
-    Bounds bounds;
-    return AssetManager::GetMeshBounds(path, bounds.minimum, bounds.maximum) ? bounds : UnitBounds;
-}
-
 std::optional<Bounds> TransformBounds(const Mat4& matrix, const Bounds& local) {
     const auto first = matrix.TransformPoint(local.minimum);
     Bounds world{first, first};
@@ -116,6 +92,55 @@ std::optional<Bounds> TransformBounds(const Mat4& matrix, const Bounds& local) {
                 world.Include(point);
             }
     return world;
+}
+
+void IncludeBounds(std::optional<Bounds>& total, const std::optional<Bounds>& added) {
+    if (!added)
+        return;
+    if (!total) {
+        total = added;
+        return;
+    }
+    total->Include(added->minimum);
+    total->Include(added->maximum);
+}
+
+using Models = std::unordered_map<std::string, Ref<ModelAsset>>;
+
+std::optional<Bounds> MeshBounds(const Scene& scene, const MeshRendererComponent& mesh,
+                                 const Mat4& matrix, Models& models) {
+    if (mesh.meshPath.empty())
+        return TransformBounds(matrix, UnitBounds);
+    const auto path = scene.ResolveAssetPath(mesh.meshPath);
+    if (mesh.modelSubmesh >= 0 || ModelAsset::IsGltfPath(path)) {
+        const auto [entry, inserted] = models.try_emplace(path);
+        auto& model = entry->second;
+        if (inserted) {
+            std::string error;
+            model = ModelAsset::Load(path, error);
+        }
+        if (model && mesh.modelSubmesh >= 0) {
+            const auto index = static_cast<size_t>(mesh.modelSubmesh);
+            if (index < model->submeshes.size()) {
+                const auto& part = model->submeshes[index];
+                return TransformBounds(matrix, {part.boundsMin, part.boundsMax});
+            }
+        } else if (model) {
+            std::optional<Bounds> bounds;
+            for (const auto& part : model->submeshes)
+                if (part.node < model->nodes.size())
+                    IncludeBounds(bounds,
+                                  TransformBounds(matrix * model->nodes[part.node].worldTransform,
+                                                  {part.boundsMin, part.boundsMax}));
+            if (bounds)
+                return bounds;
+        }
+        return TransformBounds(matrix, UnitBounds);
+    }
+    Bounds local;
+    return TransformBounds(matrix, AssetManager::GetMeshBounds(path, local.minimum, local.maximum)
+                                       ? local
+                                       : UnitBounds);
 }
 
 std::optional<ScenePlayerCameraView>
@@ -157,8 +182,8 @@ ScenePlayerCameraView FallbackPerspectiveView(const Scene& scene, const ScenePla
         if (!scene.HasComponent<TransformComponent>(id))
             continue;
         const auto matrix = scene.GetWorldMatrix(id);
-        const auto local = MeshBounds(scene, scene.GetComponent<MeshRendererComponent>(id), models);
-        if (const auto bounds = TransformBounds(matrix, local)) {
+        if (const auto bounds =
+                MeshBounds(scene, scene.GetComponent<MeshRendererComponent>(id), matrix, models)) {
             minimumZ = std::min(minimumZ, bounds->minimum.z);
             maximumZ = std::max(maximumZ, bounds->maximum.z);
         }
@@ -339,21 +364,14 @@ ScenePlayerView FitSceneView(Scene& scene, double aspect) {
         const auto matrix = scene.GetWorldMatrix(entity.GetId());
         const auto* mesh = entity.TryGetComponent<MeshRendererComponent>();
         const auto* map = entity.TryGetComponent<TilemapComponent>();
-        const auto include = [&](const Bounds& local) {
-            if (const auto world = TransformBounds(matrix, local)) {
-                if (bounds) {
-                    bounds->Include(world->minimum);
-                    bounds->Include(world->maximum);
-                } else
-                    bounds = world;
-            }
-        };
         if (mesh)
-            include(MeshBounds(scene, *mesh, models));
+            IncludeBounds(bounds, MeshBounds(scene, *mesh, matrix, models));
         if (map)
-            include({{0, 0, -.5}, {map->width * map->tileSize, map->height * map->tileSize, .5}});
+            IncludeBounds(bounds, TransformBounds(matrix, {{0, 0, -.5},
+                                                           {map->width * map->tileSize,
+                                                            map->height * map->tileSize, .5}}));
         if ((!mesh && !map) || entity.HasComponent<SpriteRendererComponent>())
-            include(UnitBounds);
+            IncludeBounds(bounds, TransformBounds(matrix, UnitBounds));
     }
     if (!bounds)
         return {};

@@ -15,6 +15,34 @@ void Check(bool condition, const char* message) {
         throw std::runtime_error(message);
 }
 
+void RecoverFromColliderConflict() {
+    using namespace LuxEngine;
+    Scene scene;
+    auto invalid = scene.CreateEntity("Capsule");
+    invalid.GetComponent<TransformComponent>().position.x = 3;
+    invalid.AddComponent<CapsuleCollider3DComponent>();
+    const auto healthy = scene.CreateEntity("Box").GetId();
+    scene.AddComponent<BoxCollider3DComponent>(healthy);
+    const auto step = scene.GetSettings().fixedStep;
+    scene.OnUpdate(step);
+    RaycastHit3D hit;
+    Check(scene.Raycast3D({3, 5, 0}, {0, -1, 0}, 6, hit), "valid capsule is queryable");
+    invalid.AddComponent<BoxCollider3DComponent>();
+    Check(!scene.Raycast3D({3, 5, 0}, {0, -1, 0}, 6, hit),
+          "adding a conflicting shape drops the previous native body immediately");
+    std::string saved;
+    Check(!scene.SerializeToString(saved), "a conflicting shape cannot become a saved scene");
+    scene.OnUpdate(step);
+    Check(!scene.GetLastPhysicsError3D().empty() &&
+              scene.Raycast3D({0, 5, 0}, {0, -1, 0}, 6, hit) && hit.entityId == healthy,
+          "a conflicting entity is diagnosed while healthy entities stay queryable");
+    invalid.RemoveComponent<BoxCollider3DComponent>();
+    scene.OnUpdate(step);
+    Check(scene.GetLastPhysicsError3D().empty() && scene.Raycast3D({3, 5, 0}, {0, -1, 0}, 6, hit) &&
+              hit.entityId == invalid.GetId(),
+          "removing the conflicting component restores capsule simulation");
+}
+
 void SmallBodies() {
     using namespace LuxEngine;
     for (const bool planar : {false, true})
@@ -134,6 +162,7 @@ int Run(int, char**) {
                   "continued contact after a skipped update must not restart the trigger");
         }
     }
+    RecoverFromColliderConflict();
     SmallBodies();
     for (const bool planar : {false, true}) {
         PhysicsWorld world(planar);

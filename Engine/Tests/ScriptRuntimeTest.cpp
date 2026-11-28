@@ -24,6 +24,44 @@ void CheckRuntime(bool success, const ScriptRuntime& runtime) {
         throw std::runtime_error(runtime.GetLastError());
 }
 
+void TestManagedPhysics(const ScriptRuntimeConfig& config) {
+    Scene scene;
+    auto floor = scene.CreateEntity("Floor");
+    floor.GetComponent<TransformComponent>().position.y = -.5;
+    floor.AddComponent<BoxCollider3DComponent>().size = {12, 1, 12};
+    auto sensor = scene.CreateEntity("Sensor");
+    sensor.GetComponent<TransformComponent>().position.y = 2;
+    sensor.AddComponent<BoxCollider3DComponent>().isTrigger = true;
+    auto body = scene.CreateEntity("Body");
+    body.GetComponent<TransformComponent>().position = {4, 2, 3};
+    body.AddComponent<BoxCollider3DComponent>();
+    body.AddComponent<Rigidbody3DComponent>().mass = 2;
+    auto walker = scene.CreateEntity("Walker");
+    walker.GetComponent<TransformComponent>().position = {0, 1, 0};
+    walker.AddComponent<CharacterController3DComponent>();
+    auto& script = walker.AddComponent<ScriptComponent>("ScriptTests.PhysicsProbe", true);
+    script.fields = {{"Floor", ScriptEntityReference{floor.GetId()}},
+                     {"Sensor", ScriptEntityReference{sensor.GetId()}},
+                     {"Body", ScriptEntityReference{body.GetId()}}};
+
+    const auto step = scene.GetSettings().fixedStep;
+    for (int i = 0; i < 20; ++i)
+        scene.OnUpdate(step);
+    ScriptRuntime runtime;
+    CheckRuntime(runtime.Initialize(scene, config), runtime);
+    for (int i = 0; i < 12; ++i) {
+        CheckRuntime(runtime.Update(step), runtime);
+        scene.OnUpdate(step);
+    }
+    CharacterController3DState state;
+    Check(scene.GetCharacterState3D(walker.GetId(), state) && !state.grounded &&
+              state.position.x > .2 && state.position.y > 1.5,
+          "C# motion drives a grounded character's movement and jump");
+    Vec3 velocity;
+    Check(scene.GetVelocity3D(body.GetId(), velocity) && velocity.x > 2.5,
+          "C# velocity and impulse reach the native rigid body");
+}
+
 void TestReenableAfterCleanupFailure(const ScriptRuntimeConfig& config) {
     Scene scene;
     auto entity = scene.CreateEntity();
@@ -315,6 +353,7 @@ int main(int argc, char** argv) {
         ScriptRuntimeConfig config;
         config.assemblyPath = argv[1];
         TestReenableAfterCleanupFailure(config);
+        TestManagedPhysics(config);
         CheckRuntime(runtime.Initialize(scene, config), runtime);
         CheckRuntime(runtime.Update(.25), runtime);
         auto& transform = entity.GetComponent<TransformComponent>();
